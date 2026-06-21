@@ -1,0 +1,56 @@
+# Dev:  docker compose up -d db          (just Postgres; run server/web/agent with bun)
+# Prod: docker compose --profile full up  (Postgres + server + Caddy wildcard subdomains)
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: hera
+      POSTGRES_PASSWORD: hera
+      POSTGRES_DB: hera
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hera"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+      # Subdomain base domain is baked into the SPA at build time.
+      args:
+        VITE_APP_BASE_DOMAIN: ${APP_BASE_DOMAIN:-hera.local}
+    environment:
+      DATABASE_URL: postgres://hera:hera@db:5432/hera
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-dev-secret-change-me-min-32-chars-long}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
+      APP_BASE_DOMAIN: ${APP_BASE_DOMAIN:-hera.local}
+      PORT: 3000
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    profiles: ["full"]
+
+  caddy:
+    image: caddy:2
+    environment:
+      APP_DOMAIN: ${APP_BASE_DOMAIN:-hera.local}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+    depends_on:
+      - server
+    profiles: ["full"]
+
+volumes:
+  pgdata:
+  caddy_data:

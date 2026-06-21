@@ -1,0 +1,17 @@
+{
+  "name": "@hera/agent",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun run src/index.ts"
+  },
+  "dependencies": {
+    "@hera/server": "workspace:*",
+    "@orpc/client": "^1.14.6",
+    "fast-xml-parser": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14"
+  }
+}

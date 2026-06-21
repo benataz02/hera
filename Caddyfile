@@ -1,0 +1,14 @@
+# Wildcard subdomain -> single server. The subdomain IS the tenant: the server resolves
+# it from the (preserved) Host header and validates it against membership (orpc/base.ts).
+# `tls internal` issues a local CA cert for *.hera.local dev.
+# ponytail: for a real domain in prod, swap `tls internal` for a DNS-challenge cert
+#           (wildcard certs can't use the HTTP challenge) — one directive change.
+*.{$APP_DOMAIN} {
+	tls internal
+	reverse_proxy server:3000
+}
+
+{$APP_DOMAIN} {
+	tls internal
+	reverse_proxy server:3000
+}

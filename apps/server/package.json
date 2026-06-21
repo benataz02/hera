@@ -1,0 +1,26 @@
+{
+  "name": "@hera/server",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./router": "./src/orpc/router.ts"
+  },
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun run src/index.ts",
+    "better-auth-generate": "bunx @better-auth/cli generate --config src/auth.ts --output ../../packages/db/src/schema/auth.ts -y"
+  },
+  "dependencies": {
+    "@hera/db": "workspace:*",
+    "@orpc/client": "^1.14.6",
+    "@orpc/server": "^1.14.6",
+    "better-auth": "^1.6.19",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.26",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14"
+  }
+}

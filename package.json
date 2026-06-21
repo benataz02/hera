@@ -1,0 +1,30 @@
+{
+  "name": "hera",
+  "private": true,
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "devDependencies": {
+    "@hera/db": "workspace:*",
+    "@hera/server": "workspace:*",
+    "@orpc/client": "^1.14.6",
+    "@orpc/server": "^1.14.6",
+    "drizzle-orm": "^0.45.2",
+    "typescript": "^6.0.3"
+  },
+  "scripts": {
+    "db:generate": "bun --env-file=../../.env --cwd packages/db drizzle-kit generate",
+    "db:migrate": "bun --env-file=../../.env --cwd packages/db drizzle-kit migrate",
+    "db:studio": "bun --env-file=../../.env --cwd packages/db drizzle-kit studio",
+    "auth:generate": "bun --cwd apps/server better-auth-generate",
+    "dev": "bun run --parallel dev:server dev:web dev:agent",
+    "dev:server": "bun run --hot apps/server/src/index.ts",
+    "dev:web": "bun --cwd apps/web dev",
+    "dev:agent": "bun run --hot apps/agent/src/index.ts",
+    "build:web": "bun --cwd apps/web build",
+    "build:agent": "bun build --compile --target=bun-windows-x64 --outfile apps/agent/dist/hera-agent.exe apps/agent/src/index.ts",
+    "seed:dev": "bun scripts/seed-dev.ts",
+    "seed:agent": "bun scripts/seed-agent.ts",
+    "e2e": "bun scripts/e2e.ts",
+    "kill": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/kill-dev.ps1"
+  }
+}

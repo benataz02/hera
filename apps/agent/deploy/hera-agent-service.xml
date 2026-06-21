@@ -1,0 +1,59 @@
+<!--
+  WinSW service definition for the HERA on-prem agent.
+
+  This file IS the agent's config: WinSW injects the <env> entries below into the
+  process environment, and the compiled hera-agent.exe reads them from process.env.
+  (A compiled Bun exe does NOT auto-load a .env file, so config lives here.)
+
+  WinSW convention: the wrapper exe must share this file's basename
+  -> hera-agent-service.exe + hera-agent-service.xml. install-service.ps1 handles that.
+
+  %BASE% = the folder this file sits in. Keep hera-agent.exe in the same folder.
+
+  SECURITY: this file holds B1 credentials in plaintext, like a .env would. Restrict
+  the install folder's ACL to admins/the service account. Do NOT commit a filled-in copy.
+-->
+<service>
+  <id>hera-agent</id>
+  <name>HERA On-Prem Agent</name>
+  <description>Outbound-only sync agent: long-polls the HERA cloud and writes quotes to the local SAP B1 Service Layer.</description>
+
+  <executable>%BASE%\hera-agent.exe</executable>
+  <workingdirectory>%BASE%</workingdirectory>
+
+  <!-- Auto-start on boot, but delayed so the network / SAP B1 is up first. -->
+  <startmode>Automatic</startmode>
+  <delayedAutoStart/>
+
+  <!-- Crash-restart. Safe to kill at any point: in-flight items are redelivered by the
+       cloud lease (see AGENT.md "linchpin"), so there's no clean-drain requirement. -->
+  <onfailure action="restart" delay="10 sec"/>
+  <resetfailure>1 hour</resetfailure>
+
+  <!-- Rotating logs in %BASE%\logs (hera-agent.out.log / .err.log), 10 MB x 8. -->
+  <logpath>%BASE%\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+
+  <!-- ===== Agent config — FILL THESE IN on the on-prem box ===== -->
+  <env name="HERA_CLOUD_RPC_URL" value="https://app.hera.example/rpc"/>
+  <env name="HERA_AGENT_TOKEN"   value="__FILL_ME__"/>
+  <env name="B1_BASE_URL"        value="https://your-b1-host:50000/b1s/v1"/>
+  <env name="B1_COMPANY_DB"      value="SBODEMOUS"/>
+  <env name="B1_USER"            value="manager"/>
+  <env name="B1_PASS"            value="__FILL_ME__"/>
+  <!-- Optional. Set true only against a self-signed B1 cert. -->
+  <env name="B1_INSECURE_TLS"    value="false"/>
+  <!-- Optional. Service Layer request timeout in ms (default 60000). -->
+  <!-- <env name="B1_TIMEOUT_MS" value="60000"/> -->
+
+  <!-- Runs as LocalSystem by default (can reach B1 over the network + read this folder).
+       To run under a dedicated account instead, add:
+  <serviceaccount>
+    <username>DOMAIN\hera-svc</username>
+    <password>...</password>
+    <allowservicelogon>true</allowservicelogon>
+  </serviceaccount> -->
+</service>

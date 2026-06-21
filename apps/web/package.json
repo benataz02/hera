@@ -1,0 +1,32 @@
+{
+  "name": "@hera/web",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@hera/server": "workspace:*",
+    "@orpc/client": "^1.14.6",
+    "@orpc/tanstack-query": "^1.14.6",
+    "@tanstack/react-query": "^5.101.0",
+    "@tanstack/react-router": "^1.170.16",
+    "@ui5/webcomponents": "^2.23.1",
+    "@ui5/webcomponents-fiori": "^2.23.1",
+    "@ui5/webcomponents-icons": "^2.23.1",
+    "@ui5/webcomponents-react": "^2.23.1",
+    "better-auth": "^1.6.19",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@tanstack/router-plugin": "^1.168.18",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16"
+  }
+}
