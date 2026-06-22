@@ -122,10 +122,24 @@ export const entitiesRouter = {
   }),
 
   list: userProcedure
-    .input(z.object({ entity: z.string(), top: z.number().int().min(1).max(200).default(50) }))
+    .input(
+      z.object({
+        entity: z.string(),
+        top: z.number().int().min(1).max(200).default(100),
+        skip: z.number().int().min(0).default(0),
+        q: z.string().optional(),
+      }),
+    )
     .handler(async ({ input, context }) => {
-      await loadEnabled(context.tenantId, input.entity);
-      return (await runRequest(context.tenantId, "list", input)) as Record<string, unknown>[];
+      const e = await loadEnabled(context.tenantId, input.entity);
+      // Search hits string-typed fields only (contains() is string-only). The server picks the
+      // fields from the schema so the agent never trusts a client-supplied field list.
+      const fields = input.q ? e.properties.filter((p) => /string/i.test(p.type)).map((p) => p.name) : [];
+      return (await runRequest(context.tenantId, "list", { ...input, fields })) as {
+        rows: Record<string, unknown>[];
+        count: number | null;
+        hasMore: boolean;
+      };
     }),
 
   get: userProcedure

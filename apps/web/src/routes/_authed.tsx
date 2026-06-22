@@ -49,7 +49,8 @@ function AuthedLayout() {
   const { data: session } = authClient.useSession();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [density, setDensity] = useState<Density>(getDensity);
+  const [density, setDensity] = useState<Density>(() => (localStorage.getItem("density") as Density) ?? getDensity());
+  const [theme, setThemeState] = useState<string>(() => localStorage.getItem("theme") ?? getTheme());
 
   // Org role decides whether the Settings (entity config) item shows. The server gates it too.
   const role = useQuery({
@@ -94,7 +95,13 @@ function AuthedLayout() {
       document.body.classList.add('ui5-content-density-cozy');
       document.body.classList.remove('ui5-content-density-compact');
     }
+    localStorage.setItem('density', density);
   }, [density]);
+
+  useEffect(() => {
+    setTheme(theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
 
   const signOut = async () => {
     await authClient.signOut();
@@ -142,12 +149,12 @@ function AuthedLayout() {
             showOtherAccounts
           >
             <UserMenuItem text="Themes" icon="person-placeholder" >
-              {THEMES.map((theme) => (
+              {THEMES.map((t) => (
                 <UserMenuItem
-                  key={theme.id}
-                  text={theme.labelKey}
-                  icon={getTheme() === theme.id ? "sys-enter" : "blank"}
-                  onClick={() => setTheme(theme.id)}
+                  key={t.id}
+                  text={t.labelKey}
+                  icon={theme === t.id ? "sys-enter" : "blank"}
+                  onClick={() => setThemeState(t.id)}
                 >
                 </UserMenuItem>
               ))}

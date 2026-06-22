@@ -30,7 +30,7 @@ import {
   processItem, processRequest, type SlPort, type CloudPort,
   type SlReadPort, type RequestCloudPort,
 } from "../apps/agent/src/sync.ts";
-import { SlError, parseEdmx } from "../apps/agent/src/service-layer-client.ts";
+import { SlError, parseEdmx, buildListPath } from "../apps/agent/src/service-layer-client.ts";
 
 const BASE = process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
 const AUTH = `${BASE}/api/auth`;
@@ -360,12 +360,13 @@ async function partC(): Promise<void> {
   assert.equal(onHand.nullable, false, "Nullable=false respected");
   assert.equal(items!.properties.find((p) => p.name === "ItemName")!.nullable, true, "absent Nullable defaults true");
 
-  // dispatch: 'list' -> sl.listEntity(entity, top) -> cloud.fulfill(result)
+  // dispatch: 'list' -> sl.listEntity(entity, opts) -> cloud.fulfill(result)
   {
     const calls: Record<string, unknown> = {};
+    const result = { rows: [{ ItemCode: "X" }], count: 1, hasMore: false };
     const sl: SlReadPort = {
       metadata: async () => [],
-      listEntity: async (entity, top) => ((calls.list = { entity, top }), [{ ItemCode: "X" }]),
+      listEntity: async (entity, opts) => ((calls.list = { entity, opts }), result),
       getEntity: async () => ({}),
       createEntity: async () => ({}),
       updateEntity: async () => ({ ok: true }),
@@ -374,10 +375,22 @@ async function partC(): Promise<void> {
       fulfill: async (i) => void (calls.fulfill = i),
       fail: async (i) => void (calls.fail = i),
     };
-    await processRequest({ id: "r1", kind: "list", payload: { entity: "Items", top: 5 } }, sl, cloud);
-    assert.deepEqual(calls.list, { entity: "Items", top: 5 }, "list dispatched with params");
-    assert.deepEqual(calls.fulfill, { id: "r1", result: [{ ItemCode: "X" }] }, "fulfilled with result");
+    await processRequest({ id: "r1", kind: "list", payload: { entity: "Items", top: 5, q: "ac", fields: ["ItemCode"] } }, sl, cloud);
+    assert.deepEqual(calls.list, { entity: "Items", opts: { top: 5, skip: 0, q: "ac", fields: ["ItemCode"] } }, "list dispatched with params");
+    assert.deepEqual(calls.fulfill, { id: "r1", result }, "fulfilled with result");
     assert.equal(calls.fail, undefined, "no fail on success");
+  }
+
+  // buildListPath — OData v4 paging + safe $filter construction
+  {
+    assert.equal(buildListPath("BusinessPartners", { top: 100, skip: 0 }), "/BusinessPartners?$top=100&$skip=0&$count=true", "plain page path, always $count=true");
+    assert.ok(!buildListPath("Items", { top: 50, skip: 100, q: "abc", fields: [] }).includes("$filter"), "no fields -> no $filter");
+
+    const filtered = buildListPath("Items", { top: 100, skip: 0, q: "ac'me", fields: ["ItemCode", "bad-name", "ItemName"] });
+    const qs = new URLSearchParams(filtered.split("?")[1]);
+    assert.equal(qs.get("$count"), "true", "count requested");
+    // OR-of-contains over valid string fields only; invalid field dropped; single quote doubled.
+    assert.equal(qs.get("$filter"), "contains(ItemCode,'ac''me') or contains(ItemName,'ac''me')", "filter built + escaped safely");
   }
 
   // dispatch error path: SL throws -> cloud.fail (never fulfill)

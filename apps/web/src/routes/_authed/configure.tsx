@@ -45,7 +45,7 @@ function Configure() {
       const out: Record<string, Value[]> = {};
       for (const p of dsParams) {
         const d = p.domain as { entity: string; valueField: string };
-        const rows = await client.entities.list({ entity: d.entity, top: 200 });
+        const { rows } = await client.entities.list({ entity: d.entity, top: 200 });
         out[p.name] = rows.map((r) => r[d.valueField]).filter((v): v is Value => v != null);
       }
       return out;

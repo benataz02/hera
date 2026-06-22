@@ -49,7 +49,7 @@ export interface RequestRow {
 
 export interface SlReadPort {
   metadata(): Promise<unknown>;
-  listEntity(entity: string, top: number): Promise<unknown>;
+  listEntity(entity: string, opts: { top: number; skip?: number; q?: string; fields?: string[] }): Promise<unknown>;
   getEntity(entity: string, key: string, keyQuoted: boolean): Promise<unknown>;
   createEntity(entity: string, data: Record<string, unknown>): Promise<unknown>;
   updateEntity(entity: string, key: string, keyQuoted: boolean, data: Record<string, unknown>): Promise<unknown>;
@@ -106,7 +106,12 @@ export async function processRequest(req: RequestRow, sl: SlReadPort, cloud: Req
         result = await sl.metadata();
         break;
       case "list":
-        result = await sl.listEntity(String(p.entity), Number(p.top ?? 50));
+        result = await sl.listEntity(String(p.entity), {
+          top: Number(p.top ?? 100),
+          skip: Number(p.skip ?? 0),
+          q: p.q ? String(p.q) : undefined,
+          fields: Array.isArray(p.fields) ? (p.fields as string[]) : [],
+        });
         break;
       case "get":
         result = await sl.getEntity(String(p.entity), String(p.key), Boolean(p.keyQuoted));

@@ -65,6 +65,24 @@ export function parseEdmx(xml: string): EntitySchema[] {
   return out;
 }
 
+// Build the OData v4 query path for a paged, optionally-filtered entity list. Pure (no I/O) so it
+// has a network-free self-check in scripts/e2e.ts --unit. The search term is a user trust boundary:
+// escape single quotes ('->'') and URL-encode; only keep schema field names matching the ident RE.
+export function buildListPath(
+  entity: string,
+  opts: { top: number; skip: number; q?: string; fields?: string[] },
+): string {
+  const params = [`$top=${opts.top}`, `$skip=${opts.skip}`, "$count=true"];
+  if (opts.q && opts.fields?.length) {
+    const term = opts.q.replace(/'/g, "''");
+    const clauses = opts.fields
+      .filter((f) => /^[A-Za-z0-9_]+$/.test(f))
+      .map((f) => `contains(${f},'${term}')`);
+    if (clauses.length) params.push(`$filter=${encodeURIComponent(clauses.join(" or "))}`);
+  }
+  return `/${entity}?${params.join("&")}`;
+}
+
 export class SlError extends Error {
   constructor(
     readonly status: number,
@@ -145,13 +163,20 @@ export class ServiceLayerClient {
     return this.loginInFlight;
   }
 
-  private async request(method: string, path: string, body?: unknown): Promise<Response> {
+  private async request(
+    method: string,
+    path: string,
+    body?: unknown,
+    extraHeaders?: Record<string, string>,
+  ): Promise<Response> {
     if (!this.cookie) await this.login();
     const init: RequestInit = { method };
+    const headers: Record<string, string> = { ...extraHeaders };
     if (body !== undefined) {
       init.body = JSON.stringify(body);
-      init.headers = { "content-type": "application/json" };
+      headers["content-type"] = "application/json";
     }
+    if (Object.keys(headers).length) init.headers = headers;
     let res = await this.rawFetch(path, init);
     if (res.status === 401) {
       // Session expired — re-login once and retry. Don't count this as a delivery attempt.
@@ -210,13 +235,26 @@ export class ServiceLayerClient {
     return parseEdmx(await res.text());
   }
 
-  /** List rows of an entity set (capped). Returns the OData `value` array. */
-  async listEntity(entity: string, top: number): Promise<Record<string, unknown>[]> {
+  /** List a page of an entity set with the inline total. OData v4 server pagination (maxpagesize=100). */
+  async listEntity(
+    entity: string,
+    opts: { top: number; skip?: number; q?: string; fields?: string[] },
+  ): Promise<{ rows: Record<string, unknown>[]; count: number | null; hasMore: boolean }> {
     this.assertEntity(entity);
-    const res = await this.request("GET", `/${entity}?$top=${top}`);
+    const res = await this.request(
+      "GET",
+      buildListPath(entity, { top: opts.top, skip: opts.skip ?? 0, q: opts.q, fields: opts.fields }),
+      undefined,
+      { Prefer: "odata.maxpagesize=100" },
+    );
     if (!res.ok) throw await this.toError(res);
-    const json = (await res.json()) as { value?: Record<string, unknown>[] };
-    return json.value ?? [];
+    const json = (await res.json()) as {
+      value?: Record<string, unknown>[];
+      "@odata.count"?: number | string;
+      "@odata.nextLink"?: string;
+    };
+    const count = json["@odata.count"] != null ? Number(json["@odata.count"]) : null;
+    return { rows: json.value ?? [], count, hasMore: !!json["@odata.nextLink"] };
   }
 
   /** Fetch one record by key. */

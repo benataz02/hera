@@ -69,7 +69,7 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
 
   const actions = (
     <Toolbar design="Transparent">
-      <ToolbarButton icon="nav-back" text="Back" onClick={() => navigate({ to: "/entities/$entity", params: { entity } })} />
+      <ToolbarButton icon="nav-back" text="Back" onClick={() => navigate({ to: "/$entity", params: { entity } })} />
       <ToolbarSpacer />
       {editing ? (
         <>

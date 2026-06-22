@@ -26,6 +26,7 @@ const trustedOrigins = [
     `http://${baseDomain}:5174`,
     `http://*.${baseDomain}:5173`,
     `http://*.${baseDomain}:5174`,
+    `http://192.168.1.131:5173`,
     ...envTrustedOrigins,
   ]),
 ];
