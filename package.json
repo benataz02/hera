@@ -4,6 +4,7 @@
   "type": "module",
   "workspaces": ["apps/*", "packages/*"],
   "devDependencies": {
+    "@hera/config-engine": "workspace:*",
     "@hera/db": "workspace:*",
     "@hera/server": "workspace:*",
     "@orpc/client": "^1.14.6",
@@ -25,6 +26,7 @@
     "seed:dev": "bun scripts/seed-dev.ts",
     "seed:agent": "bun scripts/seed-agent.ts",
     "e2e": "bun scripts/e2e.ts",
+    "test:engine": "bun packages/config-engine/src/selfcheck.ts",
     "kill": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/kill-dev.ps1"
   }
 }

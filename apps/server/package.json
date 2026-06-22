@@ -12,6 +12,7 @@
     "better-auth-generate": "bunx @better-auth/cli generate --config src/auth.ts --output ../../packages/db/src/schema/auth.ts -y"
   },
   "dependencies": {
+    "@hera/config-engine": "workspace:*",
     "@hera/db": "workspace:*",
     "@orpc/client": "^1.14.6",
     "@orpc/server": "^1.14.6",

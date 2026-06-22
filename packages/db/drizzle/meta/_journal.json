@@ -15,6 +15,13 @@
       "when": 1781887927693,
       "tag": "0001_lazy_rumiko_fujikawa",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782075021298,
+      "tag": "0002_legal_rhodey",
+      "breakpoints": true
     }
   ]
 }
