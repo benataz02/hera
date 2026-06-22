@@ -7,7 +7,7 @@ import {
 import {
   lintModel, enumerate, evaluate, type Model, type ParamDomain,
 } from "@hera/config-engine";
-import { orpc } from "../../orpc.ts";
+import { orpc } from "../../../orpc.ts";
 
 export const Route = createFileRoute("/_authed/models/$id")({ component: Editor });
 

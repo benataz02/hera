@@ -1,14 +1,21 @@
-import { createFileRoute, redirect, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import { createFileRoute, redirect, Outlet, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   Avatar,
-  NavigationLayout, ShellBar, ShellBarItem, SideNavigation, SideNavigationItem,
+  Button,
+  NavigationLayout, ShellBar, SideNavigation, SideNavigationItem,
+  SideNavigationSubItem,
   ToggleButton,
+  UserMenu,
+  UserMenuAccount,
+  UserMenuItem,
 } from "@ui5/webcomponents-react";
 import type { SideNavigationPropTypes } from "@ui5/webcomponents-react";
 import { authClient } from "../auth-client.ts";
 import { orpc } from "../orpc.ts";
 import { apexUrl, currentSlug, hardRedirect, tenantUrl } from "../lib/tenant.ts";
+import { useState, useEffect } from "react";
+import { getTheme, setTheme } from '@ui5/webcomponents-base/dist/config/Theme.js';
 
 // The app shell for every signed-in page. The tenant is the subdomain; on the apex this
 // route is just the lobby dispatcher (it never renders the app there).
@@ -38,8 +45,11 @@ export const Route = createFileRoute("/_authed")({
 
 function AuthedLayout() {
   const navigate = useNavigate();
+  const router = useRouter();
   const { data: session } = authClient.useSession();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [density, setDensity] = useState<Density>(getDensity);
 
   // Org role decides whether the Settings (entity config) item shows. The server gates it too.
   const role = useQuery({
@@ -54,12 +64,37 @@ function AuthedLayout() {
   const onSelect: SideNavigationPropTypes["onSelectionChange"] = (e) => {
     const el = e.detail.item as HTMLElement;
     const entity = el.dataset.entity;
-    if (entity) navigate({ to: "/entities/$entity", params: { entity } });
+    if (entity) navigate({ to: "/$entity", params: { entity } });
     else if (el.dataset.to === "/settings") navigate({ to: "/settings" });
     else if (el.dataset.to === "/configure") navigate({ to: "/configure" });
     else if (el.dataset.to === "/models") navigate({ to: "/models" });
     else navigate({ to: "/" });
   };
+
+  const THEMES = [
+    { id: 'sap_horizon', labelKey: 'Morning Horizon' },
+    { id: 'sap_horizon_dark', labelKey: 'Evening Horizon' },
+    { id: 'sap_fiori_3', labelKey: 'Quartz Light' },
+    { id: 'sap_fiori_3_dark', labelKey: 'Quartz Dark' },
+    { id: 'sap_fiori_3_hcb', labelKey: 'High Contrast Black' },
+    { id: 'sap_fiori_3_hcw', labelKey: 'High Contrast White' },
+  ] as const;
+
+  type Density = 'cozy' | 'compact';
+
+  function getDensity(): Density {
+    return document.body.classList.contains('ui5-content-density-compact') ? 'compact' : 'cozy';
+  }
+
+  useEffect (() => {
+    if (density === 'compact') {
+      document.body.classList.add('ui5-content-density-compact');
+      document.body.classList.remove('ui5-content-density-cozy');
+    } else {
+      document.body.classList.add('ui5-content-density-cozy');
+      document.body.classList.remove('ui5-content-density-compact');
+    }
+  }, [density]);
 
   const signOut = async () => {
     await authClient.signOut();
@@ -68,46 +103,95 @@ function AuthedLayout() {
 
   return (
     <NavigationLayout
+      mode="Auto"
       header={
-        <ShellBar 
-          primaryTitle="HERA" 
-          secondaryTitle={session?.user?.email ?? ""}
-          logo={
-            <img alt="SAP Logo" src="https://ui5.github.io/webcomponents/images/sap-logo-svg.svg" />
-          }
-            profile={
-            <Avatar
-              id="user-menu-opener"
-              initials='U'
-            />
-          }
-          showNotifications
-          assistant={<ToggleButton icon="da" tooltip="Joule" />}
-        >
-          <ShellBarItem icon="log" text="Sign out" onClick={signOut} />
-        </ShellBar>
+        <>
+          <ShellBar
+            startButton={
+              <Button
+                accessibleName="Back"
+                icon="nav-back"
+                tooltip='Back'
+                onClick={() => router.history.back()}
+              />
+            }
+            primaryTitle="HERA"
+            logo={<img alt="SAP Logo" src="https://ui5.github.io/webcomponents/images/sap-logo-svg.svg" />}
+            onLogoClick={() => navigate({ to: "/" })}
+            profile={<Avatar id="user-menu-opener" initials='BA' />}
+            onProfileClick={() => setUserMenuOpen((open) => !open)}
+            showNotifications
+            assistant={<ToggleButton icon="da" tooltip="Joule" />}
+          >
+          </ShellBar>
+          <UserMenu
+            open={userMenuOpen}
+            opener="user-menu-opener"
+            onClose={() => setUserMenuOpen(false)}
+            onSignOutClick={signOut}
+            accounts={
+              <UserMenuAccount
+                avatarInitials={session?.user?.name?.substring(0, 2).toUpperCase() ?? 'U'}
+                titleText={session?.user?.name}
+                description={session?.user?.email}
+              />
+            }
+            showEditAccounts
+            showEditButton
+            showManageAccount
+            showOtherAccounts
+          >
+            <UserMenuItem text="Themes" icon="person-placeholder" >
+              {THEMES.map((theme) => (
+                <UserMenuItem
+                  key={theme.id}
+                  text={theme.labelKey}
+                  icon={getTheme() === theme.id ? "sys-enter" : "blank"}
+                  onClick={() => setTheme(theme.id)}
+                >
+                </UserMenuItem>
+              ))}
+            </UserMenuItem>
+            <UserMenuItem text="Density" icon="person-placeholder" >
+              <UserMenuItem
+                data-id="compact"
+                text="Compact"
+                icon={density === "compact" ? "sys-enter" : "blank"}
+                onClick={() => setDensity('compact')}
+              >
+              </UserMenuItem>
+              <UserMenuItem
+                data-id="cozy"
+                text="Cozy"
+                icon={density === "cozy" ? "sys-enter" : "blank"}
+                onClick={() => setDensity('cozy')}
+              >
+              </UserMenuItem>
+            </UserMenuItem>
+          </UserMenu>
+        </>
       }
       sideContent={
         <SideNavigation onSelectionChange={onSelect}>
           <SideNavigationItem text="Home" icon="home" data-to="/" selected={pathname === "/"} />
-          <SideNavigationItem text="Configure" icon="wrench" data-to="/configure" selected={pathname === "/configure"} />
+          <SideNavigationItem text="Configure" icon="create-form" data-to="/configure" selected={pathname === "/configure"} >
+            {isAdmin ? (
+              <SideNavigationSubItem
+                text="Models"
+                data-to="/models"
+                selected={pathname.startsWith("/models")}
+              />
+            ) : null}
+          </SideNavigationItem>
           {enabled.map((ent) => (
             <SideNavigationItem
               key={ent.name}
               text={ent.name}
               icon="list"
               data-entity={ent.name}
-              selected={pathname === `/entities/${ent.name}`}
+              selected={pathname === `/${ent.name}`}
             />
           ))}
-          {isAdmin ? (
-            <SideNavigationItem
-              text="Models"
-              icon="create-form"
-              data-to="/models"
-              selected={pathname.startsWith("/models")}
-            />
-          ) : null}
           {isAdmin ? (
             <SideNavigationItem
               text="Settings"

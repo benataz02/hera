@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Card, Button, FlexBox, Title, Text, BusyIndicator, ObjectStatus } from "@ui5/webcomponents-react";
-import { orpc } from "../../orpc.ts";
+import { orpc } from "../../../orpc.ts";
 
 export const Route = createFileRoute("/_authed/models/")({ component: Models });
 
