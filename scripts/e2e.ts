@@ -24,7 +24,6 @@ import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import type { AppRouter } from "@hera/server/router";
 import { db, pool, quote, agentRequest, tenantIntegration } from "@hera/db";
-import type { Model } from "@hera/config-engine";
 import { hashToken } from "../apps/server/src/crypto.ts";
 import {
   processItem, processRequest, type SlPort, type CloudPort,
@@ -176,58 +175,6 @@ async function partA(): Promise<void> {
   assert.ok(reqId, "agent pulled the list request");
   await agent.sync.fulfill({ id: reqId!, result: [{ ItemCode: "A1" }] });
   assert.deepEqual(await listPromise, [{ ItemCode: "A1" }], "request/reply returned the agent's result");
-
-  // 12. configurator: model CRUD (admin), linting, and a configured quote that the server
-  // re-validates + evaluates before the (unchanged) durable write.
-  const model: Model = {
-    name: `Cfg ${stamp}`,
-    family: "test",
-    parameters: [
-      { name: "size", label: "Size", type: "enum", domain: { kind: "static", values: ["S", "M", "L"] } },
-      { name: "color", label: "Color", type: "enum", domain: { kind: "static", values: ["red", "blue"] } },
-    ],
-    // "L" is only available in blue — a bidirectional constraint.
-    constraints: [{ expr: `size != "L" or color == "blue"`, vars: ["size", "color"] }],
-    formulas: [],
-    bom: [{ item: `concat("ITEM-", size)`, qtyExpr: "1" }],
-    routing: [],
-    pricing: { costExpr: "10", markupExpr: "0.2" },
-  };
-  const saved = await user.config.save({ definition: model });
-  assert.ok(saved.id, "model saved");
-  assert.ok((await user.config.list()).some((m) => m.id === saved.id), "model appears in list");
-  const got = await user.config.get({ id: saved.id });
-  assert.equal((got.definition as { name: string }).name, model.name, "get returns the definition");
-
-  // the linter rejects an unparseable expression
-  await assert.rejects(
-    () => user.config.save({ definition: { ...model, formulas: [{ name: "bad", expr: "1 +" }] } }),
-    /./,
-    "unparseable formula rejected at save",
-  );
-
-  // a valid configuration: server re-validates + computes the BOM, stores it on the quote payload
-  const cq = await user.quote.create({
-    payload: { name: "Configured" },
-    config: { modelId: saved.id, batches: [1], configurations: [{ assignment: { size: "L", color: "blue" } }] },
-  });
-  assert.equal(cq.status, "syncing", "configured quote created");
-  const [cqRow] = await db.select().from(quote).where(eq(quote.id, cq.id));
-  const cfg = (cqRow!.payload as { config?: { configurations: { bom: unknown[] }[] } }).config;
-  assert.ok(cfg, "config stored on the quote payload");
-  assert.equal(cfg!.configurations.length, 1, "one configuration");
-  assert.deepEqual(cfg!.configurations[0]!.bom, [{ item: "ITEM-L", qty: 1 }], "server computed the BOM");
-
-  // an inconsistent configuration is rejected by server re-validation (L requires blue)
-  await assert.rejects(
-    () =>
-      user.quote.create({
-        payload: { name: "Bad" },
-        config: { modelId: saved.id, batches: [1], configurations: [{ assignment: { size: "L", color: "red" } }] },
-      }),
-    /Invalid configuration/,
-    "inconsistent config rejected server-side",
-  );
 
   console.log("  ok");
 }

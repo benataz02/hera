@@ -8,7 +8,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@hera/config-engine": "workspace:*",
     "@hera/server": "workspace:*",
     "@orpc/client": "^1.14.6",
     "@orpc/tanstack-query": "^1.14.6",

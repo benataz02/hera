@@ -67,8 +67,6 @@ function AuthedLayout() {
     const entity = el.dataset.entity;
     if (entity) navigate({ to: "/$entity", params: { entity } });
     else if (el.dataset.to === "/settings") navigate({ to: "/settings" });
-    else if (el.dataset.to === "/configure") navigate({ to: "/configure" });
-    else if (el.dataset.to === "/models") navigate({ to: "/models" });
     else navigate({ to: "/" });
   };
 
@@ -181,15 +179,6 @@ function AuthedLayout() {
       sideContent={
         <SideNavigation onSelectionChange={onSelect}>
           <SideNavigationItem text="Home" icon="home" data-to="/" selected={pathname === "/"} />
-          <SideNavigationItem text="Configure" icon="create-form" data-to="/configure" selected={pathname === "/configure"} >
-            {isAdmin ? (
-              <SideNavigationSubItem
-                text="Models"
-                data-to="/models"
-                selected={pathname.startsWith("/models")}
-              />
-            ) : null}
-          </SideNavigationItem>
           {enabled.map((ent) => (
             <SideNavigationItem
               key={ent.name}
