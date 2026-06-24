@@ -1,26 +1,62 @@
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { and, eq, sql } from "drizzle-orm";
-import { db, quote, agentRequest } from "@hera/db";
+import { db, quote, agentRequest, configModel } from "@hera/db";
 import { outboxChannel, quoteChannel, waitForNotify } from "@hera/db/listener";
+import { flatten, validate, type Model } from "@hera/config-engine";
 import { userProcedure } from "../base.ts";
+import { ValueZ } from "./models.ts";
+
+// A quote is created either from a raw payload (backbone path) or from a chosen configurator
+// configuration. The configuration is re-validated against its model here — the trust boundary —
+// so a tampered/stale client config can never become a quote.
+const ConfigZ = z.object({
+  modelId: z.string(),
+  configuration: z.record(z.string(), ValueZ),
+  batches: z.array(z.number()).optional(),
+  resolved: z.record(z.string(), z.array(ValueZ)).optional(), // Table/Query domains the client used
+});
 
 export const quoteRouter = {
   // Write the business row AND its queue row in one tx, then ring the doorbell.
   // Both commit or neither -> the intent to sync can never be lost.
   create: userProcedure
-    .input(z.object({ payload: z.record(z.string(), z.unknown()) }))
+    .input(z.object({ payload: z.record(z.string(), z.unknown()).optional(), config: ConfigZ.optional() }))
     .handler(async ({ input, context }) => {
       const { tenantId } = context;
+
+      let payload: Record<string, unknown>;
+      if (input.config) {
+        const [m] = await db
+          .select()
+          .from(configModel)
+          .where(and(eq(configModel.id, input.config.modelId), eq(configModel.tenantId, tenantId)))
+          .limit(1);
+        if (!m) throw new ORPCError("NOT_FOUND", { message: "Model not found" });
+        const model = flatten(m.definition as unknown as Model);
+        const res = validate(model, input.config.configuration, input.config.resolved ?? {});
+        if (!res.ok) throw new ORPCError("BAD_REQUEST", { message: `Invalid configuration: ${res.reason}` });
+        payload = {
+          modelId: m.id,
+          modelName: m.name,
+          configuration: input.config.configuration,
+          batches: input.config.batches ?? [],
+        };
+      } else if (input.payload) {
+        payload = input.payload;
+      } else {
+        throw new ORPCError("BAD_REQUEST", { message: "payload or config required" });
+      }
+
       const created = await db.transaction(async (tx) => {
         const [q] = await tx
           .insert(quote)
-          .values({ tenantId, status: "syncing", payload: input.payload })
+          .values({ tenantId, status: "syncing", payload })
           .returning();
         await tx.insert(agentRequest).values({
           tenantId,
           kind: "quote",
-          payload: { quoteId: q!.id, data: input.payload },
+          payload: { quoteId: q!.id, data: payload },
           dedupKey: q!.id, // == external key (U_CpqExtId) the agent stamps into B1
         });
         // pg_notify fires on commit -> a parked agent pull wakes in ms.

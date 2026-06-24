@@ -281,6 +281,15 @@ export class ServiceLayerClient {
     return { ok: true };
   }
 
+  /** Generic read-only OData GET for the configurator "Query" data source. The path is admin-
+   *  authored (in the model) and GET-only, against this agent's B1 Service Layer base. */
+  async queryRaw(path: string): Promise<unknown> {
+    if (!path.startsWith("/")) throw new SlError(400, "BAD_PATH", "query path must start with /");
+    const res = await this.request("GET", path);
+    if (!res.ok) throw await this.toError(res);
+    return (await res.json()) as unknown;
+  }
+
   private async toError(res: Response): Promise<SlError> {
     let code: string | number | undefined;
     let message = res.statusText;

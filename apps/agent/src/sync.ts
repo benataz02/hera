@@ -53,6 +53,7 @@ export interface SlReadPort {
   getEntity(entity: string, key: string, keyQuoted: boolean): Promise<unknown>;
   createEntity(entity: string, data: Record<string, unknown>): Promise<unknown>;
   updateEntity(entity: string, key: string, keyQuoted: boolean, data: Record<string, unknown>): Promise<unknown>;
+  queryRaw(path: string): Promise<unknown>;
 }
 
 export interface RequestCloudPort {
@@ -121,6 +122,9 @@ export async function processRequest(req: RequestRow, sl: SlReadPort, cloud: Req
         break;
       case "update":
         result = await sl.updateEntity(String(p.entity), String(p.key), Boolean(p.keyQuoted), (p.data ?? {}) as Record<string, unknown>);
+        break;
+      case "query":
+        result = await sl.queryRaw(String(p.path));
         break;
       default:
         throw new Error(`Unknown request kind '${req.kind}'`);

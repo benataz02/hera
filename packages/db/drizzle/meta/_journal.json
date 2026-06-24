@@ -15,6 +15,13 @@
       "when": 1781887927693,
       "tag": "0001_lazy_rumiko_fujikawa",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782227545605,
+      "tag": "0002_yummy_squirrel_girl",
+      "breakpoints": true
     }
   ]
 }

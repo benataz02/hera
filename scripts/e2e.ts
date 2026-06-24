@@ -24,6 +24,7 @@ import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import type { AppRouter } from "@hera/server/router";
 import { db, pool, quote, agentRequest, tenantIntegration } from "@hera/db";
+import { aluminiumModel } from "@hera/config-engine";
 import { hashToken } from "../apps/server/src/crypto.ts";
 import {
   processItem, processRequest, type SlPort, type CloudPort,
@@ -176,6 +177,29 @@ async function partA(): Promise<void> {
   await agent.sync.fulfill({ id: reqId!, result: [{ ItemCode: "A1" }] });
   assert.deepEqual(await listPromise, [{ ItemCode: "A1" }], "request/reply returned the agent's result");
 
+  // 12. configurator: author + publish a model, then prove the server re-validates configurations.
+  const saved = await user.models.save({ definition: aluminiumModel });
+  assert.ok(saved.id, "model saved (lint passed)");
+  await user.models.publish({ id: saved.id, published: true });
+  const fetched = await user.models.get({ id: saved.id });
+  assert.equal((fetched.definition as { name: string }).name, "Aluminium panel", "model round-trips through the API");
+
+  const goodCfg = {
+    product: "panel", thickness: 2, treatment: "matt", printing: "digital",
+    format: "1000x500", quality: "high", machining: "laser", qty: 100, width: 120, height: 80,
+  };
+  const cq = await user.quote.create({ config: { modelId: saved.id, configuration: goodCfg, batches: [100, 500] } });
+  assert.equal(cq.status, "syncing", "a valid configuration becomes a quote");
+  const [cqRow] = await db.select().from(quote).where(eq(quote.id, cq.id));
+  assert.equal((cqRow!.payload as { modelId: string }).modelId, saved.id, "quote payload carries the model id");
+
+  // Tampered config (digital + 500x500 violates a rule) must be rejected at the trust boundary.
+  await assert.rejects(
+    () => user.quote.create({ config: { modelId: saved.id, configuration: { ...goodCfg, format: "500x500" } } }),
+    /Invalid configuration/i,
+    "server re-validation rejects a tampered configuration",
+  );
+
   console.log("  ok");
 }
 
@@ -317,6 +341,7 @@ async function partC(): Promise<void> {
       getEntity: async () => ({}),
       createEntity: async () => ({}),
       updateEntity: async () => ({ ok: true }),
+      queryRaw: async () => ({ value: [] }),
     };
     const cloud: RequestCloudPort = {
       fulfill: async (i) => void (calls.fulfill = i),
@@ -349,6 +374,7 @@ async function partC(): Promise<void> {
       getEntity: async () => ({}),
       createEntity: async () => ({}),
       updateEntity: async () => ({ ok: true }),
+      queryRaw: async () => ({ value: [] }),
     };
     const cloud: RequestCloudPort = {
       fulfill: async () => assert.fail("should not fulfill on error"),

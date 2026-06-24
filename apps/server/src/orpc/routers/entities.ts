@@ -14,7 +14,7 @@ const AGENT_STALE_MS = 90_000;
 // Fail fast with a clear reason instead of waiting out the request timeout when no agent is
 // configured for this tenant, or the configured one isn't connected. (A timeout can't tell
 // "agent is slow" from "no agent will ever answer this tenant".)
-async function assertAgentReady(tenantId: string): Promise<void> {
+export async function assertAgentReady(tenantId: string): Promise<void> {
   const [ti] = await db
     .select({ lastSeenAt: tenantIntegration.lastSeenAt })
     .from(tenantIntegration)
@@ -38,7 +38,7 @@ async function assertAgentReady(tenantId: string): Promise<void> {
 // Enqueue an on-demand request for the agent, ring its doorbell, then park on this request's
 // reply channel until the agent fulfills/fails it (or we give up). Reuses the exact LISTEN/NOTIFY
 // machinery the quote backbone uses — just a different table column for the result.
-async function runRequest(tenantId: string, kind: string, payload: Record<string, unknown>): Promise<unknown> {
+export async function runRequest(tenantId: string, kind: string, payload: Record<string, unknown>): Promise<unknown> {
   const [row] = await db
     .insert(agentRequest)
     .values({ tenantId, kind, payload })

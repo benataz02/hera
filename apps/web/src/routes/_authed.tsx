@@ -65,8 +65,12 @@ function AuthedLayout() {
   const onSelect: SideNavigationPropTypes["onSelectionChange"] = (e) => {
     const el = e.detail.item as HTMLElement;
     const entity = el.dataset.entity;
+    const to = el.dataset.to;
     if (entity) navigate({ to: "/$entity", params: { entity } });
-    else if (el.dataset.to === "/settings") navigate({ to: "/settings" });
+    else if (to === "/settings") navigate({ to: "/settings" });
+    else if (to === "/configure") navigate({ to: "/configure" });
+    else if (to === "/models") navigate({ to: "/models" });
+    else if (to === "/tables") navigate({ to: "/tables" });
     else navigate({ to: "/" });
   };
 
@@ -188,6 +192,13 @@ function AuthedLayout() {
               selected={pathname === `/${ent.name}`}
             />
           ))}
+          <SideNavigationItem text="Configure" icon="wrench" data-to="/configure" selected={pathname === "/configure"} />
+          {isAdmin ? (
+            <SideNavigationItem text="Models" icon="tree" data-to="/models" selected={pathname.startsWith("/models")} />
+          ) : null}
+          {isAdmin ? (
+            <SideNavigationItem text="Tables" icon="table-view" data-to="/tables" selected={pathname.startsWith("/tables")} />
+          ) : null}
           {isAdmin ? (
             <SideNavigationItem
               text="Settings"
