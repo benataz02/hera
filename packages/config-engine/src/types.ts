@@ -55,11 +55,22 @@ export interface Rule {
   vars: string[];
 }
 
+// A named, reusable expression authored in the builder's Formulas panel. Not tied to a rendered
+// field; referenceable by `name` from any expression (items, rules, visibility, other formulas).
+// `id` is a builder-only stable key (like sections/groups) — the engine keys on `name`.
+export interface PredefinedFormula {
+  id: string;
+  name: string;
+  expr: string;
+  itemId?: string; // builder-only: which field row it's shown under (display anchor; stays global)
+}
+
 export interface Model {
   name: string;
   family: string;
   sections: FormSection[];
   rules: Rule[];
+  formulas?: PredefinedFormula[];
 }
 
 // --- Flattened engine shape (produced by flatten(), consumed by the algorithm) -------------------

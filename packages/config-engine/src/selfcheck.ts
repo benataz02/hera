@@ -3,12 +3,13 @@
 // real builder tree (groups -> items) and run through flatten() + the engine. Run:
 //   bun run --filter @hera/config-engine selfcheck   (or: bun packages/config-engine/src/selfcheck.ts)
 import assert from "node:assert/strict";
-import type { Assignment } from "./types.ts";
-import { flatten } from "./flatten.ts";
+import type { Assignment, Model } from "./types.ts";
+import { flatten, orderFormulas } from "./flatten.ts";
 import { initialDomains, propagate, validate } from "./propagate.ts";
 import { enumerate } from "./enumerate.ts";
 import { evaluate, priceBatches } from "./evaluate.ts";
 import { fit, packRect } from "./packing.ts";
+import { lintModel } from "./lint.ts";
 import { aluminiumModel as ALU } from "./examples.ts";
 
 export function runEngineSelfCheck(): void {
@@ -103,4 +104,49 @@ export function runEngineSelfCheck(): void {
   console.log("config-engine self-check: OK (aluminium fixture — flatten, propagation, enumerate, validate, evaluate, pricing, packing, visibility)");
 }
 
-if (import.meta.main) runEngineSelfCheck();
+// Predefined (reusable) formula library: dependency ordering, cross-reference, cycle/collision lint.
+export function runFormulaSelfCheck(): void {
+  // orderFormulas: a depends on b -> b emitted first; mutual reference -> cycle reported.
+  const ord = orderFormulas([{ name: "a", expr: "b + 1" }, { name: "b", expr: "2" }]);
+  assert.deepEqual(ord.ordered.map((f) => f.name), ["b", "a"], "b ordered before a (a uses b)");
+  assert.equal(ord.cycle, null, "no cycle");
+  const cyc = orderFormulas([{ name: "a", expr: "b" }, { name: "b", expr: "a" }]).cycle;
+  assert.ok(cyc && cyc.includes("a") && cyc.includes("b"), "a<->b cycle reported");
+
+  // A library formula (declared out of dependency order) is reordered and readable by an item formula.
+  const m: Model = {
+    name: "T", family: "", rules: [],
+    formulas: [
+      { id: "f2", name: "lineTotal", expr: "unit * qty" }, // uses `unit`, declared below -> reorder
+      { id: "f1", name: "unit", expr: "5" },
+    ],
+    sections: [{ id: "s", label: "S", groups: [{ id: "g", label: "G", items: [
+      { id: "i1", name: "qty", label: "Qty", input: { mandatory: true, dataSource: { kind: "normal", values: [10, 20] }, inputType: "radio", value: { kind: "manual" } } },
+      { id: "i2", name: "total", label: "Total", input: { mandatory: false, dataSource: { kind: "normal" }, inputType: "input", value: { kind: "formula", expr: "lineTotal" } } },
+    ] }] }],
+  };
+  const M = flatten(m);
+  assert.deepEqual(M.formulas.map((f) => f.name), ["unit", "lineTotal", "total"], "library reordered before item formula");
+  assert.equal(evaluate(M, { qty: 20 }).values.total, 100, "item formula reads library: 5 * 20");
+  assert.deepEqual(lintModel(m), [], "valid model with a formula library lints clean");
+
+  // lint rejects a cyclic library and a formula name colliding with an item name.
+  assert.ok(
+    lintModel({ ...m, formulas: [{ id: "x", name: "a", expr: "b" }, { id: "y", name: "b", expr: "a" }] }).some((e) => e.includes("cycle")),
+    "cyclic library rejected",
+  );
+  assert.ok(
+    lintModel({ ...m, formulas: [{ id: "z", name: "qty", expr: "1" }] }).some((e) => /duplicate/i.test(e)),
+    "formula name colliding with an item rejected",
+  );
+  assert.ok(
+    lintModel({ ...m, formulas: [{ id: "z", name: "bad name", expr: "1" }] }).some((e) => /identifier/i.test(e)),
+    "non-identifier formula name rejected",
+  );
+  console.log("config-engine self-check: OK (formula library — ordering, cross-reference, cycle/collision/identifier lint)");
+}
+
+if (import.meta.main) {
+  runEngineSelfCheck();
+  runFormulaSelfCheck();
+}

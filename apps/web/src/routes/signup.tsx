@@ -1,6 +1,6 @@
 import { createFileRoute, redirect, useNavigate, Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Input, Button, MessageStrip } from "@ui5/webcomponents-react";
 import { authClient } from "../auth-client.ts";
 import { AuthLayout } from "../components/AuthLayout.tsx";
@@ -8,9 +8,12 @@ import { SocialButtons } from "../components/SocialButtons.tsx";
 import { apexUrl, hardRedirect, isApex } from "../lib/tenant.ts";
 
 export const Route = createFileRoute("/signup")({
-  beforeLoad: async () => {
+  beforeLoad: async ({ context }) => {
     if (!isApex()) return hardRedirect(apexUrl("/signup"));
-    const { data } = await authClient.getSession();
+    const data = await context.queryClient.ensureQueryData({
+      queryKey: ["session"],
+      queryFn: async () => (await authClient.getSession()).data ?? null,
+    });
     if (data?.session) throw redirect({ to: "/" });
   },
   component: Signup,
@@ -22,14 +25,26 @@ function Signup() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  const queryClient = useQueryClient();
+
   const signUp = useMutation({
     mutationFn: async (vars: { name: string; email: string; password: string }) => {
+      const { data } = await authClient.getSession();
+      if (data?.session) return data; // Prevent duplicate session creation
       // ponytail: no email verification — no mailer in the repo. Enable Better Auth
       //           requireEmailVerification + a sender when one exists.
       const res = await authClient.signUp.email(vars);
       if (res.error) throw new Error(res.error.message ?? "Sign up failed");
+      return res.data;
     },
-    onSuccess: () => navigate({ to: "/onboarding" }), // brand-new user has no org yet
+    onSuccess: async () => {
+      await queryClient.fetchQuery({
+        queryKey: ["session"],
+        queryFn: async () => (await authClient.getSession()).data ?? null,
+        staleTime: 0,
+      });
+      navigate({ to: "/onboarding" });
+    }, // brand-new user has no org yet
   });
 
   const submit = () => name && email && password && signUp.mutate({ name, email, password });

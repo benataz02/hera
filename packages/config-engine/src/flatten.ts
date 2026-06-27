@@ -28,9 +28,42 @@ function itemDomain(it: FormItem): ParamDomain {
   return { kind: "datasource", source: ds }; // table/query -> finite once resolved at runtime
 }
 
+// Identifiers referenced in an expression (used to wire formula -> formula dependencies).
+const idsIn = (expr: string): string[] => expr.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+
+// Dependency-order predefined formulas so `buildScope` (which resolves in array order) can read a
+// formula's dependencies first. A depends on B when B's name appears in A's expr. Kahn's algorithm;
+// the leftover on a cycle is returned so lint can report it (flatten still emits a best-effort order).
+export function orderFormulas(
+  formulas: { name: string; expr: string }[],
+): { ordered: { name: string; expr: string }[]; cycle: string[] | null } {
+  const names = new Set(formulas.map((f) => f.name));
+  const deps = new Map(formulas.map((f) => [f.name, new Set(idsIn(f.expr).filter((d) => d !== f.name && names.has(d)))]));
+  const byName = new Map(formulas.map((f) => [f.name, f]));
+  const ordered: { name: string; expr: string }[] = [];
+  const ready = formulas.filter((f) => deps.get(f.name)!.size === 0).map((f) => f.name);
+  const emitted = new Set<string>();
+  while (ready.length) {
+    const n = ready.shift()!;
+    if (emitted.has(n)) continue;
+    emitted.add(n);
+    ordered.push(byName.get(n)!);
+    for (const [m, ds] of deps) {
+      if (ds.delete(n) && ds.size === 0 && !emitted.has(m)) ready.push(m);
+    }
+  }
+  const cycle = formulas.filter((f) => !emitted.has(f.name)).map((f) => f.name);
+  return { ordered: [...ordered, ...formulas.filter((f) => !emitted.has(f.name))], cycle: cycle.length ? cycle : null };
+}
+
 export function flatten(model: Model): EngineModel {
   const parameters: Parameter[] = [];
-  const formulas: Formula[] = [];
+  // Predefined (reusable) formulas first, in dependency order, so item-derived formulas below can
+  // reference them. ponytail: a predefined formula referencing an *item* formula won't resolve (items
+  // come after); cycles are surfaced by lint, not here. Promote to a single combined topo-sort if so.
+  const formulas: Formula[] = orderFormulas(
+    (model.formulas ?? []).map((f) => ({ name: f.name, expr: f.expr })),
+  ).ordered;
   const prices: PriceLine[] = [];
 
   // `?? []` tolerates a legacy/empty definition instead of throwing (returns no parameters).

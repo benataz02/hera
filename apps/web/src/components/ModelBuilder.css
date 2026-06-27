@@ -1,0 +1,23 @@
+/* Item dialog: TabContainer flush to the dialog edges, constant height across tabs. */
+
+/* Kill the dialog's default content padding so the TabContainer sits flush. */
+.hera-item-dialog::part(content) {
+  padding: 0;
+}
+
+/* ponytail: one fixed content height so the dialog doesn't jump between tabs; caps at the
+   viewport and scrolls for the rare tall tab (Input + query/formula). Bump the rem if the
+   tallest tab outgrows it. */
+.hera-item-tabs::part(content) {
+  block-size: min(32rem, 68vh);
+  overflow: auto;
+}
+
+/* Item row delete: reveal only on row hover/focus (Fiori inline-action pattern). */
+.hera-row-action {
+  visibility: hidden;
+}
+ui5-table-row:hover .hera-row-action,
+ui5-table-row:focus-within .hera-row-action {
+  visibility: visible;
+}

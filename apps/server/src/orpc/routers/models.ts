@@ -54,6 +54,7 @@ const ModelZ = z.object({
   family: z.string().default(""),
   sections: z.array(FormSectionZ),
   rules: z.array(z.object({ expr: z.string(), vars: z.array(z.string()) })).default([]),
+  formulas: z.array(z.object({ id: z.string(), name: z.string(), expr: z.string() })).default([]),
 });
 
 export const modelsRouter = {

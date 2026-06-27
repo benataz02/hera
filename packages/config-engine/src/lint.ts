@@ -3,7 +3,9 @@
 // models.save (reject bad models) and the builder (show errors live).
 import type { Model } from "./types.ts";
 import { compile } from "./expr.ts";
-import { flatten } from "./flatten.ts";
+import { flatten, orderFormulas } from "./flatten.ts";
+
+const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function lintModel(model: Model): string[] {
   const errs: string[] = [];
@@ -22,7 +24,20 @@ export function lintModel(model: Model): string[] {
 
   if (!em.parameters.length && !em.formulas.length) errs.push("model has no items");
 
+  // Predefined formulas share the item-name namespace (seeded first so items collide-check against
+  // them). Names must be valid identifiers to be referenceable; cyclic references resolve to
+  // undefined at runtime, so reject them here.
   const seen = new Set<string>();
+  for (const f of model.formulas ?? []) {
+    if (!f.name) errs.push("a formula has no name");
+    else if (!IDENT.test(f.name)) errs.push(`formula name '${f.name}' is not a valid identifier`);
+    else if (seen.has(f.name)) errs.push(`duplicate name '${f.name}'`);
+    seen.add(f.name);
+    tryParse(f.expr, `formula '${f.name}'`);
+  }
+  const cyc = orderFormulas((model.formulas ?? []).map((f) => ({ name: f.name, expr: f.expr }))).cycle;
+  if (cyc) errs.push(`formula cycle: ${cyc.join(" → ")}`);
+
   for (const s of model.sections ?? []) {
     if (s.visibility) tryParse(s.visibility, `section "${s.label}" visibility`);
     for (const g of s.groups ?? []) {

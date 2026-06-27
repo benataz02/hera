@@ -1,5 +1,5 @@
 import { createFileRoute, redirect, Outlet, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Avatar,
   Button,
@@ -20,9 +20,13 @@ import { getTheme, setTheme } from '@ui5/webcomponents-base/dist/config/Theme.js
 // The app shell for every signed-in page. The tenant is the subdomain; on the apex this
 // route is just the lobby dispatcher (it never renders the app there).
 export const Route = createFileRoute("/_authed")({
-  beforeLoad: async () => {
+  beforeLoad: async ({ context }) => {
     const slug = currentSlug();
-    const { data } = await authClient.getSession();
+    const data = await context.queryClient.ensureQueryData({
+      queryKey: ["session"],
+      queryFn: async () => (await authClient.getSession()).data ?? null,
+      staleTime: 0,
+    });
 
     if (!slug) {
       // Apex lobby: route the user to their tenant subdomain, onboarding, or the picker.
@@ -46,7 +50,7 @@ export const Route = createFileRoute("/_authed")({
 function AuthedLayout() {
   const navigate = useNavigate();
   const router = useRouter();
-  const { data: session } = authClient.useSession();
+  const { data: session } = useQuery<Awaited<ReturnType<typeof authClient.getSession>>["data"]>({ queryKey: ["session"] });
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [density, setDensity] = useState<Density>(() => (localStorage.getItem("density") as Density) ?? getDensity());
@@ -105,8 +109,11 @@ function AuthedLayout() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
+  const queryClient = useQueryClient();
+
   const signOut = async () => {
     await authClient.signOut();
+    queryClient.setQueryData(["session"], null);
     navigate({ to: "/login" });
   };
 
@@ -117,12 +124,17 @@ function AuthedLayout() {
         <>
           <ShellBar
             startButton={
-              <Button
-                accessibleName="Back"
-                icon="nav-back"
-                tooltip='Back'
-                onClick={() => router.history.back()}
-              />
+              <>
+                <Button
+                  icon="nav-back"
+                  tooltip='Back'
+                  onClick={() => router.history.back()}
+                />
+                <Button
+                  icon="menu"
+                  tooltip='Menu'
+                />
+              </>
             }
             primaryTitle="HERA"
             logo={<img alt="SAP Logo" src="https://ui5.github.io/webcomponents/images/sap-logo-svg.svg" />}
@@ -155,7 +167,7 @@ function AuthedLayout() {
                 <UserMenuItem
                   key={t.id}
                   text={t.labelKey}
-                  icon={theme === t.id ? "sys-enter" : "blank"}
+                  icon={theme === t.id ? "sys-enter" : ""}
                   onClick={() => setThemeState(t.id)}
                 >
                 </UserMenuItem>
@@ -165,14 +177,14 @@ function AuthedLayout() {
               <UserMenuItem
                 data-id="compact"
                 text="Compact"
-                icon={density === "compact" ? "sys-enter" : "blank"}
+                icon={density === "compact" ? "sys-enter" : ""}
                 onClick={() => setDensity('compact')}
               >
               </UserMenuItem>
               <UserMenuItem
                 data-id="cozy"
                 text="Cozy"
-                icon={density === "cozy" ? "sys-enter" : "blank"}
+                icon={density === "cozy" ? "sys-enter" : ""}
                 onClick={() => setDensity('cozy')}
               >
               </UserMenuItem>

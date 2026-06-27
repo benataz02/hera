@@ -5,10 +5,21 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
+import { authClient } from "./auth-client.ts";
 import { routeTree } from "./routeTree.gen.ts";
 
 const queryClient = new QueryClient();
-const router = createRouter({ routeTree });
+queryClient.setQueryDefaults(["session"], {
+  queryFn: async () => (await authClient.getSession()).data ?? null,
+  staleTime: 1000 * 60 * 5, // 5 minutes
+});
+
+const router = createRouter({ 
+  routeTree,
+  context: {
+    queryClient,
+  }
+});
 
 declare module "@tanstack/react-router" {
   interface Register {

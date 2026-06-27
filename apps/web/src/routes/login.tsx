@@ -1,6 +1,6 @@
 import { createFileRoute, redirect, useNavigate, Link } from "@tanstack/react-router";
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Input, Button, MessageStrip } from "@ui5/webcomponents-react";
 import { authClient } from "../auth-client.ts";
 import { AuthLayout } from "../components/AuthLayout.tsx";
@@ -9,9 +9,12 @@ import { apexUrl, hardRedirect, isApex } from "../lib/tenant.ts";
 
 export const Route = createFileRoute("/login")({
   // Auth lives on the apex only. Already signed in? Hand off to the apex dispatcher (`/`).
-  beforeLoad: async () => {
+  beforeLoad: async ({ context }) => {
     if (!isApex()) return hardRedirect(apexUrl("/login"));
-    const { data } = await authClient.getSession();
+    const data = await context.queryClient.ensureQueryData({
+      queryKey: ["session"],
+      queryFn: async () => (await authClient.getSession()).data ?? null,
+    });
     if (data?.session) throw redirect({ to: "/" });
   },
   component: Login,
@@ -22,13 +25,27 @@ function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  const queryClient = useQueryClient();
+
   const signIn = useMutation({
     mutationFn: async (vars: { email: string; password: string }) => {
+      const { data } = await authClient.getSession();
+      if (data?.session) return data; // Prevent duplicate session creation
       const res = await authClient.signIn.email(vars);
       if (res.error) throw new Error(res.error.message ?? "Sign in failed");
+      return res.data;
     },
     // `/` is the apex dispatcher — it routes to the tenant subdomain / onboarding / picker.
-    onSuccess: () => navigate({ to: "/" }),
+    onSuccess: async () => {
+      // Invalidate the cached null session and re-fetch with the newly-set cookie
+      // so _authed's beforeLoad → ensureQueryData sees the real session.
+      await queryClient.fetchQuery({
+        queryKey: ["session"],
+        queryFn: async () => (await authClient.getSession()).data ?? null,
+        staleTime: 0, // bypass the 5-min default — we need a real fetch after sign-in
+      });
+      navigate({ to: "/" });
+    },
   });
 
   const submit = () => email && password && signIn.mutate({ email, password });

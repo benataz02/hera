@@ -7,9 +7,13 @@ import { apexUrl, hardRedirect, isApex, tenantUrl } from "../lib/tenant.ts";
 
 // Apex org picker for users who belong to more than one workspace.
 export const Route = createFileRoute("/select")({
-  beforeLoad: async () => {
+  beforeLoad: async ({ context }) => {
     if (!isApex()) return hardRedirect(apexUrl("/select"));
-    const { data } = await authClient.getSession();
+    const data = await context.queryClient.ensureQueryData({
+      queryKey: ["session"],
+      queryFn: async () => (await authClient.getSession()).data ?? null,
+      staleTime: 0,
+    });
     if (!data?.session) throw redirect({ to: "/login" });
   },
   component: Select,
