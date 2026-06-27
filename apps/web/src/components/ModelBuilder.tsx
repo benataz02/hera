@@ -4,19 +4,20 @@ import { useMutation, useQuery, useQueryClient, skipToken } from "@tanstack/reac
 import {
   ObjectPage, ObjectPageSection, ObjectPageTitle, Bar, Button, Input, SuggestionItem, Title, Text, Label, MessageStrip, BusyIndicator,
   Table, TableHeaderRow, TableHeaderCell, TableRow, TableCell,
-  Dialog, TabContainer, Tab, Select, Option, Switch, FlexBox, Panel,
-  Toolbar, ToolbarButton, Icon,
+  Dialog, TabContainer, Tab, Select, Option, Switch, FlexBox,
+  Toolbar, ToolbarButton, Icon, SplitterLayout, SplitterElement,
 } from "@ui5/webcomponents-react";
-import type { Model, FormSection, FormGroup, FormItem, DataSource, InputType, Value, PredefinedFormula, EngineModel, Assignment } from "@hera/config-engine";
-import { flatten, enumerate, lintModel, buildScope, evaluate } from "@hera/config-engine";
+import type { Model, FormSection, FormGroup, FormItem, DataSource, InputType, Value, PredefinedFormula, EngineModel } from "@hera/config-engine";
+import { flatten, enumerate, lintModel } from "@hera/config-engine";
 import { orpc } from "../orpc.ts";
-import { blankModel, blankSection, blankGroup, blankItem, blankFormula, allItems, trailingToken, applyExprPick, evalForDisplay } from "../lib/model.ts";
+import { uid, blankModel, blankSection, blankGroup, blankItem, blankFormula, allItems, trailingToken, applyExprPick } from "../lib/model.ts";
+import { ModelRuntime } from "./Configurator.tsx";
 import "./ModelBuilder.css";
+
 
 // An autocomplete suggestion offered in an expression input: an identifier (a field or a formula
 // name) + a short detail (the formula's expression, or a field descriptor) shown after it.
 type Suggest = { name: string; detail: string };
-type Scope = Record<string, unknown>;
 
 type Editing = { sid: string; gid?: string; iid?: string } | null;
 
@@ -40,11 +41,8 @@ const parseValues = (s: string): Value[] =>
   s.split(",").map((x) => x.trim()).filter(Boolean).map((x) => (x !== "" && !isNaN(Number(x)) ? Number(x) : x));
 const joinValues = (v?: Value[]): string => (v ?? []).join(", ");
 
-// Coerce a typed/selected test-input string back to a real value: booleans and numbers stay typed
-// so rules/formulas see the same shape the runtime would. (Same intent as Configurator's `num`.)
-const num = (s: string): Value => (s !== "" && !isNaN(Number(s)) ? Number(s) : s);
-const coerceVal = (s: string): Value => (s === "true" ? true : s === "false" ? false : num(s));
-const coerceOpt = (k?: string): Value | undefined => (k === undefined || k === "" ? undefined : coerceVal(k));
+// Slide the preview pane open/closed by animating its flex-basis (see the SplitterLayout below).
+const PANE_ANIM = "flex-basis 0.28s cubic-bezier(0.2, 0, 0, 1)";
 
 export function ModelBuilder({ id }: { id: string }) {
   const navigate = useNavigate();
@@ -57,8 +55,11 @@ export function ModelBuilder({ id }: { id: string }) {
   const [model, setModel] = useState<Model>(blankModel());
   const [editing, setEditing] = useState<Editing>(null);
   const [editingFormula, setEditingFormula] = useState<string | null>(null);
-  // Sample inputs the whole builder tests its expressions against (one shared assignment).
-  const [testInput, setTestInput] = useState<Assignment>({});
+  // Live preview: run the configurator runtime against the in-memory model. Hidden by default.
+  const [showPreview, setShowPreview] = useState(false);
+  // Animate flex-basis only during a button toggle, never while dragging the splitter (drag mutates the
+  // size directly, and a transition there would feel laggy). Cleared on the slide's transitionend.
+  const [animating, setAnimating] = useState(false);
   // ponytail: Table has no native hierarchy/expand feature — gate child rows in render + a chevron.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggle = (k: string) =>
@@ -73,9 +74,6 @@ export function ModelBuilder({ id }: { id: string }) {
   }, [isNew, get.data]);
 
   const em = useMemo<EngineModel>(() => flatten(model), [model]);
-  // The shared evaluation scope: the sample inputs + every formula resolved against them. Every
-  // ExprResult/ExprInput in the builder evaluates against this, so results stay consistent.
-  const scope = useMemo<Scope>(() => buildScope(em, testInput), [em, testInput]);
 
   // Everything referenceable from an expression: predefined formulas + every field (manual input)
   // + every item-derived formula. Drives the SuggestionItem autocomplete in every expression input.
@@ -100,11 +98,6 @@ export function ModelBuilder({ id }: { id: string }) {
       return null;
     }
   }, [em, errors]);
-  // The summed price for the current sample inputs (if it computes); shown next to the config count.
-  const testTotal = useMemo(() => {
-    if (!Object.keys(testInput).length) return null;
-    try { return evaluate(em, testInput).price; } catch { return null; }
-  }, [em, testInput]);
 
   const save = useMutation(
     orpc.models.save.mutationOptions({
@@ -134,6 +127,13 @@ export function ModelBuilder({ id }: { id: string }) {
   const removeGroup = (sid: string, gid: string) => patchSection(sid, (s) => ({ ...s, groups: s.groups.filter((g) => g.id !== gid) }));
   const addItem = (sid: string, gid: string) => patchGroup(sid, gid, (g) => ({ ...g, items: [...g.items, blankItem()] }));
   const removeItem = (sid: string, gid: string, iid: string) => patchGroup(sid, gid, (g) => ({ ...g, items: g.items.filter((it) => it.id !== iid) }));
+  // Clone in place (right after the original). Fresh id + name suffix — the engine keys on `name`, so a
+  // same-name clone would lint as a duplicate. input is replaced-not-mutated everywhere, so a shallow copy is safe.
+  const duplicateItem = (sid: string, gid: string, iid: string) =>
+    patchGroup(sid, gid, (g) => ({
+      ...g,
+      items: g.items.flatMap((it) => (it.id === iid ? [it, { ...it, id: uid(), name: it.name + "_" + uid().slice(0, 4) }] : [it])),
+    }));
 
   // --- predefined formulas: a global flat list (referenceable from any expression), edited in a
   // modal like everything else. The table placement (under a field / at the foot) is cosmetic.
@@ -146,18 +146,22 @@ export function ModelBuilder({ id }: { id: string }) {
   };
   const removeFormula = (fid: string) =>
     setModel((m) => ({ ...m, formulas: (m.formulas ?? []).filter((f) => f.id !== fid) }));
+  const duplicateFormula = (fid: string) =>
+    setModel((m) => ({
+      ...m,
+      formulas: (m.formulas ?? []).flatMap((f) => (f.id === fid ? [f, { ...f, id: uid(), name: f.name + "_" + uid().slice(0, 4) }] : [f])),
+    }));
 
   // One read-only formula row (the formula is global; `pad` is just how deep it sits under a field).
-  // Click the row to edit it in a modal; the chip shows its live result against the sample inputs.
+  // Click the row to edit it in a modal.
   const formulaRow = (f: PredefinedFormula, pad: string) => (
     <TableRow key={f.id} interactive rowKey={`f:${f.id}`} data-fid={f.id}>
       <TableCell style={{ gridColumn: "1 / -1" }}>
         <FlexBox alignItems="Center" style={{ gap: "0.5rem", width: "100%", paddingInlineStart: pad, paddingInlineEnd: "0.5rem" }}>
           <Icon name="simulate" />
-          <Text style={{ fontWeight: 600 }}>{f.name}</Text>
-          <Text style={{ opacity: 0.7 }}>= {f.expr || "—"}</Text>
-          <ResultText expr={f.expr} scope={scope} />
-          <span style={{ flex: 1 }} />
+          <Text maxLines={1} style={{ fontWeight: 600 }}>{f.name}</Text>
+          <Text maxLines={1} style={{ opacity: 0.7, flex: 1, minWidth: 0 }}>= {f.expr || "—"}</Text>
+          <Button className="hera-row-action" icon="copy" design="Transparent" onClick={() => duplicateFormula(f.id)} tooltip="Duplicate formula" />
           <Button className="hera-row-action" icon="delete" design="Transparent" onClick={() => removeFormula(f.id)} tooltip="Delete formula" />
         </FlexBox>
       </TableCell>
@@ -240,6 +244,8 @@ export function ModelBuilder({ id }: { id: string }) {
     if (el.dataset.fid) { setEditingFormula(el.dataset.fid); return; }
     const k = parseKey(el.dataset.key);
     if (k?.kind === "i") setEditing({ sid: k.sid, gid: k.gid, iid: k.iid });
+    else if (k?.kind === "g") setEditing({ sid: k.sid, gid: k.gid });
+    else if (k?.kind === "s") setEditing({ sid: k.sid });
   };
 
   if (!isNew && get.isPending) return <BusyIndicator active style={{ margin: "2rem" }} />;
@@ -268,7 +274,7 @@ export function ModelBuilder({ id }: { id: string }) {
         }
       : { gridColumn: "1 / -1", background: "var(--sapNeutralBackground)" };
 
-  return (
+  const editor = (
     <ObjectPage
       mode="IconTabBar"
       hidePinButton
@@ -279,6 +285,7 @@ export function ModelBuilder({ id }: { id: string }) {
             <Toolbar design="Transparent">
               <ToolbarButton icon="add" text="Add section" onClick={addSection} />
               <ToolbarButton icon="simulate" text="Add formula" onClick={() => addFormula()} />
+              <ToolbarButton icon="show" text={showPreview ? "Hide preview" : "Preview"} onClick={() => { setAnimating(true); setShowPreview((v) => !v); }} />
               <ToolbarButton
                 design="Emphasized"
                 text={save.isPending ? "Saving…" : "Save"}
@@ -312,41 +319,40 @@ export function ModelBuilder({ id }: { id: string }) {
         ) : (
           <MessageStrip design="Positive" hideCloseButton>
             {preview ? `${preview.solutions.length}${preview.truncated ? "+" : ""} possible configuration(s)` : "Model is valid"}
-            {testTotal != null ? ` · test total ${testTotal}` : ""}
           </MessageStrip>
         )}
-
-        <TestPanel em={em} testInput={testInput} setTestInput={setTestInput} />
 
         {/* One flat table: section header rows, group header rows, item rows — drag any row to reorder. */}
         <Table
           headerRow={
+            // When columns don't fit, drop them right-to-left instead of growing the row height.
+            // popinHidden = hide the column rather than pop it into a taller area; importance sets the
+            // drop order (lowest first), so Value drops first … and Description (primary) never drops.
             <TableHeaderRow>
-              <TableHeaderCell>Description</TableHeaderCell>
-              <TableHeaderCell>Name</TableHeaderCell>
-              <TableHeaderCell>Input</TableHeaderCell>
-              <TableHeaderCell>Data source</TableHeaderCell>
-              <TableHeaderCell>Value</TableHeaderCell>
+              <TableHeaderCell importance={4}>Description</TableHeaderCell>
+              <TableHeaderCell importance={3} popinHidden>Name</TableHeaderCell>
+              <TableHeaderCell importance={2} popinHidden>Input</TableHeaderCell>
+              <TableHeaderCell importance={1} popinHidden>Data source</TableHeaderCell>
+              <TableHeaderCell importance={0} popinHidden>Value</TableHeaderCell>
             </TableHeaderRow>
           }
           noDataText="No sections yet — use “Add section”."
           onMove={onMove}
           onMoveOver={onMoveOver}
           onRowClick={onRowClick}
+          overflowMode="Popin"
         >
           {model.sections.flatMap((s, si) => {
             const sk = keyOf({ kind: "s", sid: s.id });
             return [
-              <TableRow key={s.id} movable rowKey={sk} data-key={sk}>
+              <TableRow key={s.id} interactive movable rowKey={sk} data-key={sk}>
                 <TableCell style={spanCell("section", si === 0)}>
                   <HeaderCell
                     level="section"
                     label={s.label}
                     visibility={s.visibility}
-                    scope={scope}
                     collapsed={collapsed.has(sk)}
                     onToggle={() => toggle(sk)}
-                    onEdit={() => setEditing({ sid: s.id })}
                     onAdd={() => addGroup(s.id)}
                     addTooltip="Add group"
                     onDelete={() => removeSection(s.id)}
@@ -356,16 +362,14 @@ export function ModelBuilder({ id }: { id: string }) {
               ...(collapsed.has(sk) ? [] : s.groups.flatMap((g) => {
                 const gk = keyOf({ kind: "g", sid: s.id, gid: g.id });
                 return [
-                  <TableRow key={g.id} movable rowKey={gk} data-key={gk}>
+                  <TableRow key={g.id} interactive movable rowKey={gk} data-key={gk}>
                     <TableCell style={spanCell("group")}>
                       <HeaderCell
                         level="group"
                         label={g.label}
                         visibility={g.visibility}
-                        scope={scope}
                         collapsed={collapsed.has(gk)}
                         onToggle={() => toggle(gk)}
-                        onEdit={() => setEditing({ sid: s.id, gid: g.id })}
                         onAdd={() => addItem(s.id, g.id)}
                         addTooltip="Add field"
                         onDelete={() => removeGroup(s.id, g.id)}
@@ -377,23 +381,18 @@ export function ModelBuilder({ id }: { id: string }) {
                     return [
                       <TableRow key={it.id} interactive movable rowKey={ik} data-key={ik}>
                         <TableCell>
-                          <Text style={{ paddingInlineStart: "3rem" }}>{it.label}{it.input.mandatory ? " *" : ""}</Text>
+                          <Text maxLines={1} style={{ paddingInlineStart: "3rem" }}>{it.label}{it.input.mandatory ? " *" : ""}</Text>
                         </TableCell>
-                        <TableCell><Text>{it.name}</Text></TableCell>
-                        <TableCell><Text>{it.input.inputType}</Text></TableCell>
-                        <TableCell><Text>{it.input.dataSource.kind}</Text></TableCell>
+                        <TableCell><Text maxLines={1}>{it.name}</Text></TableCell>
+                        <TableCell><Text maxLines={1}>{it.input.inputType}</Text></TableCell>
+                        <TableCell><Text maxLines={1}>{it.input.dataSource.kind}</Text></TableCell>
                         <TableCell>
                           <FlexBox alignItems="Center" style={{ gap: "0.5rem", width: "100%", paddingInlineEnd: "0.5rem" }}>
-                            {it.input.value.kind === "formula" ? (
-                              <>
-                                <Text>= {it.input.value.expr}</Text>
-                                <ResultText expr={it.input.value.expr} scope={scope} />
-                              </>
-                            ) : (
-                              <Text>manual</Text>
-                            )}
-                            <span style={{ flex: 1 }} />
+                            <Text maxLines={1} style={{ flex: 1, minWidth: 0 }}>
+                              {it.input.value.kind === "formula" ? `= ${it.input.value.expr}` : "manual"}
+                            </Text>
                             <Button className="hera-row-action" icon="simulate" design="Transparent" onClick={() => addFormula(it.id)} tooltip="Add formula" />
+                            <Button className="hera-row-action" icon="copy" design="Transparent" onClick={() => duplicateItem(s.id, g.id, it.id)} tooltip="Duplicate field" />
                             <Button className="hera-row-action" icon="delete" design="Transparent" onClick={() => removeItem(s.id, g.id, it.id)} tooltip="Delete field" />
                           </FlexBox>
                         </TableCell>
@@ -418,7 +417,6 @@ export function ModelBuilder({ id }: { id: string }) {
           item={ei}
           tables={tables.data ?? []}
           suggestions={suggestions}
-          scope={scope}
           onClose={() => setEditing(null)}
           onChange={(fn) => patchItem(editing!.sid, editing!.gid!, editing!.iid!, fn)}
         />
@@ -428,7 +426,6 @@ export function ModelBuilder({ id }: { id: string }) {
           label={eg.label}
           visibility={eg.visibility}
           suggestions={suggestions}
-          scope={scope}
           onClose={() => setEditing(null)}
           onLabel={(v) => patchGroup(editing!.sid, editing!.gid!, (g) => ({ ...g, label: v }))}
           onVisibility={(v) => patchGroup(editing!.sid, editing!.gid!, (g) => ({ ...g, visibility: v }))}
@@ -439,7 +436,6 @@ export function ModelBuilder({ id }: { id: string }) {
           label={es.label}
           visibility={es.visibility}
           suggestions={suggestions}
-          scope={scope}
           onClose={() => setEditing(null)}
           onLabel={(v) => patchSection(editing!.sid, (s) => ({ ...s, label: v }))}
           onVisibility={(v) => patchSection(editing!.sid, (s) => ({ ...s, visibility: v }))}
@@ -450,7 +446,6 @@ export function ModelBuilder({ id }: { id: string }) {
         <FormulaDialog
           formula={ef}
           suggestions={suggestions}
-          scope={scope}
           onClose={() => setEditingFormula(null)}
           onChange={(fn) => patchFormula(ef.id, fn)}
           onDelete={() => { removeFormula(ef.id); setEditingFormula(null); }}
@@ -459,53 +454,53 @@ export function ModelBuilder({ id }: { id: string }) {
       </ObjectPageSection>
 
       <ObjectPageSection id="constraints" titleText="Constraints">
-        <RulesPanel model={model} setModel={setModel} suggestions={suggestions} scope={scope} />
+        <RulesPanel model={model} setModel={setModel} suggestions={suggestions} />
       </ObjectPageSection>
     </ObjectPage>
   );
-}
 
-type VState = "None" | "Positive" | "Critical" | "Negative" | "Information";
-
-// Map a tested-expression result to an Input value state + message — the UI5 inline-validation
-// pattern: the field border carries the state, the value (or error) shows in the value-state popover.
-// Positive (a boolean that holds) needs no message; UI5 only pops the message for Info/Critical/Negative.
-function resultState(scope: Scope, expr?: string, bool?: boolean): { valueState: VState; message?: string } {
-  const r = evalForDisplay(scope, expr, bool);
-  if (!r) return { valueState: "None" };
-  if (!r.ok) return { valueState: "Negative", message: r.error };
-  if (bool) return r.bool ? { valueState: "Positive" } : { valueState: "Critical", message: "does not hold" };
-  return { valueState: "Information", message: `→ ${r.text}` };
-}
-
-// The same tested result as read-only text, for the table rows / header bands where there's no input
-// to carry a value state.
-function ResultText({ expr, scope, bool }: { expr?: string; scope: Scope; bool?: boolean }) {
-  const r = evalForDisplay(scope, expr, bool);
-  if (!r) return null;
-  if (!r.ok) return <Text style={{ color: "var(--sapNegativeTextColor)" }}>⚠ {r.error}</Text>;
-  if (bool) return <Text style={{ color: r.bool ? "var(--sapPositiveTextColor)" : "var(--sapCriticalTextColor)" }}>{r.text}</Text>;
-  return <Text style={{ opacity: 0.7 }}>→ {r.text}</Text>;
+  return (
+    // SplitterElement.size maps to flex-basis (grow:0), so we drive width from explicit sizes and keep
+    // BOTH panes mounted — animating flex-basis slides the preview open/closed instead of snapping.
+    // Collapsed = 0% width, no min-size, resizer hidden (preview not resizable) so no stray splitter bar.
+    // ponytail: a hidden preview still re-runs the engine per keystroke (cheap at authoring size); `active`
+    // only gates the B1 datasource fetch so a hidden pane never calls the agent.
+    <SplitterLayout
+      style={{ height: "100%" }}
+      onTransitionEnd={(e) => { if (e.propertyName === "flex-basis") setAnimating(false); }}
+    >
+      <SplitterElement size={showPreview ? "60%" : "100%"} minSize={420} style={{ transition: animating ? PANE_ANIM : undefined }}>
+        {editor}
+      </SplitterElement>
+      <SplitterElement
+        size={showPreview ? "40%" : "0%"}
+        minSize={showPreview ? 360 : 0}
+        resizable={showPreview}
+        style={{ transition: animating ? PANE_ANIM : undefined }}
+      >
+        {/* read-only preview; no allowCreate. modelId undefined for a never-saved "new" model. */}
+        <div style={{ flex: 1, minWidth: 0, height: "100%", overflow: "auto", opacity: showPreview ? 1 : 0, transition: "opacity 0.28s ease" }}>
+          <ModelRuntime model={model} modelId={isNew ? undefined : id} active={showPreview} />
+        </div>
+      </SplitterElement>
+    </SplitterLayout>
+  );
 }
 
 // An expression field with field+formula autocomplete: typing offers matching identifiers (name +
 // detail) via UI5 SuggestionItem; picking one completes the trailing identifier in place (see
-// applyExprPick). When `scope` is given, the live test result/error is carried by the input's
-// valueState (border) + valueStateMessage (popover).
-function ExprInput({ value, onChange, suggestions, placeholder, style, scope, bool }: {
+// applyExprPick). Expression errors surface via lintModel in the status strip, not inline.
+function ExprInput({ value, onChange, suggestions, placeholder, style }: {
   value: string;
   onChange: (v: string) => void;
   suggestions: Suggest[];
   placeholder?: string;
   style?: React.CSSProperties;
-  scope?: Scope;
-  bool?: boolean;
 }) {
   // ponytail: trailing-token completion only; caret-aware mid-expression insert if it ever matters.
   const token = trailingToken(value).toLowerCase();
   const matches = suggestions.filter((f) => f.name.toLowerCase().includes(token));
   const names = new Set(suggestions.map((f) => f.name));
-  const st = scope ? resultState(scope, value, bool) : { valueState: "None" as VState };
   return (
     <Input
       value={value}
@@ -513,8 +508,6 @@ function ExprInput({ value, onChange, suggestions, placeholder, style, scope, bo
       style={style}
       showSuggestions
       filter="None"
-      valueState={st.valueState}
-      valueStateMessage={st.message ? <div>{st.message}</div> : undefined}
       onInput={(e) => onChange(applyExprPick(value, e.target.value, names))}
     >
       {matches.map((f) => (
@@ -524,74 +517,15 @@ function ExprInput({ value, onChange, suggestions, placeholder, style, scope, bo
   );
 }
 
-// The shared "Test data" area: one sample value per input field, evaluated everywhere. Collapsed by
-// default. Auto-fill seeds the finite fields from the first valid configuration.
-function TestPanel({ em, testInput, setTestInput }: {
-  em: EngineModel;
-  testInput: Assignment;
-  setTestInput: React.Dispatch<React.SetStateAction<Assignment>>;
-}) {
-  const params = em.parameters;
-  // Controlled collapse: testInput changes on every keystroke, so a fixed `collapsed` prop would
-  // snap the panel shut while typing in it. Local state keeps it stable across re-renders.
-  const [open, setOpen] = useState(false);
-  const setTest = (name: string, v: Value | undefined) =>
-    setTestInput((a) => { const next = { ...a }; if (v === undefined) delete next[name]; else next[name] = v; return next; });
-  const autoFill = () => {
-    const sol = enumerate(em, {}, { cap: 1 }).solutions[0];
-    if (sol) setTestInput(sol);
-  };
-  return (
-    <Panel headerText="Test data" collapsed={!open} onToggle={() => setOpen((o) => !o)} headerLevel="H6">
-      <FlexBox direction="Column" style={{ gap: "0.75rem", padding: "0.25rem 0.5rem" }}>
-        <FlexBox style={{ gap: "0.5rem" }}>
-          <Button design="Transparent" icon="value-help" onClick={autoFill}>Auto-fill</Button>
-          <Button design="Transparent" icon="clear-all" onClick={() => setTestInput({})}>Clear</Button>
-        </FlexBox>
-        {params.length === 0 ? (
-          <Text style={{ opacity: 0.6 }}>No input fields yet — add fields to test against.</Text>
-        ) : (
-          <FlexBox style={{ gap: "1rem 1.5rem", flexWrap: "wrap" }}>
-            {params.map((p) => (
-              <FlexBox key={p.name} direction="Column" style={{ gap: "0.25rem", minWidth: 180 }}>
-                <Label>{p.label || p.name}</Label>
-                {p.domain.kind === "static" ? (
-                  <Select
-                    value={p.name in testInput ? String(testInput[p.name]) : ""}
-                    onChange={(e) => setTest(p.name, coerceOpt(e.detail.selectedOption.value))}
-                  >
-                    <Option value="">—</Option>
-                    {p.domain.values.map((v) => (
-                      <Option key={String(v)} value={String(v)}>{String(v)}</Option>
-                    ))}
-                  </Select>
-                ) : (
-                  // ponytail: datasource domains aren't resolved at author time → free text input.
-                  <Input
-                    value={p.name in testInput ? String(testInput[p.name]) : ""}
-                    onInput={(e) => setTest(p.name, e.target.value === "" ? undefined : num(e.target.value))}
-                  />
-                )}
-              </FlexBox>
-            ))}
-          </FlexBox>
-        )}
-      </FlexBox>
-    </Panel>
-  );
-}
-
 // A section/group row: label + chevron + inline edit/add/delete buttons. The row-wide tint lives on each
 // TableCell host (light DOM) — `background` isn't inherited into the shadow DOM, so a TableRow host bg
 // wouldn't show; per-cell host backgrounds do, and tile continuously across the row.
-function HeaderCell({ level, label, visibility, scope, collapsed, onToggle, onEdit, onAdd, addTooltip, onDelete }: {
+function HeaderCell({ level, label, visibility, collapsed, onToggle, onAdd, addTooltip, onDelete }: {
   level: "section" | "group";
   label: string;
   visibility?: string;
-  scope: Scope;
   collapsed: boolean;
   onToggle: () => void;
-  onEdit: () => void;
   onAdd: () => void;
   addTooltip: string;
   onDelete: () => void;
@@ -616,13 +550,9 @@ function HeaderCell({ level, label, visibility, scope, collapsed, onToggle, onEd
       />
       {section ? <Title level="H6">{label}</Title> : <Text>{label}</Text>}
       {visibility ? (
-        <FlexBox alignItems="Center" style={{ gap: "0.35rem", fontWeight: "normal" }}>
-          <Text style={{ opacity: 0.6 }}>· visible if {visibility}</Text>
-          <ResultText expr={visibility} scope={scope} bool />
-        </FlexBox>
+        <Text style={{ opacity: 0.6, fontWeight: "normal" }}>· visible if {visibility}</Text>
       ) : null}
       <span style={{ flex: 1 }} />
-      <Button icon="edit" design="Transparent" onClick={onEdit} tooltip={`Edit ${level}`} />
       <Button icon="add" design="Transparent" onClick={onAdd} tooltip={addTooltip} />
       <Button icon="delete" design="Transparent" onClick={onDelete} tooltip={`Delete ${level}`} />
     </FlexBox>
@@ -630,8 +560,8 @@ function HeaderCell({ level, label, visibility, scope, collapsed, onToggle, onEd
 }
 
 // Shared edit dialog for a section or a group: Description + Visibility.
-function NodeDialog({ title, label, visibility, suggestions, scope, onClose, onLabel, onVisibility }: {
-  title: string; label: string; visibility?: string; suggestions: Suggest[]; scope: Scope; onClose: () => void;
+function NodeDialog({ title, label, visibility, suggestions, onClose, onLabel, onVisibility }: {
+  title: string; label: string; visibility?: string; suggestions: Suggest[]; onClose: () => void;
   onLabel: (v: string) => void; onVisibility: (v: string | undefined) => void;
 }) {
   return (
@@ -648,8 +578,6 @@ function NodeDialog({ title, label, visibility, suggestions, scope, onClose, onL
         <Label>Visibility formula (optional)</Label>
         <ExprInput
           suggestions={suggestions}
-          scope={scope}
-          bool
           placeholder='e.g. product == "plaque"'
           value={visibility ?? ""}
           onChange={(v) => onVisibility(v || undefined)}
@@ -660,12 +588,11 @@ function NodeDialog({ title, label, visibility, suggestions, scope, onClose, onL
 }
 
 function ItemDialog({
-  item, tables, suggestions, scope, onClose, onChange,
+  item, tables, suggestions, onClose, onChange,
 }: {
   item: FormItem;
   tables: { id: string; name: string }[];
   suggestions: Suggest[];
-  scope: Scope;
   onClose: () => void;
   onChange: (fn: (it: FormItem) => FormItem) => void;
 }) {
@@ -692,8 +619,6 @@ function ItemDialog({
             <Label>Visibility formula (optional)</Label>
             <ExprInput
               suggestions={suggestions}
-              scope={scope}
-              bool
               placeholder='e.g. quality == "high"'
               value={item.visibility ?? ""}
               onChange={(v) => onChange((it) => ({ ...it, visibility: v || undefined }))}
@@ -770,7 +695,6 @@ function ItemDialog({
             {item.input.value.kind === "formula" ? (
               <ExprInput
                 suggestions={suggestions}
-                scope={scope}
                 placeholder='e.g. printing == "digital" ? "1000x500" : "500x500"'
                 value={item.input.value.expr}
                 onChange={(v) => setInput({ value: { kind: "formula", expr: v } })}
@@ -790,7 +714,6 @@ function ItemDialog({
             <Label>Price formula (optional; summed into the total)</Label>
             <ExprInput
               suggestions={suggestions}
-              scope={scope}
               style={{ width: "100%" }}
               placeholder="e.g. 200 + sheetsNeeded * (10 + thickness) + qty * 0.5"
               value={item.price ?? ""}
@@ -804,10 +727,9 @@ function ItemDialog({
 }
 
 // Edit dialog for a predefined (reusable) formula — modal, like every other element.
-function FormulaDialog({ formula, suggestions, scope, onClose, onChange, onDelete }: {
+function FormulaDialog({ formula, suggestions, onClose, onChange, onDelete }: {
   formula: PredefinedFormula;
   suggestions: Suggest[];
-  scope: Scope;
   onClose: () => void;
   onChange: (fn: (f: PredefinedFormula) => PredefinedFormula) => void;
   onDelete: () => void;
@@ -831,7 +753,6 @@ function FormulaDialog({ formula, suggestions, scope, onClose, onChange, onDelet
         <Label>Expression</Label>
         <ExprInput
           suggestions={suggestions.filter((s) => s.name !== formula.name)}
-          scope={scope}
           placeholder="e.g. ceil(qty / perSheet)"
           value={formula.expr}
           onChange={(v) => onChange((f) => ({ ...f, expr: v }))}
@@ -841,8 +762,8 @@ function FormulaDialog({ formula, suggestions, scope, onClose, onChange, onDelet
   );
 }
 
-function RulesPanel({ model, setModel, suggestions, scope }: {
-  model: Model; setModel: React.Dispatch<React.SetStateAction<Model>>; suggestions: Suggest[]; scope: Scope;
+function RulesPanel({ model, setModel, suggestions }: {
+  model: Model; setModel: React.Dispatch<React.SetStateAction<Model>>; suggestions: Suggest[];
 }) {
   const finite = useMemo(
     () => new Set(flatten(model).parameters.filter((p) => p.domain.kind === "static" || p.domain.kind === "datasource").map((p) => p.name)),
@@ -864,8 +785,6 @@ function RulesPanel({ model, setModel, suggestions, scope }: {
             <ExprInput
               style={{ flex: 1 }}
               suggestions={suggestions}
-              scope={scope}
-              bool
               placeholder='e.g. quality != "high" or machining != "punching"'
               value={r.expr}
               onChange={(v) => setRule(i, v)}

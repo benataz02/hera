@@ -20,12 +20,11 @@ function itemDomain(it: FormItem): ParamDomain {
   // ponytail: multi-select rides as a free (array) value, not enumerated/propagated. Rules can't
   //           sensibly constrain a set; promote to per-option booleans if that ever changes.
   if (t === "multicombo") return { kind: "input" };
-  if (t === "input") {
-    return ds.kind === "normal" && ds.values?.length ? { kind: "static", values: ds.values } : { kind: "input" };
-  }
-  // radio
-  if (ds.kind === "normal") return ds.values?.length ? { kind: "static", values: ds.values } : { kind: "input" };
-  return { kind: "datasource", source: ds }; // table/query -> finite once resolved at runtime
+  // The data source — not the UI element — drives the domain (so the default inputType "input" with a
+  // Table/Query source still resolves its options, e.g. for value help). A Table/Query is finite once
+  // resolved at runtime; a normal list with values is static; anything else is a free input.
+  if (ds.kind === "table" || ds.kind === "query") return { kind: "datasource", source: ds };
+  return ds.kind === "normal" && ds.values?.length ? { kind: "static", values: ds.values } : { kind: "input" };
 }
 
 // Identifiers referenced in an expression (used to wire formula -> formula dependencies).

@@ -5,7 +5,7 @@ import { auth } from "../auth.ts";
 import { hashToken } from "../crypto.ts";
 import { tenantSlugFromHost } from "../tenant.ts";
 
-const baseDomain = process.env.APP_BASE_DOMAIN ?? "localhost";
+const baseDomain = process.env.APP_BASE_DOMAIN ?? "lvh.me";
 
 // Initial context provided by the Hono adapter on every request.
 export interface InitialContext {

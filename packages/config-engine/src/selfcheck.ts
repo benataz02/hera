@@ -3,7 +3,7 @@
 // real builder tree (groups -> items) and run through flatten() + the engine. Run:
 //   bun run --filter @hera/config-engine selfcheck   (or: bun packages/config-engine/src/selfcheck.ts)
 import assert from "node:assert/strict";
-import type { Assignment, Model } from "./types.ts";
+import type { Assignment, Model, InputType, DataSource } from "./types.ts";
 import { flatten, orderFormulas } from "./flatten.ts";
 import { initialDomains, propagate, validate } from "./propagate.ts";
 import { enumerate } from "./enumerate.ts";
@@ -146,7 +146,32 @@ export function runFormulaSelfCheck(): void {
   console.log("config-engine self-check: OK (formula library — ordering, cross-reference, cycle/collision/identifier lint)");
 }
 
+// The data source — not the UI element — drives a parameter's domain. A Table/Query source resolves
+// to a finite (datasource) domain whatever the inputType is, so the default inputType "input" with a
+// Table source still loads its options (the value-help case). checkbox/multicombo are the exceptions.
+export function runDataSourceSelfCheck(): void {
+  const dom = (inputType: InputType, dataSource: DataSource) =>
+    flatten({
+      name: "T", family: "", rules: [],
+      sections: [{ id: "s", label: "S", groups: [{ id: "g", label: "G", items: [
+        { id: "i", name: "p", label: "P", input: { mandatory: false, dataSource, inputType, value: { kind: "manual" } } },
+      ] }] }],
+    }).parameters[0]!.domain;
+
+  const table: DataSource = { kind: "table", tableId: "t1" };
+  const query: DataSource = { kind: "query", source: "b1", path: "/Items", valueField: "ItemCode" };
+  assert.equal(dom("input", table).kind, "datasource", "input + Table -> datasource (was 'input': the load bug)");
+  assert.equal(dom("input", query).kind, "datasource", "input + Query -> datasource");
+  assert.equal(dom("radio", table).kind, "datasource", "radio + Table -> datasource (regression)");
+  assert.equal(dom("input", { kind: "normal" }).kind, "input", "input + normal(no values) -> free input");
+  assert.equal(dom("input", { kind: "normal", values: [1, 2] }).kind, "static", "input + normal(values) -> static");
+  assert.equal(dom("checkbox", table).kind, "static", "checkbox stays boolean even with a source");
+  assert.equal(dom("multicombo", table).kind, "input", "multicombo stays a free (array) value");
+  console.log("config-engine self-check: OK (data source drives the domain)");
+}
+
 if (import.meta.main) {
   runEngineSelfCheck();
   runFormulaSelfCheck();
+  runDataSourceSelfCheck();
 }

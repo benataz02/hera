@@ -1,4 +1,4 @@
-CREATE TYPE "public"."outbox_status" AS ENUM('pending', 'in_flight', 'synced', 'failed');--> statement-breakpoint
+CREATE TYPE "public"."agent_request_status" AS ENUM('pending', 'in_flight', 'done', 'failed');--> statement-breakpoint
 CREATE TYPE "public"."quote_status" AS ENUM('draft', 'syncing', 'synced', 'failed');--> statement-breakpoint
 CREATE TABLE "account" (
 	"id" text PRIMARY KEY NOT NULL,
@@ -83,19 +83,21 @@ CREATE TABLE "tenant_integration" (
 	"agent_token_hash" text NOT NULL,
 	"b1_base_url" text,
 	"company_db" text,
+	"enabled_entities" jsonb DEFAULT '[]'::jsonb NOT NULL,
 	"last_seen_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "outbox" (
+CREATE TABLE "agent_request" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"tenant_id" text NOT NULL,
-	"type" text NOT NULL,
+	"kind" text NOT NULL,
 	"payload" jsonb NOT NULL,
-	"dedup_key" text NOT NULL,
-	"status" "outbox_status" DEFAULT 'pending' NOT NULL,
+	"dedup_key" text,
+	"status" "agent_request_status" DEFAULT 'pending' NOT NULL,
 	"attempts" integer DEFAULT 0 NOT NULL,
 	"lease_until" timestamp with time zone,
+	"result" jsonb,
 	"doc_entry" text,
 	"last_error" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -108,6 +110,26 @@ CREATE TABLE "quote" (
 	"status" "quote_status" DEFAULT 'draft' NOT NULL,
 	"payload" jsonb NOT NULL,
 	"doc_entry" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "config_model" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"tenant_id" text NOT NULL,
+	"name" text NOT NULL,
+	"family" text DEFAULT '' NOT NULL,
+	"definition" jsonb NOT NULL,
+	"published" boolean DEFAULT false NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "config_table" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"tenant_id" text NOT NULL,
+	"name" text NOT NULL,
+	"rows" jsonb DEFAULT '[]'::jsonb NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -126,6 +148,9 @@ CREATE INDEX "member_userId_idx" ON "member" USING btree ("user_id");--> stateme
 CREATE UNIQUE INDEX "organization_slug_uidx" ON "organization" USING btree ("slug");--> statement-breakpoint
 CREATE INDEX "session_userId_idx" ON "session" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "verification_identifier_idx" ON "verification" USING btree ("identifier");--> statement-breakpoint
-CREATE UNIQUE INDEX "outbox_tenant_dedup_uq" ON "outbox" USING btree ("tenant_id","dedup_key");--> statement-breakpoint
-CREATE INDEX "outbox_claim_idx" ON "outbox" USING btree ("tenant_id","status","lease_until");--> statement-breakpoint
-CREATE INDEX "quote_tenant_idx" ON "quote" USING btree ("tenant_id");
+CREATE UNIQUE INDEX "agent_request_tenant_dedup_uq" ON "agent_request" USING btree ("tenant_id","dedup_key");--> statement-breakpoint
+CREATE INDEX "agent_request_claim_idx" ON "agent_request" USING btree ("tenant_id","status","lease_until");--> statement-breakpoint
+CREATE INDEX "quote_tenant_idx" ON "quote" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "config_model_tenant_idx" ON "config_model" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "config_table_tenant_idx" ON "config_table" USING btree ("tenant_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "config_table_tenant_name_uq" ON "config_table" USING btree ("tenant_id","name");

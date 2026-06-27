@@ -10,11 +10,11 @@ import {
   UserMenuAccount,
   UserMenuItem,
 } from "@ui5/webcomponents-react";
-import type { SideNavigationPropTypes } from "@ui5/webcomponents-react";
+import type { SideNavigationPropTypes, NavigationLayoutDomRef, NavigationLayoutPropTypes } from "@ui5/webcomponents-react";
 import { authClient } from "../auth-client.ts";
 import { orpc } from "../orpc.ts";
 import { apexUrl, currentSlug, hardRedirect, tenantUrl } from "../lib/tenant.ts";
-import { useState, useEffect } from "react";
+import { useRef, useState, useEffect } from "react";
 import { getTheme, setTheme } from '@ui5/webcomponents-base/dist/config/Theme.js';
 
 // The app shell for every signed-in page. The tenant is the subdomain; on the apex this
@@ -53,6 +53,11 @@ function AuthedLayout() {
   const { data: session } = useQuery<Awaited<ReturnType<typeof authClient.getSession>>["data"]>({ queryKey: ["session"] });
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const navLayoutRef = useRef<NavigationLayoutDomRef>(null);
+  const [navMode, setNavMode] = useState<NavigationLayoutPropTypes["mode"]>("Auto");
+  // Read the real collapsed state off the ref so the first click is correct on any screen size,
+  // keeping "Auto" responsiveness until the user takes manual control.
+  const toggleNav = () => setNavMode(navLayoutRef.current?.isSideCollapsed() ? "Expanded" : "Collapsed");
   const [density, setDensity] = useState<Density>(() => (localStorage.getItem("density") as Density) ?? getDensity());
   const [theme, setThemeState] = useState<string>(() => localStorage.getItem("theme") ?? getTheme());
 
@@ -119,7 +124,8 @@ function AuthedLayout() {
 
   return (
     <NavigationLayout
-      mode="Auto"
+      ref={navLayoutRef}
+      mode={navMode}
       header={
         <>
           <ShellBar
@@ -133,6 +139,7 @@ function AuthedLayout() {
                 <Button
                   icon="menu"
                   tooltip='Menu'
+                  onClick={toggleNav}
                 />
               </>
             }
