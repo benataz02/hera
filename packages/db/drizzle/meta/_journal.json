@@ -8,6 +8,20 @@
       "when": 1782550127366,
       "tag": "0000_cool_the_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1782592595605,
+      "tag": "0001_add_config_masterdata",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782592609105,
+      "tag": "0002_drop_config_table",
+      "breakpoints": true
     }
   ]
 }

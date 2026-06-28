@@ -6,7 +6,7 @@ import {
   Table, TableHeaderRow, TableHeaderCell, TableRow, TableCell,
   Icon, SelectDialog, ListItemStandard, SuggestionItem,
 } from "@ui5/webcomponents-react";
-import type { Model, EngineModel, Assignment, Value, DataSource, ParamDomain, FormItem as ModelItem } from "@hera/config-engine";
+import type { Model, EngineModel, Assignment, Value, ParamDomain, FormItem as ModelItem } from "@hera/config-engine";
 import { flatten, initialDomains, propagate, validate, enumerate, evaluate, priceBatches, buildScope, evalExpr, truthy } from "@hera/config-engine";
 import { client, orpc } from "../orpc.ts";
 
@@ -19,19 +19,8 @@ const parseQtys = (s: string): number[] => s.split(",").map((x) => Number(x.trim
 // Per-data-source fetch status, surfaced to its field (loading state / error valueState + message + retry).
 type DsState = { loading: boolean; error: boolean; message?: string; retry: () => void };
 
-// Resolve one Table/Query data source to its option values. Throws on failure (so the query goes to
-// `error` and can be retried) — no swallowing, unlike the old single all-or-nothing resolve.
-async function resolveSource(src: DataSource): Promise<Value[]> {
-  if (src.kind === "table") {
-    const t = await client.tables.get({ id: src.tableId });
-    return (t.rows as { value: string }[]).map((r) => r.value);
-  }
-  if (src.kind === "query") {
-    const res = await client.configure.query({ source: src.source, path: src.path });
-    return res.rows.map((r) => r[src.valueField] as Value).filter((v) => v != null);
-  }
-  return [];
-}
+// A resolved master-data source: its defined columns + rows (the key is columns[0]).
+type MdData = { columns: string[]; rows: Record<string, Value>[] };
 
 export function Configurator() {
   const models = useQuery(orpc.models.list.queryOptions());
@@ -75,27 +64,35 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
   const em = useMemo<EngineModel>(() => flatten(model), [model]);
   const canCreate = !!allowCreate && !!modelId;
 
-  // One query per Table/Query data source: per-field loading, error, and retry, with failures
-  // surfaced (not swallowed). ponytail: filter-by-current-picks not applied yet. ponytail: the
-  // queryKey includes the source, so a builder preview refetches as the OData path is typed —
-  // debounce that field if agent calls get noisy. `active` gates the fetch so a hidden preview
-  // pane never calls the agent.
+  // One query per master-data data source: per-field loading, error, and retry, with failures surfaced
+  // (not swallowed). Cached with staleTime: Infinity — a master data (incl. a B1 query) is fetched once
+  // per session and reused; the retry icon is the only manual refresh. `active` gates the fetch so a
+  // hidden preview pane never calls the agent. ponytail: filter-by-current-picks not applied yet.
   const dsParams = em.parameters.filter((p) => p.domain.kind === "datasource");
   const dsQueries = useQueries({
     queries: dsParams.map((p) => {
       const source = (p.domain as Extract<ParamDomain, { kind: "datasource" }>).source;
+      const mdId = source.kind === "masterdata" ? source.masterdataId : "";
       return {
-        queryKey: ["cfg-ds", modelId ?? "preview", p.name, source] as const,
-        enabled: active,
-        queryFn: () => resolveSource(source),
+        queryKey: ["cfg-md", mdId] as const,
+        enabled: active && !!mdId,
+        staleTime: Infinity,
+        gcTime: Infinity,
+        queryFn: (): Promise<MdData> => client.masterdata.resolve({ id: mdId }),
       };
     }),
   });
+  // resolved[name] = the key-column values (engine contract: Value[]); mdByParam[name] = full rows for display.
   const resolved: Record<string, Value[]> = {};
+  const mdByParam: Record<string, MdData> = {};
   const dsState: Record<string, DsState> = {};
   dsParams.forEach((p, i) => {
     const q = dsQueries[i]!;
-    if (q.data) resolved[p.name] = q.data;
+    if (q.data) {
+      mdByParam[p.name] = q.data;
+      const key = q.data.columns[0];
+      resolved[p.name] = key ? q.data.rows.map((r) => r[key]!).filter((v) => v != null) : [];
+    }
     dsState[p.name] = { loading: q.isFetching, error: q.isError, message: (q.error as Error | null)?.message, retry: () => void q.refetch() };
   });
 
@@ -151,7 +148,7 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
                   key={it.id}
                   labelContent={<Label required={it.input.value.kind === "manual" && it.input.mandatory}>{it.label}</Label>}
                 >
-                  <Field item={it} domain={domains[it.name]} value={assignment[it.name]} derived={scope[it.name]} onChange={(v) => set(it.name, v)} dsState={dsState[it.name]} />
+                  <Field item={it} domain={domains[it.name]} value={assignment[it.name]} derived={scope[it.name]} onChange={(v) => set(it.name, v)} dsState={dsState[it.name]} md={mdByParam[it.name]} />
                 </FormItem>
               ))}
             </FormGroup>
@@ -214,19 +211,19 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
 }
 
 // Renders a single field's control (the label is supplied by the enclosing FormItem).
-function Field({ item, domain, value, derived, onChange, dsState }: {
+function Field({ item, domain, value, derived, onChange, dsState, md }: {
   item: ModelItem; domain?: Value[]; value: Value | undefined; derived: unknown;
-  onChange: (v: Value | undefined) => void; dsState?: DsState;
+  onChange: (v: Value | undefined) => void; dsState?: DsState; md?: MdData;
 }) {
   if (item.input.value.kind === "formula") return <Text>{derived == null ? "—" : String(derived)}</Text>;
 
   const t = item.input.inputType;
   if (t === "checkbox") return <CheckBox checked={value === true} onChange={(e) => onChange(e.target.checked)} />;
-  // Table/Query data source -> value help (F4): pick from a searchable dialog, not a long dropdown.
+  // Master-data source -> value help (F4): pick from a searchable dialog showing every column.
   // (multicombo rides as a free value — no single-pick value help.)
   const ds = item.input.dataSource;
-  if ((ds.kind === "table" || ds.kind === "query") && t !== "multicombo") {
-    return <ValueHelp label={item.label} domain={domain ?? []} value={value} onChange={onChange} state={dsState} />;
+  if (ds.kind === "masterdata" && t !== "multicombo") {
+    return <ValueHelp label={item.label} columns={md?.columns ?? []} rows={md?.rows ?? []} domain={domain ?? []} value={value} onChange={onChange} state={dsState} />;
   }
   if (domain && domain.length) {
     return (
@@ -241,15 +238,16 @@ function Field({ item, domain, value, derived, onChange, dsState }: {
   return <Input value={value === undefined ? "" : String(value)} onInput={(e) => onChange(e.target.value === "" ? undefined : num(e.target.value))} />;
 }
 
-// SAP value help (F4): a typable Input that searches its options inline as you type (SuggestionItem)
-// AND a value-help icon that opens the same options in a SelectDialog for full browse. Used for
-// Table/Query data sources. `state` surfaces the per-source fetch: a BusyIndicator overlay while
-// loading; on failure a Negative valueState carrying the query's own error message + a retry icon.
-// The Input carries no width override, so it sizes like the plain inputs; the wrapper is display:block
-// (UI5 requires it when wrapping) and is layout-transparent.
-// ponytail: shows the raw value as label; wire labelField -> {text/additionalText} here when display-vs-value lands.
-function ValueHelp({ label, domain, value, onChange, state }: {
-  label: string; domain: Value[]; value: Value | undefined; onChange: (v: Value | undefined) => void; state?: DsState;
+// SAP value help (F4) for a master-data source: a typable Input that searches the key column inline
+// (the SuggestionItem shows the first two columns — text + additionalText) AND a value-help icon that
+// opens a SelectDialog of ListItemStandard rows (text = secondary column, description = the key the row
+// commits). Driven by the resolved rows; `domain` is the
+// currently-valid set of keys (propagation narrows it). `state` surfaces the per-source fetch: a
+// BusyIndicator overlay while loading; on failure a Negative valueState carrying the error + retry.
+// ponytail: inline typeahead filters on the key column only; widen to all columns if search needs it.
+function ValueHelp({ label, columns, rows, domain, value, onChange, state }: {
+  label: string; columns: string[]; rows: Record<string, Value>[];
+  domain: Value[]; value: Value | undefined; onChange: (v: Value | undefined) => void; state?: DsState;
 }) {
   const [open, setOpen] = useState(false);
   const committed = value === undefined ? "" : String(value);
@@ -257,7 +255,14 @@ function ValueHelp({ label, domain, value, onChange, state }: {
   // Re-sync the typed text when the committed value changes from outside (dialog pick, clear, propagation).
   useEffect(() => { setText(committed); }, [committed]);
 
-  const inDomain = (s: string) => domain.some((v) => String(v) === s);
+  const key = columns[0];
+  const second = columns[1];
+  // Only rows whose key is still a valid pick (propagation may have narrowed the domain).
+  const allowed = new Set(domain.map(String));
+  const optionRows = key ? rows.filter((r) => allowed.has(String(r[key]))) : [];
+  const keyOf = (r: Record<string, Value>) => String(r[key!] ?? "");
+
+  const inDomain = (s: string) => allowed.has(s);
   // Live-commit only real option values — a picked suggestion or an exact typed match; plain searching does not.
   const live = (s: string) => { setText(s); if (s === "") onChange(undefined); else if (inDomain(s)) onChange(coerce(s)); };
 
@@ -274,26 +279,33 @@ function ValueHelp({ label, domain, value, onChange, state }: {
           showClearIcon
           filter="Contains"
           value={text}
-          placeholder={state?.error ? "Couldn’t load — retry" : "Type to search…"}
+          placeholder={state?.error ? "Couldn’t load — retry" : state?.loading ? "" : "Type to search…"}
           valueState={state?.error ? "Negative" : "None"}
           valueStateMessage={state?.error ? <div>{state.message ?? "Couldn’t load options."}</div> : undefined}
           icon={icon}
           onInput={(e) => live(e.target.value)}
           onChange={(e) => { const s = e.target.value; if (s !== "" && !inDomain(s)) setText(committed); }} // reject dangling free text on blur
         >
-          {domain.map((v) => <SuggestionItem key={String(v)} text={String(v)} />)}
+          {optionRows.map((r) => (
+            <SuggestionItem key={keyOf(r)} text={keyOf(r)} additionalText={second ? String(r[second] ?? "") : undefined} />
+          ))}
         </Input>
       </BusyIndicator>
       <SelectDialog
         open={open}
         headerText={label}
         showClearButton
-        onConfirm={(e) => { onChange(coerce((e.detail.selectedItems[0] as unknown as HTMLElement | undefined)?.dataset.value)); setOpen(false); }}
+        onConfirm={(e) => { onChange(coerce((e.detail.selectedItems[0] as { description?: string } | undefined)?.description)); setOpen(false); }}
         onClear={() => { onChange(undefined); setOpen(false); }}
         onCancel={() => setOpen(false)}
       >
-        {domain.map((v) => (
-          <ListItemStandard key={String(v)} data-value={String(v)} text={String(v)} selected={String(v) === committed} />
+        {optionRows.map((r) => (
+          <ListItemStandard
+            key={keyOf(r)}
+            text={second ? String(r[second] ?? "") : keyOf(r)}
+            additionalText={keyOf(r)}
+            selected={keyOf(r) === committed}
+          />
         ))}
       </SelectDialog>
     </>

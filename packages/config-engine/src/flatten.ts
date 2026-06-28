@@ -21,9 +21,9 @@ function itemDomain(it: FormItem): ParamDomain {
   //           sensibly constrain a set; promote to per-option booleans if that ever changes.
   if (t === "multicombo") return { kind: "input" };
   // The data source — not the UI element — drives the domain (so the default inputType "input" with a
-  // Table/Query source still resolves its options, e.g. for value help). A Table/Query is finite once
+  // master-data source still resolves its options, e.g. for value help). Master data is finite once
   // resolved at runtime; a normal list with values is static; anything else is a free input.
-  if (ds.kind === "table" || ds.kind === "query") return { kind: "datasource", source: ds };
+  if (ds.kind === "masterdata") return { kind: "datasource", source: ds };
   return ds.kind === "normal" && ds.values?.length ? { kind: "static", values: ds.values } : { kind: "input" };
 }
 

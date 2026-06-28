@@ -9,8 +9,7 @@ export type Domain = Value[];
 // Where an item's candidate values come from (the "Data source" dropdown).
 export type DataSource =
   | { kind: "normal"; values?: Value[] } // free input, or a static option list
-  | { kind: "table"; tableId: string; valueField?: string; labelField?: string; filter?: string } // user-defined DB table (value/name)
-  | { kind: "query"; source: string; path: string; valueField: string; labelField?: string; filter?: string }; // B1/Beas REST GET via the agent
+  | { kind: "masterdata"; masterdataId: string }; // a Configuration Master Data entity (manual rows or a B1 query)
 
 // The "UI Element" dropdown — how the item renders at runtime.
 export type InputType = "input" | "radio" | "checkbox" | "multicombo";
@@ -77,7 +76,7 @@ export interface Model {
 
 export type ParamDomain =
   | { kind: "static"; values: Value[] } // finite, known at author time
-  | { kind: "datasource"; source: DataSource } // finite once resolved at runtime (table/query)
+  | { kind: "datasource"; source: DataSource } // finite once resolved at runtime (master data)
   | { kind: "input" }; // free value — not enumerated/propagated
 
 export interface Parameter {

@@ -79,7 +79,7 @@ function AuthedLayout() {
     else if (to === "/settings") navigate({ to: "/settings" });
     else if (to === "/configure") navigate({ to: "/configure" });
     else if (to === "/models") navigate({ to: "/models" });
-    else if (to === "/tables") navigate({ to: "/tables" });
+    else if (to === "/masterdata") navigate({ to: "/masterdata" });
     else navigate({ to: "/" });
   };
 
@@ -216,7 +216,7 @@ function AuthedLayout() {
             <SideNavigationItem text="Models" icon="tree" data-to="/models" selected={pathname.startsWith("/models")} />
           ) : null}
           {isAdmin ? (
-            <SideNavigationItem text="Tables" icon="table-view" data-to="/tables" selected={pathname.startsWith("/tables")} />
+            <SideNavigationItem text="Master data" icon="database" data-to="/masterdata" selected={pathname.startsWith("/masterdata")} />
           ) : null}
           {isAdmin ? (
             <SideNavigationItem

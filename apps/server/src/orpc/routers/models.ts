@@ -11,8 +11,7 @@ export const ValueZ = z.union([z.string(), z.number(), z.boolean()]);
 
 const DataSourceZ = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("normal"), values: z.array(ValueZ).optional() }),
-  z.object({ kind: z.literal("table"), tableId: z.string(), valueField: z.string().optional(), labelField: z.string().optional(), filter: z.string().optional() }),
-  z.object({ kind: z.literal("query"), source: z.string(), path: z.string(), valueField: z.string(), labelField: z.string().optional(), filter: z.string().optional() }),
+  z.object({ kind: z.literal("masterdata"), masterdataId: z.string() }),
 ]);
 
 const ItemValueZ = z.discriminatedUnion("kind", [

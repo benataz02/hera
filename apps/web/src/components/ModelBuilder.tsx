@@ -10,7 +10,7 @@ import {
 import type { Model, FormSection, FormGroup, FormItem, DataSource, InputType, Value, PredefinedFormula, EngineModel } from "@hera/config-engine";
 import { flatten, enumerate, lintModel } from "@hera/config-engine";
 import { orpc } from "../orpc.ts";
-import { uid, blankModel, blankSection, blankGroup, blankItem, blankFormula, allItems, trailingToken, applyExprPick } from "../lib/model.ts";
+import { uid, blankModel, blankSection, blankGroup, blankItem, blankFormula, allItems, trailingToken, applyExprPick, keyOf, parseKey, locateIssue, type Key, type Issue } from "../lib/model.ts";
 import { ModelRuntime } from "./Configurator.tsx";
 import "./ModelBuilder.css";
 
@@ -20,17 +20,6 @@ import "./ModelBuilder.css";
 type Suggest = { name: string; detail: string };
 
 type Editing = { sid: string; gid?: string; iid?: string } | null;
-
-// A row's identity, encoded into its data-key so one set of Table handlers can act on any row.
-type Key = { kind: "s" | "g" | "i"; sid: string; gid?: string; iid?: string };
-const keyOf = (k: Key): string => [k.kind, k.sid, k.gid, k.iid].filter(Boolean).join(":");
-const parseKey = (s?: string | null): Key | null => {
-  const [kind, sid, gid, iid] = (s ?? "").split(":");
-  if (kind === "s" && sid) return { kind, sid };
-  if (kind === "g" && sid && gid) return { kind, sid, gid };
-  if (kind === "i" && sid && gid && iid) return { kind, sid, gid, iid };
-  return null;
-};
 
 // Structural shapes for the UI5 Table drag/click events — avoids importing the wrapper's event types.
 type RowEl = HTMLElement;
@@ -50,7 +39,7 @@ export function ModelBuilder({ id }: { id: string }) {
   const isNew = id === "new";
 
   const get = useQuery(orpc.models.get.queryOptions({ input: isNew ? skipToken : { id } }));
-  const tables = useQuery(orpc.tables.list.queryOptions());
+  const masterdata = useQuery(orpc.masterdata.list.queryOptions());
 
   const [model, setModel] = useState<Model>(blankModel());
   const [editing, setEditing] = useState<Editing>(null);
@@ -112,6 +101,38 @@ export function ModelBuilder({ id }: { id: string }) {
       onSuccess: () => qc.invalidateQueries({ queryKey: orpc.models.list.queryOptions().queryKey }),
     }),
   );
+
+  // Map a failed save's input-validation issues onto rows (keyed like keyOf), so each bad section/group/
+  // item shows its own error. Persists until the next Save attempt — so the user can fix every flagged
+  // row before re-validating. ponytail: indices resolve against the *current* model, so a reorder/delete
+  // between a failed save and the fix can mislabel a row; clears on the next save.
+  const rowErrors = useMemo(() => {
+    const map = new Map<string, string[]>();
+    const issues = (save.error as { data?: { issues?: Issue[] } } | null)?.data?.issues;
+    for (const issue of issues ?? []) {
+      const loc = locateIssue(issue.path, model);
+      if (!loc) continue;
+      const msg = loc.field ? `${loc.field}: ${issue.message}` : issue.message;
+      const arr = map.get(loc.key);
+      arr ? arr.push(msg) : map.set(loc.key, [msg]);
+    }
+    return map;
+  }, [save.error, model]);
+
+  // A flagged row may sit under a collapsed section/group — reveal its ancestors when a new error lands.
+  // Keyed on save.error only (not rowErrors), so a manual collapse after the error isn't fought on edit.
+  useEffect(() => {
+    if (!rowErrors.size) return;
+    setCollapsed((c) => {
+      const n = new Set(c);
+      for (const key of rowErrors.keys()) {
+        const [kind, sid, gid] = key.split(":");
+        if (kind === "g" || kind === "i") n.delete(keyOf({ kind: "s", sid: sid! }));
+        if (kind === "i") n.delete(keyOf({ kind: "g", sid: sid!, gid: gid! }));
+      }
+      return n;
+    });
+  }, [save.error]);
 
   // --- immutable tree edits (section -> group -> item) ---
   const patchSection = (sid: string, fn: (s: FormSection) => FormSection) =>
@@ -284,7 +305,6 @@ export function ModelBuilder({ id }: { id: string }) {
           actionsBar={
             <Toolbar design="Transparent">
               <ToolbarButton icon="add" text="Add section" onClick={addSection} />
-              <ToolbarButton icon="simulate" text="Add formula" onClick={() => addFormula()} />
               <ToolbarButton icon="show" text={showPreview ? "Hide preview" : "Preview"} onClick={() => { setAnimating(true); setShowPreview((v) => !v); }} />
               <ToolbarButton
                 design="Emphasized"
@@ -313,7 +333,11 @@ export function ModelBuilder({ id }: { id: string }) {
           <Input value={model.family} onInput={(e) => setModel((m) => ({ ...m, family: e.target.value }))} />
         </FlexBox>
 
-        {save.error ? <MessageStrip design="Negative" hideCloseButton>{save.error.message}</MessageStrip> : null}
+        {save.error ? (
+          <MessageStrip design="Negative" hideCloseButton>
+            {rowErrors.size ? `${save.error.message} — ${rowErrors.size} row(s) flagged below.` : save.error.message}
+          </MessageStrip>
+        ) : null}
         {errors.length ? (
           <MessageStrip design="Negative" hideCloseButton>{errors.join(" · ")}</MessageStrip>
         ) : (
@@ -351,6 +375,7 @@ export function ModelBuilder({ id }: { id: string }) {
                     level="section"
                     label={s.label}
                     visibility={s.visibility}
+                    error={rowErrors.get(sk)?.join("\n")}
                     collapsed={collapsed.has(sk)}
                     onToggle={() => toggle(sk)}
                     onAdd={() => addGroup(s.id)}
@@ -368,6 +393,7 @@ export function ModelBuilder({ id }: { id: string }) {
                         level="group"
                         label={g.label}
                         visibility={g.visibility}
+                        error={rowErrors.get(gk)?.join("\n")}
                         collapsed={collapsed.has(gk)}
                         onToggle={() => toggle(gk)}
                         onAdd={() => addItem(s.id, g.id)}
@@ -378,10 +404,14 @@ export function ModelBuilder({ id }: { id: string }) {
                   </TableRow>,
                   ...(collapsed.has(gk) ? [] : g.items.flatMap((it) => {
                     const ik = keyOf({ kind: "i", sid: s.id, gid: g.id, iid: it.id });
+                    const itErr = rowErrors.get(ik)?.join("\n");
                     return [
                       <TableRow key={it.id} interactive movable rowKey={ik} data-key={ik}>
                         <TableCell>
-                          <Text maxLines={1} style={{ paddingInlineStart: "3rem" }}>{it.label}{it.input.mandatory ? " *" : ""}</Text>
+                          <FlexBox alignItems="Center" title={itErr ?? undefined} style={{ gap: "0.375rem", paddingInlineStart: "3rem" }}>
+                            {itErr ? <Icon name="error" style={{ color: "var(--sapNegativeColor)" }} /> : null}
+                            <Text maxLines={1} style={itErr ? { color: "var(--sapNegativeColor)" } : undefined}>{it.label}{it.input.mandatory ? " *" : ""}</Text>
+                          </FlexBox>
                         </TableCell>
                         <TableCell><Text maxLines={1}>{it.name}</Text></TableCell>
                         <TableCell><Text maxLines={1}>{it.input.inputType}</Text></TableCell>
@@ -415,7 +445,7 @@ export function ModelBuilder({ id }: { id: string }) {
       {ei ? (
         <ItemDialog
           item={ei}
-          tables={tables.data ?? []}
+          masterdata={masterdata.data ?? []}
           suggestions={suggestions}
           onClose={() => setEditing(null)}
           onChange={(fn) => patchItem(editing!.sid, editing!.gid!, editing!.iid!, fn)}
@@ -520,10 +550,11 @@ function ExprInput({ value, onChange, suggestions, placeholder, style }: {
 // A section/group row: label + chevron + inline edit/add/delete buttons. The row-wide tint lives on each
 // TableCell host (light DOM) — `background` isn't inherited into the shadow DOM, so a TableRow host bg
 // wouldn't show; per-cell host backgrounds do, and tile continuously across the row.
-function HeaderCell({ level, label, visibility, collapsed, onToggle, onAdd, addTooltip, onDelete }: {
+function HeaderCell({ level, label, visibility, error, collapsed, onToggle, onAdd, addTooltip, onDelete }: {
   level: "section" | "group";
   label: string;
   visibility?: string;
+  error?: string;
   collapsed: boolean;
   onToggle: () => void;
   onAdd: () => void;
@@ -534,12 +565,14 @@ function HeaderCell({ level, label, visibility, collapsed, onToggle, onAdd, addT
   return (
     <FlexBox
       alignItems="Center"
+      title={error ?? undefined}
       style={{
         gap: "0.5rem",
         width: "100%",
         marginInlineStart: section ? 0 : "1.5rem",
         padding: "0.125rem 0.5rem",
         fontWeight: section ? "bold" : 600,
+        color: error ? "var(--sapNegativeColor)" : undefined,
       }}
     >
       <Button
@@ -548,6 +581,7 @@ function HeaderCell({ level, label, visibility, collapsed, onToggle, onAdd, addT
         onClick={onToggle}
         tooltip={collapsed ? "Expand" : "Collapse"}
       />
+      {error ? <Icon name="error" style={{ color: "var(--sapNegativeColor)" }} /> : null}
       {section ? <Title level="H6">{label}</Title> : <Text>{label}</Text>}
       {visibility ? (
         <Text style={{ opacity: 0.6, fontWeight: "normal" }}>· visible if {visibility}</Text>
@@ -588,10 +622,10 @@ function NodeDialog({ title, label, visibility, suggestions, onClose, onLabel, o
 }
 
 function ItemDialog({
-  item, tables, suggestions, onClose, onChange,
+  item, masterdata, suggestions, onClose, onChange,
 }: {
   item: FormItem;
-  tables: { id: string; name: string }[];
+  masterdata: { id: string; name: string; kind: string }[];
   suggestions: Suggest[];
   onClose: () => void;
   onChange: (fn: (it: FormItem) => FormItem) => void;
@@ -646,13 +680,11 @@ function ItemDialog({
               onChange={(e) => {
                 const k = e.detail.selectedOption.value;
                 if (k === "normal") setDs({ kind: "normal" });
-                else if (k === "table") setDs({ kind: "table", tableId: tables[0]?.id ?? "" });
-                else setDs({ kind: "query", source: "b1", path: "", valueField: "" });
+                else setDs({ kind: "masterdata", masterdataId: masterdata[0]?.id ?? "" });
               }}
             >
               <Option value="normal">Normal</Option>
-              <Option value="table">Table</Option>
-              <Option value="query">Query</Option>
+              <Option value="masterdata">Master data</Option>
             </Select>
 
             {ds.kind === "normal" ? (
@@ -660,25 +692,15 @@ function ItemDialog({
                 <Label>Options (comma-separated; leave empty for free input)</Label>
                 <Input value={joinValues(ds.values)} onInput={(e) => setDs({ kind: "normal", values: parseValues(e.target.value) })} />
               </>
-            ) : ds.kind === "table" ? (
-              <>
-                <Label>Table</Label>
-                <Select value={ds.tableId} onChange={(e) => setDs({ kind: "table", tableId: e.detail.selectedOption.value ?? "" })}>
-                  {tables.map((t) => (
-                    <Option key={t.id} value={t.id}>{t.name}</Option>
-                  ))}
-                </Select>
-              </>
             ) : (
               <>
-                <Label>Source</Label>
-                <Input value={ds.source} onInput={(e) => setDs({ ...ds, source: e.target.value })} />
-                <Label>GET path (OData)</Label>
-                <Input placeholder="/Items?$select=ItemCode,ItemName" value={ds.path} onInput={(e) => setDs({ ...ds, path: e.target.value })} />
-                <Label>Value field</Label>
-                <Input value={ds.valueField} onInput={(e) => setDs({ ...ds, valueField: e.target.value })} />
-                <Label>Label field (optional)</Label>
-                <Input value={ds.labelField ?? ""} onInput={(e) => setDs({ ...ds, labelField: e.target.value || undefined })} />
+                <Label>Master data</Label>
+                <Select value={ds.masterdataId} onChange={(e) => setDs({ kind: "masterdata", masterdataId: e.detail.selectedOption.value ?? "" })}>
+                  {masterdata.map((m) => (
+                    <Option key={m.id} value={m.id}>{m.name}</Option>
+                  ))}
+                </Select>
+                <Text style={{ opacity: 0.6 }}>Options come from this master data — its first column is the key value.</Text>
               </>
             )}
 
