@@ -1,0 +1,25 @@
+/* Value-help (F4) dialog. The default Dialog has no fixed width and the ui5-table is display:block, so
+   the table fills to the Dialog's 90% max-width. Sizing the table to its content (max-content) instead
+   lets the Dialog shrink-wrap to the columns. The content part is unpadded so the table sits flush. */
+.vh-dialog::part(content) {
+  padding: 0;
+}
+.vh-search {
+  padding: 0.5rem;
+}
+.vh-table {
+  width: max-content;
+  min-width: 100%; /* fill the Dialog's min-width floor for narrow tables, but no wider than content */
+  max-width: 100%;
+}
+
+/* BusyIndicator wraps the value-help Input while its master-data source loads. The host is
+   inline-block by default and its flex root centers slotted content, so both the host and the inner
+   Input need full width — otherwise FormItem can't stretch the field as it does for an un-wrapped Input. */
+.vh-busy {
+  display: block;
+  width: 100%;
+}
+.vh-busy ui5-input {
+  width: 100%;
+}

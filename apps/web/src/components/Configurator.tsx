@@ -1,10 +1,12 @@
 import { useMemo, useState, useEffect } from "react";
+import { createPortal } from "react-dom";
+import "./Configurator.css";
 import { useQuery, useQueries, useMutation, skipToken } from "@tanstack/react-query";
 import {
   ObjectPage, ObjectPageTitle, ObjectPageSection, Title, Text, Label, Button, Input, Select, Option, CheckBox,
   MessageStrip, BusyIndicator, FlexBox, ObjectStatus, Form, FormGroup, FormItem,
   Table, TableHeaderRow, TableHeaderCell, TableRow, TableCell,
-  Icon, SelectDialog, ListItemStandard, SuggestionItem,
+  Icon, Dialog, SelectDialog, Bar, SuggestionItem,
 } from "@ui5/webcomponents-react";
 import type { Model, EngineModel, Assignment, Value, ParamDomain, FormItem as ModelItem } from "@hera/config-engine";
 import { flatten, initialDomains, propagate, validate, enumerate, evaluate, priceBatches, buildScope, evalExpr, truthy } from "@hera/config-engine";
@@ -13,7 +15,13 @@ import { client, orpc } from "../orpc.ts";
 const STATE: Record<string, "None" | "Information" | "Positive" | "Negative"> = {
   draft: "None", syncing: "Information", synced: "Positive", failed: "Negative",
 };
+// ponytail: free-text inputs (no domain) coerce numeric strings to numbers by design — price formulas
+// need real numbers. Master-data picks do NOT use this; they reverse-lookup via fromDomain (lossless).
 const num = (s: string): Value => (s !== "" && !isNaN(Number(s)) ? Number(s) : s);
+// Map a stringified option back to its original typed domain value — preserves number-vs-string
+// (item codes like "007" stay strings) instead of guessing with Number(). The engine strict-compares.
+const fromDomain = (domain: Value[], s: string | undefined): Value | undefined =>
+  s === undefined || s === "" ? undefined : domain.find((v) => String(v) === s);
 const parseQtys = (s: string): number[] => s.split(",").map((x) => Number(x.trim())).filter((n) => n > 0);
 
 // Per-data-source fetch status, surfaced to its field (loading state / error valueState + message + retry).
@@ -106,7 +114,18 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
 
   const base = initialDomains(em, resolved);
   const pr = propagate(em, base, assignment);
-  const domains = pr.ok ? pr.domains : base;
+  // Options each finite field may be CHANGED to: its domain computed WITHOUT its own current pick (so an
+  // already-chosen field still offers alternatives) but WITH every other field's — cross-field rules
+  // still narrow. propagate() pins an assigned field to a singleton, which would otherwise collapse the
+  // field's own picker/value-help to just the value already chosen.
+  const optionDomains: Record<string, Value[]> = {};
+  for (const p of em.parameters) {
+    if (!(p.name in base)) continue;
+    const others = { ...assignment };
+    delete others[p.name];
+    const r = propagate(em, base, others);
+    optionDomains[p.name] = (r.ok ? r.domains[p.name] : undefined) ?? base[p.name]!;
+  }
   const scope = buildScope(em, assignment);
   const visible = (expr?: string): boolean => {
     if (!expr) return true;
@@ -148,7 +167,7 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
                   key={it.id}
                   labelContent={<Label required={it.input.value.kind === "manual" && it.input.mandatory}>{it.label}</Label>}
                 >
-                  <Field item={it} domain={domains[it.name]} value={assignment[it.name]} derived={scope[it.name]} onChange={(v) => set(it.name, v)} dsState={dsState[it.name]} md={mdByParam[it.name]} />
+                  <Field item={it} domain={optionDomains[it.name]} value={assignment[it.name]} derived={scope[it.name]} onChange={(v) => set(it.name, v)} dsState={dsState[it.name]} md={mdByParam[it.name]} />
                 </FormItem>
               ))}
             </FormGroup>
@@ -227,7 +246,7 @@ function Field({ item, domain, value, derived, onChange, dsState, md }: {
   }
   if (domain && domain.length) {
     return (
-      <Select value={value === undefined ? "" : String(value)} onChange={(e) => onChange(coerce(e.detail.selectedOption.value))}>
+      <Select value={value === undefined ? "" : String(value)} onChange={(e) => onChange(fromDomain(domain, e.detail.selectedOption.value))}>
         <Option value="">—</Option>
         {domain.map((v) => (
           <Option key={String(v)} value={String(v)}>{String(v)}</Option>
@@ -239,81 +258,92 @@ function Field({ item, domain, value, derived, onChange, dsState, md }: {
 }
 
 // SAP value help (F4) for a master-data source: a typable Input that searches the key column inline
-// (the SuggestionItem shows the first two columns — text + additionalText) AND a value-help icon that
-// opens a SelectDialog of ListItemStandard rows (text = secondary column, description = the key the row
-// commits). Driven by the resolved rows; `domain` is the
-// currently-valid set of keys (propagation narrows it). `state` surfaces the per-source fetch: a
-// BusyIndicator overlay while loading; on failure a Negative valueState carrying the error + retry.
-// ponytail: inline typeahead filters on the key column only; widen to all columns if search needs it.
+// (the SuggestionItem shows the key + second column) AND a value-help icon that opens a Dialog with its
+// own search box + a multi-column Table (headers = the source's columns); clicking a row commits its
+// key. Driven by the resolved rows; `domain` is the set of keys this field may take given the OTHER
+// fields (its own pick is excluded upstream, so a chosen field still lists alternatives). `state`
+// surfaces the per-source fetch: a loading placeholder; on failure a Negative valueState + retry.
+// The Dialog is portalled to <body> so it isn't a second field in the FormItem (which would stop the
+// FormItem stretching the Input to full width).
+// ponytail: inline typeahead filters on the key column only; the dialog search filters every column.
 function ValueHelp({ label, columns, rows, domain, value, onChange, state }: {
   label: string; columns: string[]; rows: Record<string, Value>[];
   domain: Value[]; value: Value | undefined; onChange: (v: Value | undefined) => void; state?: DsState;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const committed = value === undefined ? "" : String(value);
   const [text, setText] = useState(committed);
   // Re-sync the typed text when the committed value changes from outside (dialog pick, clear, propagation).
   useEffect(() => { setText(committed); }, [committed]);
 
   const key = columns[0];
-  const second = columns[1];
   // Only rows whose key is still a valid pick (propagation may have narrowed the domain).
   const allowed = new Set(domain.map(String));
   const optionRows = key ? rows.filter((r) => allowed.has(String(r[key]))) : [];
-  const keyOf = (r: Record<string, Value>) => String(r[key!] ?? "");
+  // Commit a picked key string back to its original typed domain value (lossless — no Number() guess).
+  const commit = (s: string | undefined) => onChange(fromDomain(domain, s));
 
-  const inDomain = (s: string) => allowed.has(s);
   // Live-commit only real option values — a picked suggestion or an exact typed match; plain searching does not.
-  const live = (s: string) => { setText(s); if (s === "") onChange(undefined); else if (inDomain(s)) onChange(coerce(s)); };
+  const live = (s: string) => { setText(s); if (s === "") onChange(undefined); else if (allowed.has(s)) commit(s); };
+
+  // Dialog rows filtered by the dialog's own search box (contains, across every column).
+  const q = query.trim().toLowerCase();
+  const dialogRows = q ? optionRows.filter((r) => columns.some((c) => String(r[c] ?? "").toLowerCase().includes(q))) : optionRows;
 
   const icon = state?.error ? (
     <Icon name="synchronize" mode="Interactive" accessibleName={`Retry loading ${label}`} onClick={() => state.retry()} />
   ) : (
-    <Icon name="value-help" mode="Interactive" accessibleName={`Choose ${label}`} onClick={() => setOpen(true)} />
+    <Icon name="value-help" mode="Interactive" accessibleName={`Choose ${label}`} onClick={() => { setQuery(""); setOpen(true); }} />
   );
   return (
     <>
-      <BusyIndicator active={!!state?.loading} style={{ display: "block" }}>
+      <BusyIndicator className="vh-busy" active={!!state?.loading}>
         <Input
           showSuggestions
           showClearIcon
           filter="Contains"
           value={text}
-          placeholder={state?.error ? "Couldn’t load — retry" : state?.loading ? "" : "Type to search…"}
+          placeholder={state?.loading ? undefined : state?.error ? "Couldn’t load — retry" : "Type to search…"}
           valueState={state?.error ? "Negative" : "None"}
           valueStateMessage={state?.error ? <div>{state.message ?? "Couldn’t load options."}</div> : undefined}
           icon={icon}
           onInput={(e) => live(e.target.value)}
-          onChange={(e) => { const s = e.target.value; if (s !== "" && !inDomain(s)) setText(committed); }} // reject dangling free text on blur
+          onChange={(e) => { const s = e.target.value; if (s !== "" && !allowed.has(s)) setText(committed); }} // reject dangling free text on blur
         >
           {optionRows.map((r) => (
-            <SuggestionItem key={keyOf(r)} text={keyOf(r)} additionalText={second ? String(r[second] ?? "") : undefined} />
+            <SuggestionItem key={String(r[key!])} text={String(r[key!])} additionalText={columns[1] ? String(r[columns[1]] ?? "") : undefined} />
           ))}
         </Input>
       </BusyIndicator>
-      <SelectDialog
-        open={open}
-        headerText={label}
-        showClearButton
-        onConfirm={(e) => { onChange(coerce((e.detail.selectedItems[0] as { description?: string } | undefined)?.description)); setOpen(false); }}
-        onClear={() => { onChange(undefined); setOpen(false); }}
-        onCancel={() => setOpen(false)}
-      >
-        {optionRows.map((r) => (
-          <ListItemStandard
-            key={keyOf(r)}
-            text={second ? String(r[second] ?? "") : keyOf(r)}
-            additionalText={keyOf(r)}
-            selected={keyOf(r) === committed}
-          />
-        ))}
-      </SelectDialog>
+
+      {createPortal(
+        <SelectDialog
+          open={open}
+          headerText={label}
+          className="vh-dialog"
+          searchPlaceholder={`Search ${label}…`}
+          onSearchInput={(e) => setQuery(e.detail.value)}
+          onSearchReset={() => setQuery("")}
+          onClose={() => setOpen(false)}
+        >
+          <Table
+            className="vh-table"
+            headerRow={<TableHeaderRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableHeaderRow>}
+            onRowClick={(e) => { commit(e.detail.row.rowKey); setOpen(false); }}
+          >
+            {dialogRows.map((r) => (
+              <TableRow key={String(r[key!])} rowKey={String(r[key!])} interactive>
+                {columns.map((c) => <TableCell key={c}><Text>{String(r[c] ?? "")}</Text></TableCell>)}
+              </TableRow>
+            ))}
+          </Table>
+        </SelectDialog>,
+        document.body,
+      )}
     </>
   );
 }
-
-// Selected option values are strings; coerce back to number where the value is numeric.
-const coerce = (k?: string): Value | undefined => (k === undefined || k === "" ? undefined : num(k));
 
 function Solutions({ em, solutions, picked, setPicked }: {
   em: EngineModel; solutions: Assignment[]; picked: Record<number, boolean>; setPicked: (p: Record<number, boolean>) => void;
