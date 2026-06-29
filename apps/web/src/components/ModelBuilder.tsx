@@ -4,11 +4,11 @@ import { useMutation, useQuery, useQueryClient, skipToken } from "@tanstack/reac
 import {
   ObjectPage, ObjectPageSection, ObjectPageTitle, Bar, Button, Input, SuggestionItem, Title, Text, Label, MessageStrip, BusyIndicator,
   Table, TableHeaderRow, TableHeaderCell, TableRow, TableCell,
-  Dialog, TabContainer, Tab, Select, Option, Switch, FlexBox,
+  Dialog, TabContainer, Tab, Select, Option, Switch, FlexBox, ObjectStatus,
   Toolbar, ToolbarButton, Icon, SplitterLayout, SplitterElement,
 } from "@ui5/webcomponents-react";
-import type { Model, FormSection, FormGroup, FormItem, DataSource, InputType, Value, PredefinedFormula, EngineModel } from "@hera/config-engine";
-import { flatten, enumerate, lintModel } from "@hera/config-engine";
+import type { Model, FormSection, FormGroup, FormItem, DataSource, InputType, Value, PredefinedFormula, EngineModel, Rule, GuidedRule, GuidedCond } from "@hera/config-engine";
+import { flatten, enumerate, lintModel, compileGuided, idsIn, compile } from "@hera/config-engine";
 import { orpc } from "../orpc.ts";
 import { uid, blankModel, blankSection, blankGroup, blankItem, blankFormula, allItems, trailingToken, applyExprPick, keyOf, parseKey, locateIssue, type Key, type Issue } from "../lib/model.ts";
 import { ModelRuntime } from "./Configurator.tsx";
@@ -29,6 +29,13 @@ type RowClickEvt = { detail: { row: RowEl } };
 const parseValues = (s: string): Value[] =>
   s.split(",").map((x) => x.trim()).filter(Boolean).map((x) => (x !== "" && !isNaN(Number(x)) ? Number(x) : x));
 const joinValues = (v?: Value[]): string => (v ?? []).join(", ");
+
+// Guided-rule editing helpers (see RulesPanel). OPS = the comparators a guided condition offers.
+const OPS: GuidedCond["op"][] = ["==", "!=", "<", "<=", ">", ">="];
+// Free-text guided value -> typed: numeric strings become numbers (price/numeric rules need real numbers).
+const coerceVal = (s: string): Value => (s !== "" && !isNaN(Number(s)) ? Number(s) : s);
+// Map a stringified option back to its original typed domain value (lossless — engine string-compares).
+const fromDom = (dom: Value[], s: string): Value | undefined => dom.find((v) => String(v) === s);
 
 // Slide the preview pane open/closed by animating its flex-basis (see the SplitterLayout below).
 const PANE_ANIM = "flex-basis 0.28s cubic-bezier(0.2, 0, 0, 1)";
@@ -520,12 +527,14 @@ export function ModelBuilder({ id }: { id: string }) {
 // An expression field with field+formula autocomplete: typing offers matching identifiers (name +
 // detail) via UI5 SuggestionItem; picking one completes the trailing identifier in place (see
 // applyExprPick). Expression errors surface via lintModel in the status strip, not inline.
-function ExprInput({ value, onChange, suggestions, placeholder, style }: {
+function ExprInput({ value, onChange, suggestions, placeholder, style, valueState, valueStateMessage }: {
   value: string;
   onChange: (v: string) => void;
   suggestions: Suggest[];
   placeholder?: string;
   style?: React.CSSProperties;
+  valueState?: "None" | "Information" | "Positive" | "Critical" | "Negative";
+  valueStateMessage?: string;
 }) {
   // ponytail: trailing-token completion only; caret-aware mid-expression insert if it ever matters.
   const token = trailingToken(value).toLowerCase();
@@ -536,6 +545,8 @@ function ExprInput({ value, onChange, suggestions, placeholder, style }: {
       value={value}
       placeholder={placeholder}
       style={style}
+      valueState={valueState}
+      valueStateMessage={valueStateMessage ? <div>{valueStateMessage}</div> : undefined}
       showSuggestions
       filter="None"
       onInput={(e) => onChange(applyExprPick(value, e.target.value, names))}
@@ -787,34 +798,167 @@ function FormulaDialog({ formula, suggestions, onClose, onChange, onDelete }: {
 function RulesPanel({ model, setModel, suggestions }: {
   model: Model; setModel: React.Dispatch<React.SetStateAction<Model>>; suggestions: Suggest[];
 }) {
+  const em = useMemo(() => flatten(model), [model]);
+  // Every referenceable name (items + formulas) — BUG A fix: vars derive from ALL of these, not just
+  // finite ones, so free/numeric/formula vars land in `vars` and propagate() classifies the rule right.
+  const allNames = useMemo(() => new Set([...em.parameters.map((p) => p.name), ...em.formulas.map((f) => f.name)]), [em]);
+  // Finite fields drive the "narrows options" vs "validity check" classification badge.
   const finite = useMemo(
-    () => new Set(flatten(model).parameters.filter((p) => p.domain.kind === "static" || p.domain.kind === "datasource").map((p) => p.name)),
-    [model],
+    () => new Set(em.parameters.filter((p) => p.domain.kind === "static" || p.domain.kind === "datasource").map((p) => p.name)),
+    [em],
   );
-  const varsOf = (expr: string): string[] =>
-    Array.from(new Set(expr.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [])).filter((t) => finite.has(t));
+  const fields = em.parameters.map((p) => p.name);
+  // Static (author-time-known) option values for a field, else undefined (free input / unresolved datasource).
+  const domainOf = (field: string): Value[] | undefined => {
+    const p = em.parameters.find((x) => x.name === field);
+    return p && p.domain.kind === "static" ? p.domain.values : undefined;
+  };
+  // Function names (fit/ceil/…) aren't known names, so they're excluded from vars automatically.
+  const varsOf = (expr: string): string[] => Array.from(new Set(idsIn(expr))).filter((t) => allNames.has(t));
 
-  const setRule = (i: number, expr: string) =>
-    setModel((m) => ({ ...m, rules: m.rules.map((r, j) => (j === i ? { expr, vars: varsOf(expr) } : r)) }));
-  const addRule = () => setModel((m) => ({ ...m, rules: [...m.rules, { expr: "", vars: [] }] }));
+  const update = (i: number, fn: (r: Rule) => Rule) =>
+    setModel((m) => ({ ...m, rules: m.rules.map((r, j) => (j === i ? fn(r) : r)) }));
+  const onLabel = (i: number, label: string) => update(i, (r) => ({ ...r, label: label || undefined }));
+  // Raw edit: expr is authoritative — derive vars, DROP guided (built explicitly so guided can't linger).
+  const onRaw = (i: number, expr: string) => update(i, (r) => ({ expr, vars: varsOf(expr), ...(r.label ? { label: r.label } : {}) }));
+  // Guided edit: regenerate expr+vars from the form and store guided alongside.
+  const onGuided = (i: number, g: GuidedRule) =>
+    update(i, (r) => { const expr = compileGuided(g); return { expr, vars: varsOf(expr), guided: g, ...(r.label ? { label: r.label } : {}) }; });
+  const onMode = (i: number, guided: boolean) =>
+    update(i, (r) => {
+      if (guided) { const g = r.guided ?? { when: [], then: [] }; const expr = compileGuided(g); return { expr, vars: varsOf(expr), guided: g, ...(r.label ? { label: r.label } : {}) }; }
+      return { expr: r.expr, vars: r.vars, ...(r.label ? { label: r.label } : {}) }; // to raw: keep expr, drop guided
+    });
+  // New rules start in guided mode (empty when/then -> expr "true", a harmless no-op until filled).
+  const addRule = () => setModel((m) => ({ ...m, rules: [...m.rules, { expr: "true", vars: [], guided: { when: [], then: [] } }] }));
   const removeRule = (i: number) => setModel((m) => ({ ...m, rules: m.rules.filter((_, j) => j !== i) }));
 
   return (
-    <FlexBox direction="Column" style={{ gap: "0.5rem", padding: "0.5rem" }}>
-        <Text style={{ opacity: 0.6 }}>Boolean expressions that must hold. They narrow the options bidirectionally as the user picks.</Text>
-        {model.rules.map((r, i) => (
-          <FlexBox key={i} alignItems="Center" style={{ gap: "0.5rem" }}>
-            <ExprInput
-              style={{ flex: 1 }}
-              suggestions={suggestions}
-              placeholder='e.g. quality != "high" or machining != "punching"'
-              value={r.expr}
-              onChange={(v) => setRule(i, v)}
-            />
-            <Button icon="delete" design="Transparent" onClick={() => removeRule(i)} />
-          </FlexBox>
-        ))}
-        <Button icon="add" design="Transparent" onClick={addRule} style={{ alignSelf: "flex-start" }}>Add rule</Button>
+    <FlexBox direction="Column" style={{ gap: "0.75rem", padding: "0.5rem" }}>
+      <Text style={{ opacity: 0.6 }}>
+        Rules that must hold. A rule over only finite fields narrows the options bidirectionally as the user picks; a rule
+        touching a free/numeric field is checked once its inputs are filled.
+      </Text>
+      {model.rules.map((r, i) => (
+        <RuleCard
+          key={i}
+          rule={r}
+          suggestions={suggestions}
+          fields={fields}
+          finite={finite}
+          domainOf={domainOf}
+          onLabel={(v) => onLabel(i, v)}
+          onRaw={(expr) => onRaw(i, expr)}
+          onGuided={(g) => onGuided(i, g)}
+          onMode={(g) => onMode(i, g)}
+          onRemove={() => removeRule(i)}
+        />
+      ))}
+      <Button icon="add" design="Transparent" onClick={addRule} style={{ alignSelf: "flex-start" }}>Add rule</Button>
+    </FlexBox>
+  );
+}
+
+// One rule = one card: optional name, a classification badge (does it narrow options or just validate?),
+// a Guided/Raw mode toggle, and either the structured when⇒then editor or the raw expression input.
+function RuleCard({ rule, suggestions, fields, finite, domainOf, onLabel, onRaw, onGuided, onMode, onRemove }: {
+  rule: Rule; suggestions: Suggest[]; fields: string[]; finite: Set<string>;
+  domainOf: (field: string) => Value[] | undefined;
+  onLabel: (v: string) => void; onRaw: (expr: string) => void; onGuided: (g: GuidedRule) => void;
+  onMode: (guided: boolean) => void; onRemove: () => void;
+}) {
+  const guided = !!rule.guided;
+  // Inline validation: does the raw expression parse? (Guided expr is generated, so it always does.)
+  const parseErr = useMemo(() => {
+    if (!rule.expr.trim()) return undefined;
+    try { compile(rule.expr); return undefined; } catch (e) { return (e as Error).message; }
+  }, [rule.expr]);
+  // A rule over only finite fields propagates (narrows pickers); anything else is a post-validation check.
+  const narrows = rule.vars.length > 0 && rule.vars.every((v) => finite.has(v));
+  return (
+    <FlexBox direction="Column" style={{ gap: "0.5rem", border: "1px solid var(--sapList_BorderColor)", borderRadius: "0.5rem", padding: "0.6rem" }}>
+      <FlexBox alignItems="Center" style={{ gap: "0.5rem" }}>
+        <Input placeholder="Rule name (optional)" value={rule.label ?? ""} onInput={(e) => onLabel(e.target.value)} style={{ flex: 1 }} />
+        <ObjectStatus state={narrows ? "Information" : "None"}>{narrows ? "narrows options" : "validity check"}</ObjectStatus>
+        <Button design={guided ? "Emphasized" : "Transparent"} onClick={() => onMode(true)}>Guided</Button>
+        <Button design={!guided ? "Emphasized" : "Transparent"} onClick={() => onMode(false)}>Raw</Button>
+        <Button icon="delete" design="Transparent" onClick={onRemove} tooltip="Delete rule" />
+      </FlexBox>
+      {guided ? (
+        <>
+          <GuidedEditor guided={rule.guided!} fields={fields} domainOf={domainOf} onChange={onGuided} />
+          <Text style={{ opacity: 0.5, fontSize: "0.75rem" }}>= {rule.expr}</Text>
+        </>
+      ) : (
+        <ExprInput
+          suggestions={suggestions}
+          placeholder='e.g. quality != "high" or machining != "punching"'
+          value={rule.expr}
+          onChange={onRaw}
+          valueState={parseErr ? "Negative" : undefined}
+          valueStateMessage={parseErr}
+        />
+      )}
+    </FlexBox>
+  );
+}
+
+// The structured editor: (all "when" conds) ⇒ (all "then" conds). compileGuided folds it to one expr.
+function GuidedEditor({ guided, fields, domainOf, onChange }: {
+  guided: GuidedRule; fields: string[]; domainOf: (field: string) => Value[] | undefined;
+  onChange: (g: GuidedRule) => void;
+}) {
+  const setConds = (which: "when" | "then", conds: GuidedCond[]) => onChange({ ...guided, [which]: conds });
+  const addCond = (which: "when" | "then") => setConds(which, [...guided[which], { field: fields[0] ?? "", op: "==", value: "" }]);
+  const part = (which: "when" | "then", title: string) => (
+    <FlexBox direction="Column" style={{ gap: "0.35rem" }}>
+      <Label>{title}</Label>
+      {guided[which].map((c, k) => (
+        <CondRow
+          key={k}
+          cond={c}
+          fields={fields}
+          domainOf={domainOf}
+          onChange={(nc) => setConds(which, guided[which].map((x, j) => (j === k ? nc : x)))}
+          onRemove={() => setConds(which, guided[which].filter((_, j) => j !== k))}
+        />
+      ))}
+      <Button icon="add" design="Transparent" onClick={() => addCond(which)} style={{ alignSelf: "flex-start" }}>Add condition</Button>
+    </FlexBox>
+  );
+  return (
+    <FlexBox direction="Column" style={{ gap: "0.5rem" }}>
+      {part("when", "When all of")}
+      {part("then", "Then must hold")}
+    </FlexBox>
+  );
+}
+
+// One `field op value` condition. The value control follows the field: a Select of its options when the
+// field has author-time-known values, else a free Input (numeric strings coerce to numbers).
+function CondRow({ cond, fields, domainOf, onChange, onRemove }: {
+  cond: GuidedCond; fields: string[]; domainOf: (field: string) => Value[] | undefined;
+  onChange: (c: GuidedCond) => void; onRemove: () => void;
+}) {
+  const dom = domainOf(cond.field);
+  return (
+    <FlexBox alignItems="Center" wrap="Wrap" style={{ gap: "0.4rem" }}>
+      <Select value={cond.field} onChange={(e) => onChange({ ...cond, field: e.detail.selectedOption.value ?? "", value: "" })}>
+        <Option value="">—</Option>
+        {fields.map((f) => <Option key={f} value={f}>{f}</Option>)}
+      </Select>
+      <Select value={cond.op} onChange={(e) => onChange({ ...cond, op: (e.detail.selectedOption.value ?? "==") as GuidedCond["op"] })}>
+        {OPS.map((op) => <Option key={op} value={op}>{op}</Option>)}
+      </Select>
+      {dom ? (
+        <Select value={String(cond.value)} onChange={(e) => onChange({ ...cond, value: fromDom(dom, e.detail.selectedOption.value ?? "") ?? "" })}>
+          <Option value="">—</Option>
+          {dom.map((v) => <Option key={String(v)} value={String(v)}>{String(v)}</Option>)}
+        </Select>
+      ) : (
+        <Input placeholder="value" value={String(cond.value ?? "")} onInput={(e) => onChange({ ...cond, value: coerceVal(e.target.value) })} />
+      )}
+      <Button icon="decline" design="Transparent" onClick={onRemove} tooltip="Remove condition" />
     </FlexBox>
   );
 }

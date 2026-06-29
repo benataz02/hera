@@ -3,7 +3,7 @@
 // models.save (reject bad models) and the builder (show errors live).
 import type { Model } from "./types.ts";
 import { compile } from "./expr.ts";
-import { flatten, orderFormulas } from "./flatten.ts";
+import { flatten, orderFormulas, idsIn } from "./flatten.ts";
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -11,9 +11,6 @@ export function lintModel(model: Model): string[] {
   const errs: string[] = [];
   const em = flatten(model);
   const names = new Set<string>([...em.parameters.map((p) => p.name), ...em.formulas.map((f) => f.name)]);
-  const finite = new Set(
-    em.parameters.filter((p) => p.domain.kind === "static" || p.domain.kind === "datasource").map((p) => p.name),
-  );
   const tryParse = (expr: string, where: string): void => {
     try {
       compile(expr);
@@ -53,12 +50,18 @@ export function lintModel(model: Model): string[] {
     }
   }
 
+  // Rules may now reference free/numeric/multicombo/formula vars (they become CHECK rules — validate
+  // post-checks them). So no finite-domain rejection. Two checks remain: every declared var is a known
+  // name, and (vars-completeness) every known identifier the expr uses is declared in `vars` — else
+  // propagate() misclassifies the rule. Vars-completeness closes BUG A at the persist boundary;
+  // function names (fit/ceil/…) aren't known names so they're ignored.
   for (const c of model.rules) {
     tryParse(c.expr, `rule "${c.expr}"`);
     for (const v of c.vars) {
       if (!names.has(v)) errs.push(`rule references unknown item '${v}'`);
-      else if (!finite.has(v))
-        errs.push(`rule uses '${v}', but only finite-domain items (radio/checkbox/static) can be propagated — use a formula`);
+    }
+    for (const id of idsIn(c.expr)) {
+      if (names.has(id) && !c.vars.includes(id)) errs.push(`rule "${c.expr}" must list '${id}' in vars`);
     }
   }
 

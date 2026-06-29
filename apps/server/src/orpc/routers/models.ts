@@ -52,7 +52,11 @@ const ModelZ = z.object({
   name: z.string().min(1),
   family: z.string().default(""),
   sections: z.array(FormSectionZ),
-  rules: z.array(z.object({ expr: z.string(), vars: z.array(z.string()) })).default([]),
+  // label/guided are builder sugar; the trust boundary runs only expr+vars (expr is authoritative), so
+  // guided is z.unknown() — validating its sub-shape buys nothing. Without these, Zod strips them on save.
+  rules: z
+    .array(z.object({ expr: z.string(), vars: z.array(z.string()), label: z.string().optional(), guided: z.unknown().optional() }))
+    .default([]),
   formulas: z.array(z.object({ id: z.string(), name: z.string(), expr: z.string() })).default([]),
 });
 

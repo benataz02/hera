@@ -3,9 +3,9 @@
 // real builder tree (groups -> items) and run through flatten() + the engine. Run:
 //   bun run --filter @hera/config-engine selfcheck   (or: bun packages/config-engine/src/selfcheck.ts)
 import assert from "node:assert/strict";
-import type { Assignment, Model, InputType, DataSource } from "./types.ts";
-import { flatten, orderFormulas } from "./flatten.ts";
-import { initialDomains, propagate, validate } from "./propagate.ts";
+import type { Assignment, Model, InputType, DataSource, GuidedRule } from "./types.ts";
+import { flatten, orderFormulas, compileGuided } from "./flatten.ts";
+import { initialDomains, propagate, validate, explain } from "./propagate.ts";
 import { enumerate } from "./enumerate.ts";
 import { evaluate, priceBatches } from "./evaluate.ts";
 import { fit, packRect } from "./packing.ts";
@@ -168,8 +168,59 @@ export function runDataSourceSelfCheck(): void {
   console.log("config-engine self-check: OK (data source drives the domain)");
 }
 
+// The constraint additions: CHECK rules (numeric/free post-conditions), explain ("why unavailable"),
+// the lint changes (free vars accepted, vars-completeness enforced), and compileGuided round-trip.
+// Proves the three guarantees: numeric rules block invalid configs, AC-3 still narrows finite ones,
+// and explain attributes the right eliminating rule.
+export function runConstraintSelfCheck(): void {
+  // Fixture: a finite qty radio + a FREE maxQty input, constrained by a numeric CHECK rule.
+  const checkModel: Model = {
+    name: "Check", family: "", formulas: [],
+    rules: [{ expr: "qty <= maxQty", vars: ["qty", "maxQty"], label: "within max" }],
+    sections: [{ id: "s", label: "S", groups: [{ id: "g", label: "G", items: [
+      { id: "qty", name: "qty", label: "Qty", input: { mandatory: true, dataSource: { kind: "normal", values: [100, 500, 1000] }, inputType: "radio", value: { kind: "manual" } } },
+      { id: "maxQty", name: "maxQty", label: "Max qty", input: { mandatory: true, dataSource: { kind: "normal" }, inputType: "input", value: { kind: "manual" } } },
+    ] }] }],
+  };
+  const MC = flatten(checkModel);
+  assert.equal(MC.constraints.length, 1, "the rule is carried as a constraint");
+
+  // --- guarantee 1: numeric CHECK rule blocks an invalid config, passes a valid one ---
+  const bad = validate(MC, { qty: 1000, maxQty: 500 });
+  assert.equal(bad.ok, false, "qty=1000 > maxQty=500 rejected");
+  assert.ok(!bad.ok && bad.reason.includes("within max"), "rejection names the rule's label");
+  assert.ok(!bad.ok && bad.rule?.expr === "qty <= maxQty", "rejection carries the offending rule");
+  assert.deepEqual(validate(MC, { qty: 100, maxQty: 500 }), { ok: true }, "qty=100 <= maxQty=500 validates");
+  // The rule is a post-check: a partial config (maxQty not yet supplied) isn't judged on it.
+  assert.equal(validate(MC, { qty: 1000 }).ok, false, "still incomplete without maxQty (missing input), not a rule failure");
+
+  // --- guarantee 2: AC-3 still narrows finite-only rules (aluminium digital -> format) ---
+  const M = flatten(ALU);
+  const base = initialDomains(M);
+  const pDigital = propagate(M, base, { printing: "digital" });
+  assert.deepEqual(pDigital.ok && pDigital.domains.format, ["1000x500"], "AC-3 unchanged: digital -> format pinned");
+
+  // --- guarantee 3: explain attributes the single rule that eliminated a value ---
+  const ex = explain(M, base, { printing: "digital" }, "format", "500x500");
+  assert.equal(ex?.rule.expr, `printing != "digital" or format == "1000x500"`, "explain names the eliminating rule");
+  assert.equal(explain(M, base, { printing: "digital" }, "format", "1000x500"), null, "a still-available value has no eliminating rule");
+
+  // --- lint: free-var rule now accepted; incomplete vars rejected ---
+  assert.deepEqual(lintModel(checkModel), [], "free/numeric-var rule lints clean (no finite rejection)");
+  const incomplete: Model = { ...checkModel, rules: [{ expr: "qty <= maxQty", vars: ["qty"] }] };
+  assert.ok(lintModel(incomplete).some((e) => /must list 'maxQty' in vars/.test(e)), "incomplete vars rejected");
+
+  // --- compileGuided: when⇒then folds to material implication; no-when is unconditional ---
+  const g: GuidedRule = { when: [{ field: "printing", op: "==", value: "digital" }], then: [{ field: "format", op: "==", value: "1000x500" }] };
+  assert.equal(compileGuided(g), `not((printing == "digital")) or ((format == "1000x500"))`, "guided when⇒then -> implication");
+  assert.equal(compileGuided({ when: [], then: [{ field: "x", op: ">=", value: 5 }] }), "(x >= 5)", "no-when -> unconditional then (number literal bare)");
+
+  console.log("config-engine self-check: OK (constraints — numeric CHECK rules, explain attribution, free-var lint, compileGuided)");
+}
+
 if (import.meta.main) {
   runEngineSelfCheck();
   runFormulaSelfCheck();
   runDataSourceSelfCheck();
+  runConstraintSelfCheck();
 }

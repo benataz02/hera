@@ -6,10 +6,10 @@ import {
   ObjectPage, ObjectPageTitle, ObjectPageSection, Title, Text, Label, Button, Input, Select, Option, CheckBox,
   MessageStrip, BusyIndicator, FlexBox, ObjectStatus, Form, FormGroup, FormItem,
   Table, TableHeaderRow, TableHeaderCell, TableRow, TableCell,
-  Icon, Dialog, SelectDialog, Bar, SuggestionItem,
+  Icon, Dialog, SelectDialog, Bar, SuggestionItem, RadioButton, MultiComboBox, MultiComboBoxItem, Popover,
 } from "@ui5/webcomponents-react";
-import type { Model, EngineModel, Assignment, Value, ParamDomain, FormItem as ModelItem } from "@hera/config-engine";
-import { flatten, initialDomains, propagate, validate, enumerate, evaluate, priceBatches, buildScope, evalExpr, truthy } from "@hera/config-engine";
+import type { Model, EngineModel, Assignment, Value, ParamDomain, Domains, FormItem as ModelItem } from "@hera/config-engine";
+import { flatten, initialDomains, propagate, validate, explain, enumerate, evaluate, priceBatches, buildScope, evalExpr, truthy } from "@hera/config-engine";
 import { client, orpc } from "../orpc.ts";
 
 const STATE: Record<string, "None" | "Information" | "Positive" | "Negative"> = {
@@ -167,7 +167,7 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
                   key={it.id}
                   labelContent={<Label required={it.input.value.kind === "manual" && it.input.mandatory}>{it.label}</Label>}
                 >
-                  <Field item={it} domain={optionDomains[it.name]} value={assignment[it.name]} derived={scope[it.name]} onChange={(v) => set(it.name, v)} dsState={dsState[it.name]} md={mdByParam[it.name]} />
+                  <Field item={it} domain={optionDomains[it.name]} value={assignment[it.name]} derived={scope[it.name]} onChange={(v) => set(it.name, v)} dsState={dsState[it.name]} md={mdByParam[it.name]} em={em} base={base} assignment={assignment} />
                 </FormItem>
               ))}
             </FormGroup>
@@ -183,9 +183,16 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
           Conflicting selection at “{pr.conflict}” — change it to continue.
         </MessageStrip>
       ) : null}
+      {/* A failed CHECK rule (numeric/free post-condition) names the offending rule; the muted text
+          below is reserved for the still-incomplete case (a missing/unresolved field, no rule). */}
+      {!valid.ok && valid.rule ? (
+        <MessageStrip design="Negative" hideCloseButton style={{ marginBottom: "0.5rem" }}>
+          Rule not satisfied: {valid.rule.label ?? valid.rule.expr}
+        </MessageStrip>
+      ) : null}
       {valid.ok ? (
         <Title level="H3">{evaluate(em, assignment).price}</Title>
-      ) : (
+      ) : valid.rule ? null : (
         <Text style={{ opacity: 0.6 }}>Complete the required fields to price ({valid.reason}).</Text>
       )}
       <div style={{ marginTop: "0.75rem", maxWidth: 320 }}>
@@ -229,32 +236,112 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
   );
 }
 
-// Renders a single field's control (the label is supplied by the enclosing FormItem).
-function Field({ item, domain, value, derived, onChange, dsState, md }: {
+// Renders a single field's control (the label is supplied by the enclosing FormItem). `em`/`base`/
+// `assignment` are passed only so a finite picker can explain (lazily, on click) why a value was
+// constraint-eliminated — see WhyUnavailable.
+function Field({ item, domain, value, derived, onChange, dsState, md, em, base, assignment }: {
   item: ModelItem; domain?: Value[]; value: Value | undefined; derived: unknown;
   onChange: (v: Value | undefined) => void; dsState?: DsState; md?: MdData;
+  em: EngineModel; base: Domains; assignment: Assignment;
 }) {
   if (item.input.value.kind === "formula") return <Text>{derived == null ? "—" : String(derived)}</Text>;
 
   const t = item.input.inputType;
   if (t === "checkbox") return <CheckBox checked={value === true} onChange={(e) => onChange(e.target.checked)} />;
-  // Master-data source -> value help (F4): pick from a searchable dialog showing every column.
-  // (multicombo rides as a free value — no single-pick value help.)
   const ds = item.input.dataSource;
-  if (ds.kind === "masterdata" && t !== "multicombo") {
+  // Multi-select: a MultiComboBox over the field's static values. ponytail (BUG B): the picks ride as a
+  // comma-joined SCALAR string so they survive Assignment/ValueZ unchanged — the engine never sees an
+  // array, so multicombo values can't (yet) be constrained by rules. Array-valued constraints would
+  // force widening Value -> Value[] across the engine (the value-model rewrite we're avoiding).
+  if (t === "multicombo") {
+    return <MultiSelect values={ds.kind === "normal" ? ds.values ?? [] : []} value={value} onChange={onChange} />;
+  }
+  // Master-data source -> value help (F4): pick from a searchable dialog showing every column.
+  if (ds.kind === "masterdata") {
     return <ValueHelp label={item.label} columns={md?.columns ?? []} rows={md?.rows ?? []} domain={domain ?? []} value={value} onChange={onChange} state={dsState} />;
   }
+  // Finite static field: a RadioButton group (radio inputType) or a Select. `domain` is the still-valid
+  // set (own pick excluded upstream); `base[name]` is the full domain, so the difference is what rules
+  // eliminated — surfaced via the "N unavailable — why?" trigger.
   if (domain && domain.length) {
+    const full = base[item.name];
+    const eliminated = full ? full.filter((v) => !domain.includes(v)) : [];
+    const control =
+      t === "radio" ? (
+        <FlexBox direction="Column" style={{ gap: "0.1rem" }}>
+          {domain.map((v) => (
+            <RadioButton key={String(v)} name={`radio-${item.name}`} text={String(v)} checked={value !== undefined && String(value) === String(v)} onChange={() => onChange(v)} />
+          ))}
+        </FlexBox>
+      ) : (
+        <Select value={value === undefined ? "" : String(value)} onChange={(e) => onChange(fromDomain(domain, e.detail.selectedOption.value))}>
+          <Option value="">—</Option>
+          {domain.map((v) => (
+            <Option key={String(v)} value={String(v)}>{String(v)}</Option>
+          ))}
+        </Select>
+      );
+    if (!eliminated.length) return control;
     return (
-      <Select value={value === undefined ? "" : String(value)} onChange={(e) => onChange(fromDomain(domain, e.detail.selectedOption.value))}>
-        <Option value="">—</Option>
-        {domain.map((v) => (
-          <Option key={String(v)} value={String(v)}>{String(v)}</Option>
-        ))}
-      </Select>
+      <FlexBox direction="Column" style={{ gap: "0.25rem" }}>
+        {control}
+        <WhyUnavailable em={em} base={base} assignment={assignment} name={item.name} eliminated={eliminated} />
+      </FlexBox>
     );
   }
   return <Input value={value === undefined ? "" : String(value)} onInput={(e) => onChange(e.target.value === "" ? undefined : num(e.target.value))} />;
+}
+
+// Multi-select control. Selection is stored as a comma-joined scalar (see Field's multicombo note),
+// split back to mark the selected items on render.
+function MultiSelect({ values, value, onChange }: { values: Value[]; value: Value | undefined; onChange: (v: Value | undefined) => void }) {
+  const selected = new Set(String(value ?? "").split(",").filter(Boolean));
+  return (
+    <MultiComboBox
+      onSelectionChange={(e) => {
+        const joined = e.detail.items.map((it) => it.text ?? "").filter(Boolean).join(",");
+        onChange(joined === "" ? undefined : joined);
+      }}
+    >
+      {values.map((v) => (
+        <MultiComboBoxItem key={String(v)} text={String(v)} selected={selected.has(String(v))} />
+      ))}
+    </MultiComboBox>
+  );
+}
+
+// "N unavailable — why?" A transparent trigger that, on open, attributes each constraint-eliminated
+// value to the single rule that removed it (explain) — or a generic message for a multi-hop chain.
+// explain() runs lazily (only while the Popover is open), never per-option per-render.
+function WhyUnavailable({ em, base, assignment, name, eliminated }: {
+  em: EngineModel; base: Domains; assignment: Assignment; name: string; eliminated: Value[];
+}) {
+  const [open, setOpen] = useState(false);
+  // Anchor to the actual button element (captured on click) rather than an id — no DOM id lookup to resolve.
+  const [opener, setOpener] = useState<HTMLElement | undefined>(undefined);
+  const reasons = open
+    ? eliminated.map((v) => {
+        const ex = explain(em, base, assignment, name, v);
+        return { value: v, why: ex ? ex.rule.label ?? ex.rule.expr : "conflicts with your current selection" };
+      })
+    : [];
+  return (
+    <>
+      <Button design="Transparent" style={{ alignSelf: "flex-start", opacity: 0.7 }} onClick={(e) => { setOpener(e.currentTarget ?? undefined); setOpen(true); }}>
+        {eliminated.length} unavailable — why?
+      </Button>
+      <Popover open={open} opener={opener} onClose={() => setOpen(false)} headerText="Why unavailable" placement="Bottom">
+        <FlexBox direction="Column" style={{ gap: "0.5rem", padding: "0.5rem", maxWidth: 320 }}>
+          {reasons.map((r) => (
+            <FlexBox key={String(r.value)} direction="Column">
+              <Text style={{ fontWeight: 600 }}>{String(r.value)}</Text>
+              <Text style={{ opacity: 0.7, fontSize: "0.8rem" }}>{r.why}</Text>
+            </FlexBox>
+          ))}
+        </FlexBox>
+      </Popover>
+    </>
+  );
 }
 
 // SAP value help (F4) for a master-data source: a typable Input that searches the key column inline

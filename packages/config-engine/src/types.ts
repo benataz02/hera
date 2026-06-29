@@ -47,11 +47,26 @@ export interface FormSection {
   groups: FormGroup[];
 }
 
-// A boolean rule that must hold (the explicit constraint list). `vars` are the finite-domain items
-// it touches — declared so AC-3 propagation knows which arcs to (re)visit.
+// One condition of a guided rule: `field op value`. `exclude` folds into a negated op (e.g. require
+// printing == "digital" vs exclude printing != "digital") — one cond type, no separate `kind` field.
+export type GuidedCond = { field: string; op: "==" | "!=" | "<" | "<=" | ">" | ">="; value: Value };
+// Builder sugar: (all `when` conds) ⇒ (all `then` conds). compileGuided() folds it to `expr`+`vars`.
+export interface GuidedRule {
+  when: GuidedCond[];
+  then: GuidedCond[];
+}
+
+// A boolean rule that must hold (the explicit constraint list). `vars` are every named item/formula
+// the `expr` touches — declared so AC-3 (propagate) knows which rules are all-finite (it propagates
+// those) and which carry a free/numeric var (validate post-checks those). `label`/`guided` are
+// builder-only sugar; the engine reads ONLY `expr`+`vars`. `expr` is authoritative — the builder
+// regenerates expr+vars from `guided` on a guided edit and clears `guided` on a raw edit, so they
+// can never disagree.
 export interface Rule {
   expr: string;
   vars: string[];
+  label?: string;
+  guided?: GuidedRule;
 }
 
 // A named, reusable expression authored in the builder's Formulas panel. Not tied to a rendered

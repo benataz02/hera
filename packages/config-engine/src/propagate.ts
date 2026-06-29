@@ -104,7 +104,7 @@ export function validate(
   model: EngineModel,
   assignment: Assignment,
   resolved: Record<string, Value[]> = {},
-): { ok: true } | { ok: false; reason: string } {
+): { ok: true } | { ok: false; reason: string; rule?: Rule } {
   const initial = initialDomains(model, resolved);
   const pr = propagate(model, initial, assignment);
   if (!pr.ok) return { ok: false, reason: `inconsistent at '${pr.conflict}'` };
@@ -121,6 +121,22 @@ export function validate(
     }
   };
 
+  // CHECK rules: a rule with ≥1 free/numeric/multicombo/formula var can't narrow a finite domain (you
+  // can't enumerate an infinite domain), so propagate() skipped it. It's enforced HERE as a boolean
+  // post-condition, once all its vars have values. Checked before completeness so a violated numeric
+  // rule surfaces in the live preview as soon as its inputs are filled (not gated behind every radio).
+  // ponytail: numeric/free rules are post-checks, never propagated; add interval/linear propagation
+  //           only if a numeric rule must narrow a picker.
+  for (const c of model.constraints) {
+    if (c.vars.every((v) => v in initial)) continue; // propagating rule — already enforced by propagate()
+    if (!c.vars.every((v) => scope[v] !== undefined)) continue; // not all inputs present yet
+    try {
+      if (!truthy(evalExpr(c.expr, scope))) return { ok: false, reason: `rule not satisfied: ${c.label ?? c.expr}`, rule: c };
+    } catch {
+      /* unresolvable (type mismatch / mid-edit) -> not-yet-judgeable, stay conservative */
+    }
+  }
+
   for (const p of model.parameters) {
     const shown = visible(p.visibility);
     if (!(p.name in initial)) {
@@ -134,4 +150,29 @@ export function validate(
     if (assignment[p.name] !== dom[0]) return { ok: false, reason: `'${p.name}' not pinned to its resolved value` };
   }
   return { ok: true };
+}
+
+// "Why is `value` unavailable for `param`?" Re-propagate with the OTHER picks (param's own pick
+// excluded), then find the single rule under which `value` has no support — the rule that eliminated
+// it. Reuses the private GAC `hasSupport`. The runtime computes this lazily (on a "why?" click) over
+// the values it already knows were dropped — never per-option per-render.
+// ponytail: single-rule attribution only; a transitive/multi-hop elimination returns null and the
+//           caller shows a generic message. Chain via the conflict var if multi-hop ever matters.
+export function explain(
+  model: EngineModel,
+  base: Domains,
+  assignment: Assignment,
+  param: string,
+  value: Value,
+): { rule: Rule; conflictVars: string[] } | null {
+  const others = { ...assignment };
+  delete others[param];
+  const pr = propagate(model, base, others);
+  if (!pr.ok) return null;
+  for (const c of model.constraints) {
+    if (!c.vars.includes(param)) continue;
+    if (!c.vars.every((v) => v in pr.domains)) continue; // a check rule, not a finite eliminator
+    if (!hasSupport(c, param, value, pr.domains)) return { rule: c, conflictVars: c.vars };
+  }
+  return null;
 }

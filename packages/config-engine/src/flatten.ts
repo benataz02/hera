@@ -1,7 +1,7 @@
 // Turn the authored tree (groups -> items) into the flat shape the engine algorithm walks:
 // finite/free parameters, derived formulas, the rule list, and per-item price lines. This is the
 // bridge between MODEL.md's UI model and the proven parameter/constraint/formula engine.
-import type { Model, EngineModel, Parameter, Formula, PriceLine, ParamDomain, FormItem } from "./types.ts";
+import type { Model, EngineModel, Parameter, Formula, PriceLine, ParamDomain, FormItem, GuidedRule, GuidedCond, Value } from "./types.ts";
 
 // Visibility is inherited down the tree: an item shows only if its section, group, and own
 // visibility all hold. AND the present predicates so the engine/UI evaluate one expr per item.
@@ -27,8 +27,22 @@ function itemDomain(it: FormItem): ParamDomain {
   return ds.kind === "normal" && ds.values?.length ? { kind: "static", values: ds.values } : { kind: "input" };
 }
 
-// Identifiers referenced in an expression (used to wire formula -> formula dependencies).
-const idsIn = (expr: string): string[] => expr.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+// Identifiers referenced in an expression (formula->formula deps, rule vars-completeness lint, the
+// builder's varsOf). Returns function names (fit/ceil/…) too — callers intersect with known names.
+export const idsIn = (expr: string): string[] => expr.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+
+// Compile a guided when⇒then rule to one boolean expr (material implication): no `when` ⇒ the `then`
+// conds hold unconditionally; otherwise not(all when) or (all then). The `expr` is authoritative —
+// the builder derives `vars` from it (varsOf) and clears `guided` on a raw edit, so they can't drift.
+// ponytail: emits a flat conjunction; no simplification (the engine caches the parse, so it's free).
+const lit = (v: Value): string => (typeof v === "string" ? JSON.stringify(v) : String(v)); // strings quoted; engine string-compares
+const condExpr = (c: GuidedCond): string => `${c.field} ${c.op} ${lit(c.value)}`;
+export function compileGuided(g: GuidedRule): string {
+  const thenExpr = g.then.length ? g.then.map((c) => `(${condExpr(c)})`).join(" and ") : "true";
+  if (!g.when.length) return thenExpr;
+  const whenExpr = g.when.map((c) => `(${condExpr(c)})`).join(" and ");
+  return `not(${whenExpr}) or (${thenExpr})`;
+}
 
 // Dependency-order predefined formulas so `buildScope` (which resolves in array order) can read a
 // formula's dependencies first. A depends on B when B's name appears in A's expr. Kahn's algorithm;

@@ -1,6 +1,6 @@
 export type * from "./types.ts";
-export { flatten } from "./flatten.ts";
-export { initialDomains, propagate, validate } from "./propagate.ts";
+export { flatten, compileGuided, idsIn } from "./flatten.ts";
+export { initialDomains, propagate, validate, explain } from "./propagate.ts";
 export type { PropagateResult } from "./propagate.ts";
 export { enumerate } from "./enumerate.ts";
 export type { EnumerateResult } from "./enumerate.ts";
