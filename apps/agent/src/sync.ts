@@ -48,6 +48,7 @@ export interface RequestRow {
 }
 
 export interface SlReadPort {
+  ensureSession(): Promise<void>;
   metadata(): Promise<unknown>;
   listEntity(entity: string, opts: { top: number; skip?: number; q?: string; fields?: string[] }): Promise<unknown>;
   getEntity(entity: string, key: string, keyQuoted: boolean): Promise<unknown>;
@@ -125,6 +126,11 @@ export async function processRequest(req: RequestRow, sl: SlReadPort, cloud: Req
         break;
       case "query":
         result = await sl.queryRaw(String(p.path));
+        break;
+      case "warmup":
+        // Pre-establish the B1 session after the user logs in; no payload, side-effect only.
+        await sl.ensureSession();
+        result = { ok: true };
         break;
       default:
         throw new Error(`Unknown request kind '${req.kind}'`);

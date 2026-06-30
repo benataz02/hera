@@ -163,6 +163,12 @@ export class ServiceLayerClient {
     return this.loginInFlight;
   }
 
+  /** Establish a B1 session now (no-op if one is live) so the user's first query doesn't pay the
+   *  /Login round-trip. Idempotent and single-flight via login(); safe to call on every app load. */
+  async ensureSession(): Promise<void> {
+    if (!this.cookie) await this.login();
+  }
+
   private async request(
     method: string,
     path: string,
@@ -175,6 +181,7 @@ export class ServiceLayerClient {
     if (body !== undefined) {
       init.body = JSON.stringify(body);
       headers["content-type"] = "application/json";
+      headers["odatamaxpagesize"] = "1000"; // B1 v2 default is 20, which is too small for many lists
     }
     if (Object.keys(headers).length) init.headers = headers;
     let res = await this.rawFetch(path, init);
@@ -185,32 +192,6 @@ export class ServiceLayerClient {
       res = await this.rawFetch(path, init);
     }
     return res;
-  }
-
-  /** GET a BusinessPartner by CardCode. Returns the CardCode if it exists, else null. */
-  async getBusinessPartner(cardCode: string): Promise<string | null> {
-    const res = await this.request(
-      "GET",
-      `/BusinessPartners('${encodeURIComponent(cardCode)}')?$select=CardCode`,
-    );
-    if (res.status === 404) return null;
-    if (!res.ok) throw await this.toError(res);
-    const json = (await res.json()) as { CardCode: string };
-    return json.CardCode;
-  }
-
-  /** Create a BusinessPartner. Returns the CardCode (our idempotency / external key). */
-  async createBusinessPartner(bp: {
-    CardCode: string;
-    CardName: string;
-    CardType?: string;
-  }): Promise<string> {
-    const res = await this.request("POST", "/BusinessPartners", {
-      CardType: "cCustomer",
-      ...bp,
-    });
-    if (!res.ok) throw await this.toError(res);
-    return bp.CardCode;
   }
 
   // --- Generic entity access for autodiscovered entities ---
@@ -228,8 +209,6 @@ export class ServiceLayerClient {
 
   /** Discover all entity sets + their field schemas from the Service Layer $metadata. */
   async metadata(): Promise<EntitySchema[]> {
-    // SL v2 GET /$metadata is pathologically slow / hangs; POST returns the same EDMX in ~2s.
-    // ponytail: POST, not GET — empty body. Do not "fix" this back to GET.
     const res = await this.request("POST", "/$metadata");
     if (!res.ok) throw await this.toError(res);
     return parseEdmx(await res.text());

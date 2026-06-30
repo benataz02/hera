@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, skipToken } from "@tanstack/react-query";
 import {
-  ObjectPage, ObjectPageTitle, ObjectPageSection, Bar, Button, Input, Select, Option, Title, Text, Label,
+  ObjectPage, ObjectPageTitle, ObjectPageSection, Button, Input, TextArea, Select, Option, Title, Text, Label,
   MessageStrip, BusyIndicator, FlexBox, Toolbar, ToolbarButton, ObjectStatus,
   Table, TableHeaderRow, TableHeaderCell, TableRow, TableCell,
 } from "@ui5/webcomponents-react";
-import { orpc, client } from "../orpc.ts";
+import { orpc, client, mdResolveKey } from "../orpc.ts";
+import "./MasterdataEditor.css";
 
 type Value = string | number | boolean;
 type Row = Record<string, Value>;
@@ -64,6 +65,9 @@ export function MasterdataEditor({ id }: { id: string }) {
     orpc.masterdata.save.mutationOptions({
       onSuccess: (r) => {
         qc.invalidateQueries({ queryKey: orpc.masterdata.list.queryOptions().queryKey });
+        // Drop the Configurator's session-cached resolution (staleTime: Infinity) so a changed
+        // query/columns/rows is re-fetched on next use instead of serving stale rows.
+        qc.invalidateQueries({ queryKey: mdResolveKey(isNew ? r.id : id) });
         if (isNew) navigate({ to: "/masterdata/$id", params: { id: r.id } });
       },
     }),
@@ -114,7 +118,6 @@ export function MasterdataEditor({ id }: { id: string }) {
 
   return (
     <ObjectPage
-      mode="IconTabBar"
       hidePinButton
       titleArea={
         <ObjectPageTitle
@@ -132,15 +135,77 @@ export function MasterdataEditor({ id }: { id: string }) {
         />
       }
     >
+      {/* General + Data merged: identity at top, the definition (rows grid or query console) below. */}
       <ObjectPageSection id="general" titleText="General">
-        <FlexBox direction="Column" style={{ gap: "0.75rem", padding: "0.5rem 0", maxWidth: 480 }}>
-          <Label>Name</Label>
-          <Input value={name} onInput={(e) => setName(e.target.value)} />
-          <Label>Defined by</Label>
-          <Select value={kind} onChange={(e) => setKind((e.detail.selectedOption.value || "manual") as Kind)}>
-            <Option value="manual">Manual rows</Option>
-            <Option value="query">Query (B1)</Option>
-          </Select>
+        <FlexBox direction="Column" style={{ gap: "1rem", padding: "0.5rem 0" }}>
+          <FlexBox direction="Column" style={{ gap: "0.75rem", maxWidth: 480 }}>
+            <Label>Name</Label>
+            <Input value={name} onInput={(e) => setName(e.target.value)} />
+            <Label>Defined by</Label>
+            <Select value={kind} onChange={(e) => setKind((e.detail.selectedOption.value || "manual") as Kind)}>
+              <Option value="manual">Manual rows</Option>
+              <Option value="query">Query (B1)</Option>
+            </Select>
+          </FlexBox>
+
+          {kind === "manual" ? (
+            <FlexBox direction="Column" style={{ gap: "0.75rem" }}>
+              <Title level="H5">Rows</Title>
+              <Table
+                alternateRowColors
+                headerRow={<TableHeaderRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}<TableHeaderCell width="3rem" /></TableHeaderRow>}
+                noDataText="No rows yet — add one"
+                onMove={moveRow}
+                onMoveOver={onMoveOver}
+              >
+                {rows.map((r, i) => (
+                  <TableRow key={i} movable data-i={i}>
+                    {columns.map((c) => (
+                      <TableCell key={c}><Input value={String(r[c] ?? "")} onInput={(e) => setCell(i, c, e.target.value)} /></TableCell>
+                    ))}
+                    <TableCell><Button className="md-row-action" icon="delete" design="Transparent" onClick={() => removeRow(i)} /></TableCell>
+                  </TableRow>
+                ))}
+              </Table>
+              <Button icon="add" design="Transparent" onClick={addRow} style={{ alignSelf: "flex-start" }}>Add row</Button>
+            </FlexBox>
+          ) : (
+            <FlexBox direction="Column" style={{ gap: "0.6rem", maxWidth: 640 }}>
+              <Title level="H5">Query</Title>
+              <Label>Source</Label>
+              <Input value={source} onInput={(e) => setSource(e.target.value)} />
+              <Label>GET path (OData)</Label>
+              <TextArea
+                className="md-code"
+                growing
+                growingMaxRows={8}
+                rows={3}
+                placeholder="/Items?$select=ItemCode,ItemName"
+                value={path}
+                valueState={testErr ? "Negative" : "None"}
+                valueStateMessage={testErr ? <div>{testErr}</div> : undefined}
+                onInput={(e) => { setPath(e.target.value); if (testErr) setTestErr(null); }}
+              />
+              <FlexBox style={{ gap: "0.5rem" }}>
+                <Button onClick={runTest} disabled={testing || !path}>{testing ? "Testing…" : "Test"}</Button>
+                {testErr ? <Button design="Transparent" icon="synchronize" onClick={runTest}>Retry</Button> : null}
+              </FlexBox>
+              {testErr ? <MessageStrip design="Negative" hideCloseButton>{testErr}</MessageStrip> : null}
+              {preview ? (
+                <>
+                  <Text style={{ opacity: 0.7 }}>{preview.length} row(s) — first column ({columns[0]}) is the key.</Text>
+                  <Table alternateRowColors headerRow={<TableHeaderRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableHeaderRow>} noDataText="No rows">
+                    {preview.slice(0, 20).map((r, i) => (
+                      <TableRow key={i}>
+                        {columns.map((c) => <TableCell key={c}><Text maxLines={1}>{String((r as Record<string, unknown>)[c] ?? "")}</Text></TableCell>)}
+                      </TableRow>
+                    ))}
+                  </Table>
+                </>
+              ) : null}
+            </FlexBox>
+          )}
+
           {save.error ? <MessageStrip design="Negative" hideCloseButton>{save.error.message}</MessageStrip> : null}
         </FlexBox>
       </ObjectPageSection>
@@ -151,7 +216,8 @@ export function MasterdataEditor({ id }: { id: string }) {
             The first column is the key. In a quote, the value help lists every column; the type-ahead shows the first two.
           </MessageStrip>
           <Table
-            headerRow={<TableHeaderRow><TableHeaderCell>Column</TableHeaderCell><TableHeaderCell /><TableHeaderCell /></TableHeaderRow>}
+            alternateRowColors
+            headerRow={<TableHeaderRow><TableHeaderCell>Column</TableHeaderCell><TableHeaderCell width="4rem" /><TableHeaderCell width="3rem" /></TableHeaderRow>}
             noDataText="No columns yet — add one"
             onMove={moveColumn}
             onMoveOver={onMoveOver}
@@ -160,65 +226,12 @@ export function MasterdataEditor({ id }: { id: string }) {
               <TableRow key={i} movable data-i={i}>
                 <TableCell><Input value={c} onInput={(e) => renameColumn(i, e.target.value)} /></TableCell>
                 <TableCell>{i === 0 ? <ObjectStatus state="Information">key</ObjectStatus> : null}</TableCell>
-                <TableCell><Button icon="delete" design="Transparent" disabled={columns.length === 1} onClick={() => removeColumn(i)} /></TableCell>
+                <TableCell><Button className="md-row-action" icon="delete" design="Transparent" disabled={columns.length === 1} onClick={() => removeColumn(i)} /></TableCell>
               </TableRow>
             ))}
           </Table>
           <Button icon="add" design="Transparent" onClick={addColumn} style={{ alignSelf: "flex-start" }}>Add column</Button>
         </FlexBox>
-      </ObjectPageSection>
-
-      <ObjectPageSection id="data" titleText="Data">
-        {kind === "manual" ? (
-          <FlexBox direction="Column" style={{ gap: "0.75rem", padding: "0.5rem 0" }}>
-            <Table
-              headerRow={<TableHeaderRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}<TableHeaderCell /></TableHeaderRow>}
-              noDataText="No rows yet — add one"
-              onMove={moveRow}
-              onMoveOver={onMoveOver}
-            >
-              {rows.map((r, i) => (
-                <TableRow key={i} movable data-i={i}>
-                  {columns.map((c) => (
-                    <TableCell key={c}><Input value={String(r[c] ?? "")} onInput={(e) => setCell(i, c, e.target.value)} /></TableCell>
-                  ))}
-                  <TableCell><Button icon="delete" design="Transparent" onClick={() => removeRow(i)} /></TableCell>
-                </TableRow>
-              ))}
-            </Table>
-            <Button icon="add" design="Transparent" onClick={addRow} style={{ alignSelf: "flex-start" }}>Add row</Button>
-          </FlexBox>
-        ) : (
-          <FlexBox direction="Column" style={{ gap: "0.6rem", padding: "0.5rem 0", maxWidth: 640 }}>
-            <Label>Source</Label>
-            <Input value={source} onInput={(e) => setSource(e.target.value)} />
-            <Label>GET path (OData)</Label>
-            <Input
-              placeholder="/Items?$select=ItemCode,ItemName"
-              value={path}
-              valueState={testErr ? "Negative" : "None"}
-              valueStateMessage={testErr ? <div>{testErr}</div> : undefined}
-              onInput={(e) => { setPath(e.target.value); if (testErr) setTestErr(null); }}
-            />
-            <FlexBox style={{ gap: "0.5rem" }}>
-              <Button onClick={runTest} disabled={testing || !path}>{testing ? "Testing…" : "Test"}</Button>
-              {testErr ? <Button design="Transparent" icon="synchronize" onClick={runTest}>Retry</Button> : null}
-            </FlexBox>
-            {testErr ? <MessageStrip design="Negative" hideCloseButton>{testErr}</MessageStrip> : null}
-            {preview ? (
-              <>
-                <Text style={{ opacity: 0.7 }}>{preview.length} row(s) — first column ({columns[0]}) is the key.</Text>
-                <Table headerRow={<TableHeaderRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableHeaderRow>} noDataText="No rows">
-                  {preview.slice(0, 20).map((r, i) => (
-                    <TableRow key={i}>
-                      {columns.map((c) => <TableCell key={c}><Text maxLines={1}>{String((r as Record<string, unknown>)[c] ?? "")}</Text></TableCell>)}
-                    </TableRow>
-                  ))}
-                </Table>
-              </>
-            ) : null}
-          </FlexBox>
-        )}
       </ObjectPageSection>
     </ObjectPage>
   );

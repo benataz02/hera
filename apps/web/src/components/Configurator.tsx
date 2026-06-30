@@ -6,11 +6,11 @@ import {
   ObjectPage, ObjectPageTitle, ObjectPageSection, Title, Text, Label, Button, Input, Select, Option, CheckBox,
   MessageStrip, BusyIndicator, FlexBox, ObjectStatus, Form, FormGroup, FormItem,
   Table, TableHeaderRow, TableHeaderCell, TableRow, TableCell,
-  Icon, Dialog, SelectDialog, Bar, SuggestionItem, RadioButton, MultiComboBox, MultiComboBoxItem, Popover,
+  Icon, SelectDialog, SuggestionItem, RadioButton, MultiComboBox, MultiComboBoxItem, Popover,
 } from "@ui5/webcomponents-react";
 import type { Model, EngineModel, Assignment, Value, ParamDomain, Domains, FormItem as ModelItem } from "@hera/config-engine";
 import { flatten, initialDomains, propagate, validate, explain, enumerate, evaluate, priceBatches, buildScope, evalExpr, truthy } from "@hera/config-engine";
-import { client, orpc } from "../orpc.ts";
+import { client, orpc, mdResolveKey } from "../orpc.ts";
 
 const STATE: Record<string, "None" | "Information" | "Positive" | "Negative"> = {
   draft: "None", syncing: "Information", synced: "Positive", failed: "Negative",
@@ -82,7 +82,7 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
       const source = (p.domain as Extract<ParamDomain, { kind: "datasource" }>).source;
       const mdId = source.kind === "masterdata" ? source.masterdataId : "";
       return {
-        queryKey: ["cfg-md", mdId] as const,
+        queryKey: mdResolveKey(mdId),
         enabled: active && !!mdId,
         staleTime: Infinity,
         gcTime: Infinity,

@@ -336,6 +336,7 @@ async function partC(): Promise<void> {
     const calls: Record<string, unknown> = {};
     const result = { rows: [{ ItemCode: "X" }], count: 1, hasMore: false };
     const sl: SlReadPort = {
+      ensureSession: async () => {},
       metadata: async () => [],
       listEntity: async (entity, opts) => ((calls.list = { entity, opts }), result),
       getEntity: async () => ({}),
@@ -351,6 +352,28 @@ async function partC(): Promise<void> {
     assert.deepEqual(calls.list, { entity: "Items", opts: { top: 5, skip: 0, q: "ac", fields: ["ItemCode"] } }, "list dispatched with params");
     assert.deepEqual(calls.fulfill, { id: "r1", result }, "fulfilled with result");
     assert.equal(calls.fail, undefined, "no fail on success");
+  }
+
+  // dispatch: 'warmup' -> sl.ensureSession() -> fulfill { ok: true } (post-login session pre-warm)
+  {
+    let warmed = false;
+    let fulfilled: { id: string; result: unknown } | undefined;
+    const sl: SlReadPort = {
+      ensureSession: async () => void (warmed = true),
+      metadata: async () => [],
+      listEntity: async () => [],
+      getEntity: async () => ({}),
+      createEntity: async () => ({}),
+      updateEntity: async () => ({ ok: true }),
+      queryRaw: async () => ({ value: [] }),
+    };
+    const cloud: RequestCloudPort = {
+      fulfill: async (i) => void (fulfilled = i),
+      fail: async () => assert.fail("warmup should not fail"),
+    };
+    await processRequest({ id: "w1", kind: "warmup", payload: {} }, sl, cloud);
+    assert.ok(warmed, "warmup calls ensureSession");
+    assert.deepEqual(fulfilled, { id: "w1", result: { ok: true } }, "warmup fulfills ok");
   }
 
   // buildListPath — OData v4 paging + safe $filter construction
@@ -369,6 +392,7 @@ async function partC(): Promise<void> {
   {
     let failed: { id: string; error: string } | undefined;
     const sl: SlReadPort = {
+      ensureSession: async () => {},
       metadata: async () => { throw new Error("boom"); },
       listEntity: async () => [],
       getEntity: async () => ({}),

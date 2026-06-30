@@ -91,6 +91,15 @@ function keyQuoted(e: EnabledEntity): boolean {
 }
 
 export const entitiesRouter = {
+  // Any member: nudge the agent to open a B1 Service Layer session up front (called once after
+  // login) so the first real query doesn't wait out the /Login round-trip. Best-effort — the agent
+  // logs in lazily anyway; if it's offline this throws SERVICE_UNAVAILABLE and the caller ignores it.
+  warmup: userProcedure.handler(async ({ context }) => {
+    await assertAgentReady(context.tenantId);
+    await runRequest(context.tenantId, "warmup", {});
+    return { ok: true };
+  }),
+
   // Admin: ask the agent for the B1 $metadata catalog (entity sets + their field schemas).
   discover: adminProcedure.handler(async ({ context }) => {
     await assertAgentReady(context.tenantId);

@@ -12,7 +12,7 @@ import {
 } from "@ui5/webcomponents-react";
 import type { SideNavigationPropTypes, NavigationLayoutDomRef, NavigationLayoutPropTypes } from "@ui5/webcomponents-react";
 import { authClient } from "../auth-client.ts";
-import { orpc } from "../orpc.ts";
+import { orpc, client } from "../orpc.ts";
 import { apexUrl, currentSlug, hardRedirect, tenantUrl } from "../lib/tenant.ts";
 import { useRef, useState, useEffect } from "react";
 import { getTheme, setTheme } from '@ui5/webcomponents-base/dist/config/Theme.js';
@@ -70,6 +70,10 @@ function AuthedLayout() {
 
   const entities = useQuery(orpc.entities.getEnabled.queryOptions());
   const enabled = entities.data ?? [];
+
+  // Warm the agent's B1 Service Layer session once per app load so the first query/value-help
+  // doesn't wait out the /Login round-trip. Best-effort: ignore failures (e.g. agent offline).
+  useEffect(() => void client.entities.warmup().catch(() => {}), []);
 
   const onSelect: SideNavigationPropTypes["onSelectionChange"] = (e) => {
     const el = e.detail.item as HTMLElement;

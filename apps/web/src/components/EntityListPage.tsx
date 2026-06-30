@@ -82,7 +82,6 @@ export function EntityListPage({ entity }: { entity: string }) {
             showClearOnFB
             search={<Input placeholder="Search" onChange={(e) => setSearch(e.target.value)} />}>
             {/* ponytail: global $filter search only — add per-column FilterGroupItem children here when needed. */}
-            <></>
           </FilterBar>
         </DynamicPageHeader>
       }

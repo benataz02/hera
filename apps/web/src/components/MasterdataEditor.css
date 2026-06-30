@@ -1,0 +1,19 @@
+/* Configuration Master Data editor. */
+
+/* Query "code" field: monospace so the OData path reads like a console.
+   Inline the mono stack — AuthLayout.css's --font-mono is scoped to .auth-root, not global.
+   ponytail: inline rather than promoting the token to :root, to keep this a one-file change. */
+.md-code::part(textarea) {
+  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  font-size: var(--sapFontSmallSize);
+}
+
+/* Inline row delete: reveal only on row hover/focus (Fiori inline-action pattern, mirrors
+   ModelBuilder.css). visibility (not display) keeps the action column from collapsing. */
+.md-row-action {
+  visibility: hidden;
+}
+ui5-table-row:hover .md-row-action,
+ui5-table-row:focus-within .md-row-action {
+  visibility: visible;
+}
