@@ -4,6 +4,7 @@ import { entitiesRouter } from "./routers/entities.ts";
 import { modelsRouter } from "./routers/models.ts";
 import { masterdataRouter } from "./routers/masterdata.ts";
 import { configureRouter } from "./routers/configure.ts";
+import { variantsRouter } from "./routers/variants.ts";
 
 export const router = {
   quote: quoteRouter,
@@ -12,6 +13,7 @@ export const router = {
   models: modelsRouter,
   masterdata: masterdataRouter,
   configure: configureRouter,
+  variants: variantsRouter,
 };
 
 export type AppRouter = typeof router;

@@ -1,0 +1,1 @@
+ALTER TABLE "ui_variant" ADD COLUMN "is_standard" boolean DEFAULT false NOT NULL;

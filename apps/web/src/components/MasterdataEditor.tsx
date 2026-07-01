@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient, skipToken } from "@tanstack/react-query";
 import {
-  ObjectPage, ObjectPageTitle, ObjectPageSection, Button, Input, TextArea, Select, Option, Title, Text, Label,
+  ObjectPage, ObjectPageTitle, ObjectPageSection, DynamicSideContent, Button, Input, TextArea, Select, Option, Title, Text, Label,
   MessageStrip, BusyIndicator, FlexBox, Toolbar, ToolbarButton, ObjectStatus,
   Table, TableHeaderRow, TableHeaderCell, TableRow, TableCell,
 } from "@ui5/webcomponents-react";
@@ -135,19 +135,50 @@ export function MasterdataEditor({ id }: { id: string }) {
         />
       }
     >
-      {/* General + Data merged: identity at top, the definition (rows grid or query console) below. */}
-      <ObjectPageSection id="general" titleText="General">
-        <FlexBox direction="Column" style={{ gap: "1rem", padding: "0.5rem 0" }}>
-          <FlexBox direction="Column" style={{ gap: "0.75rem", maxWidth: 480 }}>
-            <Label>Name</Label>
-            <Input value={name} onInput={(e) => setName(e.target.value)} />
-            <Label>Defined by</Label>
-            <Select value={kind} onChange={(e) => setKind((e.detail.selectedOption.value || "manual") as Kind)}>
-              <Option value="manual">Manual rows</Option>
-              <Option value="query">Query (B1)</Option>
-            </Select>
-          </FlexBox>
+      {/* Data is the task → main content; identity + schema are the inspector rail → side content.
+          A native <div> is the slot root so slot="sideContent" forwards cleanly (per UI5 slot guidance). */}
+      <ObjectPageSection id="definition" titleText="Definition">
+        <DynamicSideContent
+          sideContentVisibility="AlwaysShow"
+          sideContentFallDown="BelowL"
+          sideContent={
+            <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem", padding: "0.5rem 0" }}>
+              <FlexBox direction="Column" style={{ gap: "0.75rem" }}>
+                <Label>Name</Label>
+                <Input value={name} onInput={(e) => setName(e.target.value)} />
+                <Label>Defined by</Label>
+                <Select value={kind} onChange={(e) => setKind((e.detail.selectedOption.value || "manual") as Kind)}>
+                  <Option value="manual">Manual rows</Option>
+                  <Option value="query">Query (B1)</Option>
+                </Select>
+              </FlexBox>
 
+              <FlexBox direction="Column" style={{ gap: "0.75rem" }}>
+                <Title level="H5">Columns</Title>
+                <MessageStrip design="Information" hideCloseButton>
+                  The first column is the key. In a quote, the value help lists every column; the type-ahead shows the first two.
+                </MessageStrip>
+                <Table
+                  alternateRowColors
+                  headerRow={<TableHeaderRow><TableHeaderCell>Column</TableHeaderCell><TableHeaderCell width="4rem" /><TableHeaderCell width="3rem" /></TableHeaderRow>}
+                  noDataText="No columns yet — add one"
+                  onMove={moveColumn}
+                  onMoveOver={onMoveOver}
+                >
+                  {columns.map((c, i) => (
+                    <TableRow key={i} movable data-i={i}>
+                      <TableCell><Input value={c} onInput={(e) => renameColumn(i, e.target.value)} /></TableCell>
+                      <TableCell>{i === 0 ? <ObjectStatus state="Information">key</ObjectStatus> : null}</TableCell>
+                      <TableCell><Button className="md-row-action" icon="delete" design="Transparent" disabled={columns.length === 1} onClick={() => removeColumn(i)} /></TableCell>
+                    </TableRow>
+                  ))}
+                </Table>
+                <Button icon="add" design="Transparent" onClick={addColumn} style={{ alignSelf: "flex-start" }}>Add column</Button>
+              </FlexBox>
+            </div>
+          }
+        >
+        <FlexBox direction="Column" style={{ gap: "1rem", padding: "0.5rem 0" }}>
           {kind === "manual" ? (
             <FlexBox direction="Column" style={{ gap: "0.75rem" }}>
               <Title level="H5">Rows</Title>
@@ -170,7 +201,7 @@ export function MasterdataEditor({ id }: { id: string }) {
               <Button icon="add" design="Transparent" onClick={addRow} style={{ alignSelf: "flex-start" }}>Add row</Button>
             </FlexBox>
           ) : (
-            <FlexBox direction="Column" style={{ gap: "0.6rem", maxWidth: 640 }}>
+            <FlexBox direction="Column" style={{ gap: "0.6rem" }}>
               <Title level="H5">Query</Title>
               <Label>Source</Label>
               <Input value={source} onInput={(e) => setSource(e.target.value)} />
@@ -208,30 +239,7 @@ export function MasterdataEditor({ id }: { id: string }) {
 
           {save.error ? <MessageStrip design="Negative" hideCloseButton>{save.error.message}</MessageStrip> : null}
         </FlexBox>
-      </ObjectPageSection>
-
-      <ObjectPageSection id="columns" titleText="Columns">
-        <FlexBox direction="Column" style={{ gap: "0.75rem", padding: "0.5rem 0" }}>
-          <MessageStrip design="Information" hideCloseButton>
-            The first column is the key. In a quote, the value help lists every column; the type-ahead shows the first two.
-          </MessageStrip>
-          <Table
-            alternateRowColors
-            headerRow={<TableHeaderRow><TableHeaderCell>Column</TableHeaderCell><TableHeaderCell width="4rem" /><TableHeaderCell width="3rem" /></TableHeaderRow>}
-            noDataText="No columns yet — add one"
-            onMove={moveColumn}
-            onMoveOver={onMoveOver}
-          >
-            {columns.map((c, i) => (
-              <TableRow key={i} movable data-i={i}>
-                <TableCell><Input value={c} onInput={(e) => renameColumn(i, e.target.value)} /></TableCell>
-                <TableCell>{i === 0 ? <ObjectStatus state="Information">key</ObjectStatus> : null}</TableCell>
-                <TableCell><Button className="md-row-action" icon="delete" design="Transparent" disabled={columns.length === 1} onClick={() => removeColumn(i)} /></TableCell>
-              </TableRow>
-            ))}
-          </Table>
-          <Button icon="add" design="Transparent" onClick={addColumn} style={{ alignSelf: "flex-start" }}>Add column</Button>
-        </FlexBox>
+        </DynamicSideContent>
       </ObjectPageSection>
     </ObjectPage>
   );

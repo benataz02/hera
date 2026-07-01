@@ -388,6 +388,49 @@ async function partC(): Promise<void> {
     assert.equal(qs.get("$filter"), "contains(ItemCode,'ac''me') or contains(ItemName,'ac''me')", "filter built + escaped safely");
   }
 
+  // buildListPath — saved-view OData: $select (projection + order), $orderby, typed $filter
+  {
+    // $select keeps valid fields in order; bad field dropped.
+    assert.equal(
+      buildListPath("Items", { top: 50, skip: 0, select: ["ItemCode", "bad-name", "ItemName"] }),
+      "/Items?$top=50&$skip=0&$count=true&$select=ItemCode,ItemName",
+      "select projects valid fields in order",
+    );
+
+    // $orderby compiles each field + direction.
+    const ob = new URLSearchParams(
+      buildListPath("Items", { top: 50, skip: 0, orderby: [{ field: "ItemName", dir: "desc" }, { field: "ItemCode", dir: "asc" }] }).split("?")[1],
+    );
+    assert.equal(ob.get("$orderby"), "ItemName desc,ItemCode asc", "orderby compiled with directions");
+
+    // Typed $filter: string quoted+escaped, number/bool/date bare. AND-combined.
+    const tf = new URLSearchParams(
+      buildListPath("Items", {
+        top: 50, skip: 0,
+        filter: [
+          { field: "ItemName", op: "contains", value: "ac'me", type: "Edm.String" },
+          { field: "OnHand", op: "ge", value: 5, type: "Edm.Int32" },
+          { field: "Valid", op: "eq", value: true, type: "Edm.Boolean" },
+          { field: "CreateDate", op: "ge", value: "2020-01-01", type: "Edm.DateTimeOffset" },
+        ],
+      }).split("?")[1],
+    );
+    assert.equal(
+      tf.get("$filter"),
+      "contains(ItemName,'ac''me') and OnHand ge 5 and Valid eq true and CreateDate ge 2020-01-01",
+      "typed filter: string quoted+escaped, number/bool/date bare",
+    );
+
+    // Global search OR-group AND'd (parenthesized) with the per-field conditions.
+    const cb = new URLSearchParams(
+      buildListPath("Items", {
+        top: 50, skip: 0, q: "abc", fields: ["ItemCode", "ItemName"],
+        filter: [{ field: "Valid", op: "eq", value: true, type: "Edm.Boolean" }],
+      }).split("?")[1],
+    );
+    assert.equal(cb.get("$filter"), "(contains(ItemCode,'abc') or contains(ItemName,'abc')) and Valid eq true", "search OR-group AND'd with conditions");
+  }
+
   // dispatch error path: SL throws -> cloud.fail (never fulfill)
   {
     let failed: { id: string; error: string } | undefined;

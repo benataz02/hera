@@ -1,9 +1,10 @@
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { eq, sql } from "drizzle-orm";
-import { db, agentRequest, tenantIntegration, type EnabledEntity, type EntitySchema } from "@hera/db";
+import { db, agentRequest, tenantIntegration, FilterCondZ, type EnabledEntity, type EntitySchema } from "@hera/db";
 import { outboxChannel, requestChannel, waitForNotify } from "@hera/db/listener";
 import { adminProcedure, userProcedure } from "../base.ts";
+import { ensureStandardVariants } from "./variants.ts";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const WAIT_CHUNK_MS = 5_000;
@@ -67,6 +68,8 @@ const PropertyZ = z.object({ name: z.string(), type: z.string(), nullable: z.boo
 const EntitySchemaZ = z.object({ name: z.string(), keys: z.array(z.string()), properties: z.array(PropertyZ) });
 const EnabledEntityZ = EntitySchemaZ.extend({ editable: z.boolean() });
 
+const OrderByZ = z.object({ field: z.string(), dir: z.enum(["asc", "desc"]) });
+
 async function loadEnabled(tenantId: string, name: string): Promise<EnabledEntity> {
   const [row] = await db
     .select({ enabledEntities: tenantIntegration.enabledEntities })
@@ -117,6 +120,9 @@ export const entitiesRouter = {
         .update(tenantIntegration)
         .set({ enabledEntities: input.entities })
         .where(eq(tenantIntegration.tenantId, context.tenantId));
+      for (const e of input.entities) {
+        await ensureStandardVariants(context.tenantId, context.userId, e.name);
+      }
       return { ok: true };
     }),
 
@@ -137,14 +143,34 @@ export const entitiesRouter = {
         top: z.number().int().min(1).max(200).default(100),
         skip: z.number().int().min(0).default(0),
         q: z.string().optional(),
+        // The saved view's OData call. Field names are validated against the schema below — never
+        // trusted raw — and each filter field's Edm type is attached so the agent encodes literals.
+        select: z.array(z.string()).optional(),
+        filter: z.array(FilterCondZ).optional(),
+        orderby: z.array(OrderByZ).optional(),
       }),
     )
     .handler(async ({ input, context }) => {
       const e = await loadEnabled(context.tenantId, input.entity);
-      // Search hits string-typed fields only (contains() is string-only). The server picks the
-      // fields from the schema so the agent never trusts a client-supplied field list.
-      const fields = input.q ? e.properties.filter((p) => /string/i.test(p.type)).map((p) => p.name) : [];
-      return (await runRequest(context.tenantId, "list", { ...input, fields })) as {
+      const propByName = new Map(e.properties.map((p) => [p.name, p]));
+      const assertField = (name: string) => {
+        if (!propByName.has(name)) throw new ORPCError("BAD_REQUEST", { message: `Unknown field '${name}'` });
+      };
+      for (const f of input.select ?? []) assertField(f);
+      for (const o of input.orderby ?? []) assertField(o.field);
+      const filter = (input.filter ?? []).map((c) => {
+        assertField(c.field);
+        return { ...c, type: propByName.get(c.field)!.type };
+      });
+      // Global search hits string-typed fields only (contains() is string-only), and only the
+      // visible (selected) columns — a search must never match on a field the user can't see. The
+      // server derives the field list from the schema (∩ the validated select) so the agent never
+      // trusts a client-supplied one. No explicit select = default view (all columns) = all string fields.
+      const visible = input.select?.length ? new Set(input.select) : null;
+      const fields = input.q
+        ? e.properties.filter((p) => /string/i.test(p.type) && (!visible || visible.has(p.name))).map((p) => p.name)
+        : [];
+      return (await runRequest(context.tenantId, "list", { ...input, fields, filter })) as {
         rows: Record<string, unknown>[];
         count: number | null;
         hasMore: boolean;

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
@@ -6,11 +6,14 @@ import {
   Breadcrumbs, BreadcrumbsItem, Avatar, Bar, FlexBox,
   Form, FormItem, Label, Title, Text, ObjectStatus,
   Table, TableHeaderRow, TableHeaderCell, TableRow, TableCell,
-  Toolbar, ToolbarButton, Button,
+  Button, VariantManagement, VariantItem,
+  Popover, List, ListItemStandard, CheckBox,
   Input, Switch, DatePicker, BusyIndicator, MessageStrip,
 } from "@ui5/webcomponents-react";
+import type { ButtonDomRef } from "@ui5/webcomponents-react";
 import type { EntityProperty, EntitySchema } from "@hera/db";
 import { orpc } from "../orpc.ts";
+import { useVariants, sameDef, truthy, type ObjectVariantDef } from "../variants.ts";
 
 const cell = (v: unknown) => (v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
 const isNumeric = (t: string) => /int|double|decimal|single|byte/i.test(t);
@@ -113,11 +116,29 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
 
+  // Object "views" personalize layout only: which sections/fields show and in what order. The
+  // single-record GET is unchanged. `layout` is the applied view; it drives rendering + dirty marker.
+  const { variants, isAdmin, isLoading: variantsLoading, save: saveVariant, remove: removeVariant } = useVariants("object", entity);
+  const [layout, setLayout] = useState<ObjectVariantDef | null>(null);
+  const [selectedName, setSelectedName] = useState("");
+  const [layoutOpen, setLayoutOpen] = useState(false);
+  const layoutBtn = useRef<ButtonDomRef>(null);
+  const initedFor = useRef<string>("");
+  useEffect(() => {
+    if (!schema || variantsLoading || initedFor.current === entity) return;
+    initedFor.current = entity;
+    const personal = variants.find((v) => v.isDefault && !v.shared && truthy(v.applyAutomatically));
+    const def = personal ?? variants.find((v) => v.isDefault && truthy(v.applyAutomatically));
+    setSelectedName(def?.name ?? "");
+    setLayout(def ? (def.definition as ObjectVariantDef) : null);
+  }, [schema, variantsLoading, entity, variants]);
+
   if (enabled.isPending || rec.isPending) return <BusyIndicator active />;
   if (!schema)
     return <MessageStrip design="Negative" hideCloseButton style={{ margin: "1rem" }}>Entity “{entity}” is not enabled.</MessageStrip>;
   if (rec.error || !rec.data)
     return <MessageStrip design="Negative" hideCloseButton style={{ margin: "1rem" }}>{rec.error?.message ?? "Record not found."}</MessageStrip>;
+  if (!layout) return <BusyIndicator active />;
 
   const record = rec.data;
   const keys = schema.keys;
@@ -140,13 +161,79 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
     }))
     .sort((a, b) => Number(b.rows.length > 0) - Number(a.rows.length > 0));
 
+  // ---- View layout: ordered+visible General fields and which sections show. Missing = visible. ----
+  const fieldNames = new Set(layout.fields.map((f) => f.name));
+  const orderedProps: EntityProperty[] = layout.fields.length
+    ? [
+        ...layout.fields.filter((f) => f.visible).map((f) => schema.properties.find((p) => p.name === f.name)).filter((p): p is EntityProperty => !!p),
+        ...schema.properties.filter((p) => !fieldNames.has(p.name)),
+      ]
+    : schema.properties;
+  const sectionVisible = (id: string) => layout.sections.find((s) => s.id === id)?.visible ?? true;
+  const allSectionIds = ["general", ...collections.map((c) => c.name)];
+
+  const selectedDef = (variants.find((v) => v.name === selectedName)?.definition as ObjectVariantDef | undefined) ?? null;
+  const layoutDirty = !sameDef(layout, selectedDef);
+  const hasChanges = Object.keys(draft).some((k) => draft[k] !== record[k]);
+
+  const applyVariant = (name: string) => {
+    setSelectedName(name);
+    setLayout((variants.find((v) => v.name === name)?.definition as ObjectVariantDef | undefined) ?? null);
+  };
+  const toggleField = (name: string) => {
+    const base = layout.fields.length ? layout.fields : schema.properties.map((p) => ({ name: p.name, visible: true }));
+    setLayout({ ...layout, fields: base.map((f) => (f.name === name ? { ...f, visible: !f.visible } : f)) });
+  };
+  const toggleSection = (id: string) => {
+    const base = layout.sections.length ? layout.sections : allSectionIds.map((sid) => ({ id: sid, visible: true }));
+    const withId = base.some((s) => s.id === id) ? base : [...base, { id, visible: true }];
+    setLayout({ ...layout, sections: withId.map((s) => (s.id === id ? { ...s, visible: !s.visible } : s)) });
+  };
+
   const startEdit = () => { setDraft({ ...record }); setEditing(true); };
   const cancel = () => { setDraft({}); setEditing(false); };
   const save = () =>
     update.mutate(
       { entity, key: recordKey, data: draft },
-      { onSuccess: () => { setEditing(false); rec.refetch(); } },
+      { onSuccess: () => { setEditing(false); setDraft({}); rec.refetch(); } },
     );
+
+  const variantManagement = (
+    <VariantManagement
+      dirtyState={layoutDirty}
+      hideShare={!isAdmin}
+      onSelect={(e) => applyVariant(String(e.detail.selectedVariant.children))}
+      onSaveAs={(e) => {
+        const d = e.detail;
+        const name = String(d.children);
+        saveVariant.mutate(
+          { page: "object", entity, name, definition: layout, shared: truthy(d.global), isDefault: truthy(d.isDefault), applyAutomatically: truthy(d.applyAutomatically) },
+          { onSuccess: () => setSelectedName(name) },
+        );
+      }}
+      onSave={() => {
+        const row = variants.find((v) => v.name === selectedName);
+        if (row) saveVariant.mutate({ id: row.id, page: "object", entity, name: row.name, definition: layout, shared: row.shared, isDefault: row.isDefault, applyAutomatically: truthy(row.applyAutomatically) });
+      }}
+      onSaveManageViews={(e) => {
+        for (const del of e.detail.deletedVariants) {
+          const r = variants.find((v) => v.name === String(del.children));
+          if (r) removeVariant.mutate({ id: r.id });
+        }
+        for (const up of e.detail.updatedVariants) {
+          const prevName = up.prevVariant?.children ? String(up.prevVariant.children) : String(up.children);
+          const r = variants.find((v) => v.name === prevName);
+          if (r && !r.isStandard) saveVariant.mutate({ id: r.id, page: "object", entity, name: String(up.children), definition: r.definition as ObjectVariantDef, shared: truthy(up.global), isDefault: truthy(up.isDefault), applyAutomatically: truthy(up.applyAutomatically) });
+        }
+      }}
+    >
+      {variants.map((v) => (
+        <VariantItem key={v.id} selected={selectedName === v.name} isDefault={v.isDefault} global={v.shared} author={v.author} applyAutomatically={truthy(v.applyAutomatically)} readOnly={!v.canManage || v.isStandard} hideDelete={!v.canManage || v.isStandard}>
+          {v.name}
+        </VariantItem>
+      ))}
+    </VariantManagement>
+  );
 
   const generalSection = (
     <ObjectPageSection id="general" titleText="General" key="general">
@@ -154,7 +241,7 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
         <MessageStrip design="Negative" hideCloseButton style={{ marginBottom: "0.5rem" }}>{update.error.message}</MessageStrip>
       ) : null}
       <Form layout="S1 M1 L2 XL3" labelSpan="S12 M4 L4 XL4">
-        {schema.properties.map((p) => {
+        {orderedProps.map((p) => {
           const isKey = keys.includes(p.name);
           const v = editing ? draft[p.name] : record[p.name];
           return (
@@ -178,7 +265,7 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
     </ObjectPageSection>
   );
 
-  const collectionSections = collections.map(({ name, rows }) => {
+  const collectionSections = collections.filter(({ name }) => sectionVisible(name)).map(({ name, rows }) => {
     // Columns = union of scalar keys across all rows (so no row's fields are missed; nested arrays
     // like LineTaxJurisdictions are non-scalar and excluded), minus columns blank in every row.
     const cols = [...new Set(rows.flatMap((r) => Object.keys(r).filter((k) => isScalar(r[k]))))]
@@ -210,6 +297,7 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
   });
 
   return (
+    <>
     <ObjectPage
       image={<Avatar initials={initials(name ?? title)} fallbackIcon="document" colorScheme={accent(entity)} size="L" />}
       footerArea={
@@ -218,7 +306,8 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
             design="FloatingFooter"
             endContent={
               <>
-                <Button design="Emphasized" disabled={update.isPending} onClick={save}>
+                {/* Marker + Save enablement: Save lights up only when the draft differs (no nav block). */}
+                <Button design="Emphasized" disabled={update.isPending || !hasChanges} onClick={save}>
                   {update.isPending ? "Saving…" : "Save"}
                 </Button>
                 <Button design="Transparent" disabled={update.isPending} onClick={cancel}>Cancel</Button>
@@ -238,14 +327,14 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
               <BreadcrumbsItem>{title}</BreadcrumbsItem>
             </Breadcrumbs>
           }
-          header={<Title>{title}</Title>}
+          header={<Title>{title}{editing && hasChanges ? " *" : ""}</Title>}
           subHeader={<Label>{subtitle}</Label>}
           actionsBar={
-            !editing && schema.editable ? (
-              <Toolbar design="Transparent">
-                <ToolbarButton design="Emphasized" icon="edit" text="Edit" onClick={startEdit} />
-              </Toolbar>
-            ) : undefined
+            <FlexBox alignItems="Center" style={{ gap: "0.5rem" }}>
+              {variantManagement}
+              <Button ref={layoutBtn} icon="action-settings" design="Transparent" onClick={() => setLayoutOpen((o) => !o)}>Layout</Button>
+              {!editing && schema.editable ? <Button design="Emphasized" icon="edit" onClick={startEdit}>Edit</Button> : null}
+            </FlexBox>
           }
         />
       }
@@ -264,7 +353,27 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
         ) : undefined
       }
     >
-      {[generalSection, ...collectionSections]}
+      {[...(sectionVisible("general") ? [generalSection] : []), ...collectionSections]}
     </ObjectPage>
+    <Popover open={layoutOpen} opener={layoutBtn.current ?? undefined} onClose={() => setLayoutOpen(false)} placement="Bottom" headerText="Layout">
+      <List headerText="Sections">
+        {allSectionIds.map((id) => (
+          <ListItemStandard key={id}>
+            <CheckBox text={id === "general" ? "General" : humanize(id)} checked={sectionVisible(id)} onChange={() => toggleSection(id)} />
+          </ListItemStandard>
+        ))}
+      </List>
+      <List headerText="General fields">
+        {schema.properties.map((p) => {
+          const f = layout.fields.find((x) => x.name === p.name);
+          return (
+            <ListItemStandard key={p.name}>
+              <CheckBox text={humanize(p.name)} checked={f ? f.visible : true} onChange={() => toggleField(p.name)} />
+            </ListItemStandard>
+          );
+        })}
+      </List>
+    </Popover>
+    </>
   );
 }

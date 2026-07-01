@@ -65,21 +65,73 @@ export function parseEdmx(xml: string): EntitySchema[] {
   return out;
 }
 
-// Build the OData v4 query path for a paged, optionally-filtered entity list. Pure (no I/O) so it
-// has a network-free self-check in scripts/e2e.ts --unit. The search term is a user trust boundary:
-// escape single quotes ('->'') and URL-encode; only keep schema field names matching the ident RE.
-export function buildListPath(
-  entity: string,
-  opts: { top: number; skip: number; q?: string; fields?: string[] },
-): string {
+// A saved view IS this OData call. The structured spec arrives from the cloud (server-validated
+// against the entity schema); here we compile + escape it. `type` is the Edm type of the field
+// (attached server-side) so values are encoded right: numbers/bools/dates bare, everything else
+// a quoted string.
+export type FilterOp = "eq" | "ne" | "contains" | "startswith" | "gt" | "ge" | "lt" | "le";
+export type FilterClause = { field: string; op: FilterOp; value: string | number | boolean; type?: string };
+export interface ListQuery {
+  top: number;
+  skip: number;
+  q?: string;
+  fields?: string[];
+  select?: string[];
+  filter?: FilterClause[];
+  orderby?: { field: string; dir: "asc" | "desc" }[];
+}
+
+const IDENT = /^[A-Za-z0-9_]+$/;
+
+// OData literal for a comparison value. Quote strings (with '->'' escaping); leave numbers, booleans
+// and datetimes bare — B1 v2 OData datetime literals are unquoted ISO.
+function odataLiteral(value: string | number | boolean, type?: string): string {
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return String(value);
+  if (type && /bool/i.test(type)) return value === "true" ? "true" : "false";
+  if (type && /(int|double|decimal|single|byte)/i.test(type)) return String(Number(value));
+  if (type && /(date|time)/i.test(type)) return String(value);
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function clauseOf(c: FilterClause): string | null {
+  if (!IDENT.test(c.field)) return null; // defense-in-depth; server already validated against schema
+  if (c.op === "contains" || c.op === "startswith") {
+    return `${c.op}(${c.field},'${String(c.value).replace(/'/g, "''")}')`;
+  }
+  if (["eq", "ne", "gt", "ge", "lt", "le"].includes(c.op)) {
+    return `${c.field} ${c.op} ${odataLiteral(c.value, c.type)}`;
+  }
+  return null;
+}
+
+// Build the OData v4 query path for a paged, filtered, projected, sorted entity list. Pure (no I/O)
+// so it has a network-free self-check in scripts/e2e.ts --unit.
+export function buildListPath(entity: string, opts: ListQuery): string {
   const params = [`$top=${opts.top}`, `$skip=${opts.skip}`, "$count=true"];
+
+  // $filter = the global-search OR-group AND'd with the per-field conditions.
+  let qOr = "";
   if (opts.q && opts.fields?.length) {
     const term = opts.q.replace(/'/g, "''");
-    const clauses = opts.fields
-      .filter((f) => /^[A-Za-z0-9_]+$/.test(f))
-      .map((f) => `contains(${f},'${term}')`);
-    if (clauses.length) params.push(`$filter=${encodeURIComponent(clauses.join(" or "))}`);
+    const ors = opts.fields.filter((f) => IDENT.test(f)).map((f) => `contains(${f},'${term}')`);
+    if (ors.length) qOr = ors.join(" or ");
   }
+  const conds = (opts.filter ?? []).map(clauseOf).filter((c): c is string => c != null);
+  let filterStr = "";
+  if (qOr && conds.length) filterStr = [`(${qOr})`, ...conds].join(" and ");
+  else if (qOr) filterStr = qOr;
+  else if (conds.length) filterStr = conds.join(" and ");
+  if (filterStr) params.push(`$filter=${encodeURIComponent(filterStr)}`);
+
+  const select = (opts.select ?? []).filter((f) => IDENT.test(f));
+  if (select.length) params.push(`$select=${select.join(",")}`);
+
+  const orderby = (opts.orderby ?? [])
+    .filter((o) => IDENT.test(o.field))
+    .map((o) => `${o.field} ${o.dir === "desc" ? "desc" : "asc"}`);
+  if (orderby.length) params.push(`$orderby=${encodeURIComponent(orderby.join(","))}`);
+
   return `/${entity}?${params.join("&")}`;
 }
 
@@ -217,12 +269,12 @@ export class ServiceLayerClient {
   /** List a page of an entity set with the inline total. OData v4 server pagination (maxpagesize=100). */
   async listEntity(
     entity: string,
-    opts: { top: number; skip?: number; q?: string; fields?: string[] },
+    opts: Omit<ListQuery, "skip"> & { skip?: number },
   ): Promise<{ rows: Record<string, unknown>[]; count: number | null; hasMore: boolean }> {
     this.assertEntity(entity);
     const res = await this.request(
       "GET",
-      buildListPath(entity, { top: opts.top, skip: opts.skip ?? 0, q: opts.q, fields: opts.fields }),
+      buildListPath(entity, { ...opts, skip: opts.skip ?? 0 }),
       undefined,
       { Prefer: "odata.maxpagesize=100" },
     );

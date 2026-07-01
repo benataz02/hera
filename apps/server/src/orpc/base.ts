@@ -38,7 +38,7 @@ export const userProcedure = base.use(requireSession).use(async ({ context, next
     .where(and(eq(organization.slug, slug), eq(member.userId, context.user.id)))
     .limit(1);
   if (!row) throw new ORPCError("FORBIDDEN", { message: "Not a member of this workspace" });
-  return next({ context: { tenantId: row.tenantId, role: row.role } });
+  return next({ context: { tenantId: row.tenantId, role: row.role, userId: context.user.id } });
 });
 
 /** Like userProcedure, but only org admins/owners — gates the entity-config panel. */
