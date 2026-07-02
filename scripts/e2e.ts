@@ -354,7 +354,7 @@ async function partC(): Promise<void> {
     assert.equal(calls.fail, undefined, "no fail on success");
   }
 
-  // dispatch: 'warmup' -> sl.ensureSession() -> fulfill { ok: true } (post-login session pre-warm)
+  // dispatch: 'login' -> sl.ensureSession() -> fulfill { ok: true } (post-sign-in session pre-warm)
   {
     let warmed = false;
     let fulfilled: { id: string; result: unknown } | undefined;
@@ -369,11 +369,11 @@ async function partC(): Promise<void> {
     };
     const cloud: RequestCloudPort = {
       fulfill: async (i) => void (fulfilled = i),
-      fail: async () => assert.fail("warmup should not fail"),
+      fail: async () => assert.fail("login should not fail"),
     };
-    await processRequest({ id: "w1", kind: "warmup", payload: {} }, sl, cloud);
-    assert.ok(warmed, "warmup calls ensureSession");
-    assert.deepEqual(fulfilled, { id: "w1", result: { ok: true } }, "warmup fulfills ok");
+    await processRequest({ id: "w1", kind: "login", payload: {} }, sl, cloud);
+    assert.ok(warmed, "login calls ensureSession");
+    assert.deepEqual(fulfilled, { id: "w1", result: { ok: true } }, "login fulfills ok");
   }
 
   // buildListPath — OData v4 paging + safe $filter construction

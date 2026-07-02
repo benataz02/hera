@@ -70,20 +70,6 @@ function statusFacets(schema: EntitySchema, record: Record<string, unknown>) {
   return facets;
 }
 
-// Stable per-entity avatar colour so a record type stays visually recognisable across pages.
-const ACCENTS = [
-  "Accent1", "Accent2", "Accent3", "Accent4", "Accent5",
-  "Accent6", "Accent7", "Accent8", "Accent9", "Accent10",
-] as const;
-const accent = (s: string) => ACCENTS[[...s].reduce((a, c) => a + c.charCodeAt(0), 0) % ACCENTS.length];
-
-// Up to two alphabetic initials from the title; undefined -> Avatar shows its fallback icon.
-function initials(title: string): string | undefined {
-  const words = title.match(/[A-Za-z]+/g);
-  if (!words) return undefined;
-  return words.slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || undefined;
-}
-
 // ponytail: mirrors EntityForm.tsx's Edm->control switch (~10 lines). Extract a shared
 // `entityField` helper if a third form ever needs it (rule of three).
 function EditField({ p, value, locked, onChange }: {
@@ -299,7 +285,6 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
   return (
     <>
     <ObjectPage
-      image={<Avatar initials={initials(name ?? title)} fallbackIcon="document" colorScheme={accent(entity)} size="L" />}
       footerArea={
         editing ? (
           <Bar

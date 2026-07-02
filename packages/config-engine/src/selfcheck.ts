@@ -128,6 +128,7 @@ export function runFormulaSelfCheck(): void {
   const M = flatten(m);
   assert.deepEqual(M.formulas.map((f) => f.name), ["unit", "lineTotal", "total"], "library reordered before item formula");
   assert.equal(evaluate(M, { qty: 20 }).values.total, 100, "item formula reads library: 5 * 20");
+  assert.equal(evaluate(M, { qty: 20, total: 999 }).values.total, 999, "a manual override wins over the formula");
   assert.deepEqual(lintModel(m), [], "valid model with a formula library lints clean");
 
   // lint rejects a cyclic library and a formula name colliding with an item name.

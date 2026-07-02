@@ -26,6 +26,7 @@ const helpers: Record<string, unknown> = {
 export function buildScope(model: EngineModel, assignment: Assignment): Record<string, unknown> {
   const scope: Record<string, unknown> = { ...assignment, ...helpers };
   for (const f of model.formulas) {
+    if (f.name in assignment) continue; // a manual override (see Configurator) wins over the formula
     try {
       scope[f.name] = evalExpr(f.expr, scope);
     } catch {

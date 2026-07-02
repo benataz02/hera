@@ -10,7 +10,7 @@ import {
 import type { Model, FormSection, FormGroup, FormItem, DataSource, InputType, Value, PredefinedFormula, EngineModel, Rule, GuidedRule, GuidedCond } from "@hera/config-engine";
 import { flatten, enumerate, lintModel, compileGuided, idsIn, compile } from "@hera/config-engine";
 import { orpc } from "../orpc.ts";
-import { uid, blankModel, blankSection, blankGroup, blankItem, blankFormula, allItems, trailingToken, applyExprPick, keyOf, parseKey, locateIssue, type Key, type Issue } from "../lib/model.ts";
+import { uid, blankModel, blankSection, blankGroup, blankItem, blankFormula, allItems, trailingToken, applyExprPick, keyOf, parseKey, locateIssue, mdVarName, type Key, type Issue } from "../lib/model.ts";
 import { ModelRuntime } from "./Configurator.tsx";
 import "./ModelBuilder.css";
 
@@ -72,18 +72,25 @@ export function ModelBuilder({ id }: { id: string }) {
   const em = useMemo<EngineModel>(() => flatten(model), [model]);
 
   // Everything referenceable from an expression: predefined formulas + every field (manual input)
-  // + every item-derived formula. Drives the SuggestionItem autocomplete in every expression input.
-  const suggestions = useMemo<Suggest[]>(
-    () => [
+  // + every item-derived formula + each master-data field's non-key columns (exposed at runtime as
+  // `field_column`, see Configurator/deriveMdCols). Drives the SuggestionItem autocomplete everywhere.
+  const suggestions = useMemo<Suggest[]>(() => {
+    const cols = new Map((masterdata.data ?? []).map((m) => [m.id, m.columns]));
+    return [
       ...(model.formulas ?? []).map((f) => ({ name: f.name, detail: f.expr || "formula" })),
-      ...allItems(model).map((it) =>
-        it.input.value.kind === "formula"
-          ? { name: it.name, detail: (it.input.value as { expr: string }).expr || "formula" }
-          : { name: it.name, detail: `field · ${it.input.inputType}` },
-      ),
-    ],
-    [model],
-  );
+      ...allItems(model).flatMap((it) => {
+        const self =
+          it.input.value.kind === "formula"
+            ? { name: it.name, detail: (it.input.value as { expr: string }).expr || "formula" }
+            : { name: it.name, detail: `field · ${it.input.inputType}` };
+        const ds = it.input.dataSource;
+        if (ds.kind !== "masterdata") return [self];
+        // columns[0] is the key (== the field itself); expose only the non-key columns.
+        const mdCols = (cols.get(ds.masterdataId) ?? []).slice(1);
+        return [self, ...mdCols.map((c) => ({ name: mdVarName(it.name, c), detail: `${it.label} · ${c}` }))];
+      }),
+    ];
+  }, [model, masterdata.data]);
 
   const errors = useMemo(() => lintModel(model), [model]);
   const preview = useMemo(() => {
@@ -540,6 +547,7 @@ function ExprInput({ value, onChange, suggestions, placeholder, style, valueStat
   const token = trailingToken(value).toLowerCase();
   const matches = suggestions.filter((f) => f.name.toLowerCase().includes(token));
   const names = new Set(suggestions.map((f) => f.name));
+  const apply = (raw: string) => onChange(applyExprPick(value, raw, names));
   return (
     <Input
       value={value}
@@ -549,7 +557,16 @@ function ExprInput({ value, onChange, suggestions, placeholder, style, valueStat
       valueStateMessage={valueStateMessage ? <div>{valueStateMessage}</div> : undefined}
       showSuggestions
       filter="None"
-      onInput={(e) => onChange(applyExprPick(value, e.target.value, names))}
+      // noTypeahead: typeahead auto-commits the FIRST match to the value (firing onInput) before the
+      // user picks. A master-data column var (`field_column`) is shadowed by its own field name
+      // (`field`, a proper prefix), so typeahead would save the field instead of the column. Without it
+      // onInput fires only on real typing / an explicit pick — the contract applyExprPick expects.
+      noTypeahead
+      onInput={(e) => apply(e.target.value)}
+      // A mouse pick fires `change` (+ `selection-change`), NOT `input`, so onInput alone leaves the
+      // pick visual-only and the controlled value reverts. onChange catches the accept (mouse + Enter);
+      // applyExprPick is idempotent, so the double-fire on Enter / blur is harmless.
+      onChange={(e) => apply(e.target.value)}
     >
       {matches.map((f) => (
         <SuggestionItem key={f.name} text={f.name} additionalText={f.detail} />
@@ -636,7 +653,7 @@ function ItemDialog({
   item, masterdata, suggestions, onClose, onChange,
 }: {
   item: FormItem;
-  masterdata: { id: string; name: string; kind: string }[];
+  masterdata: { id: string; name: string; kind: string; columns: string[] }[];
   suggestions: Suggest[];
   onClose: () => void;
   onChange: (fn: (it: FormItem) => FormItem) => void;
@@ -685,17 +702,18 @@ function ItemDialog({
               ))}
             </Select>
 
-            <Label>Data source</Label>
+            <Label>Master data (options origin)</Label>
             <Select
-              value={ds.kind}
+              value={ds.kind === "masterdata" ? ds.masterdataId : ""}
               onChange={(e) => {
-                const k = e.detail.selectedOption.value;
-                if (k === "normal") setDs({ kind: "normal" });
-                else setDs({ kind: "masterdata", masterdataId: masterdata[0]?.id ?? "" });
+                const id = e.detail.selectedOption.value ?? "";
+                setDs(id ? { kind: "masterdata", masterdataId: id } : { kind: "normal" });
               }}
             >
-              <Option value="normal">Normal</Option>
-              <Option value="masterdata">Master data</Option>
+              <Option value="">None (manual options)</Option>
+              {masterdata.map((m) => (
+                <Option key={m.id} value={m.id}>{m.name}</Option>
+              ))}
             </Select>
 
             {ds.kind === "normal" ? (
@@ -704,15 +722,7 @@ function ItemDialog({
                 <Input value={joinValues(ds.values)} onInput={(e) => setDs({ kind: "normal", values: parseValues(e.target.value) })} />
               </>
             ) : (
-              <>
-                <Label>Master data</Label>
-                <Select value={ds.masterdataId} onChange={(e) => setDs({ kind: "masterdata", masterdataId: e.detail.selectedOption.value ?? "" })}>
-                  {masterdata.map((m) => (
-                    <Option key={m.id} value={m.id}>{m.name}</Option>
-                  ))}
-                </Select>
-                <Text style={{ opacity: 0.6 }}>Options come from this master data — its first column is the key value.</Text>
-              </>
+              <Text style={{ opacity: 0.6 }}>Options come from this master data — its first column is the key value.</Text>
             )}
 
             <Label>Value</Label>

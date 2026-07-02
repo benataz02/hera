@@ -1,4 +1,4 @@
-import type { Model, FormSection, FormGroup, FormItem, PredefinedFormula } from "@hera/config-engine";
+import type { Model, FormSection, FormGroup, FormItem, PredefinedFormula, Value, Assignment } from "@hera/config-engine";
 
 // Short ids for builder nodes (client-only; the engine keys on item `name`, not `id`).
 export const uid = (): string => Math.random().toString(36).slice(2, 10);
@@ -69,6 +69,37 @@ export const applyExprPick = (value: string, next: string, names: Set<string>): 
   return base && names.has(next) ? base + next : next;
 };
 
+// --- master-data column variables -----------------------------------------------------------------
+// A master-data field pick exposes its row's non-key columns as extra scope variables named
+// `field_column`, referenceable from any expression. Flat identifier (not `field.column`) so it
+// flows through idsIn/trailingToken/applyExprPick/suggestions unchanged. Columns are author/OData
+// names, so sanitize anything but [A-Za-z0-9_] to keep a parseable identifier.
+export const mdVarName = (field: string, col: string): string => `${field}_${col.replace(/[^A-Za-z0-9_]/g, "_")}`;
+
+// Derive the `field_column` variables for the current picks: match each master-data field's picked
+// row by its key column (columns[0]) and project the non-key columns. Fields with no pick / no match
+// are skipped. Caller spreads real picks AFTER these so a derived name can never shadow a real field.
+export const deriveMdCols = (
+  fields: string[],
+  md: Record<string, { columns: string[]; rows: Record<string, Value>[] }>,
+  a: Assignment,
+): Assignment => {
+  const out: Assignment = {};
+  for (const f of fields) {
+    const data = md[f];
+    const pick = a[f];
+    const keyCol = data?.columns[0];
+    if (!data || pick === undefined || !keyCol) continue;
+    const row = data.rows.find((r) => String(r[keyCol]) === String(pick));
+    if (!row) continue;
+    for (const col of data.columns.slice(1)) {
+      const v = row[col];
+      if (v !== undefined) out[mdVarName(f, col)] = v;
+    }
+  }
+  return out;
+};
+
 if (import.meta.main) {
   const ok = (c: boolean, m: string) => { if (!c) throw new Error(m); };
   const names = new Set(["areaM2", "unit"]);
@@ -90,6 +121,26 @@ if (import.meta.main) {
   ok(at(["definition", "sections", 0, "label"])?.key === "s:S", "section path → section key");
   ok(at(["definition", "sections", 0, "groups", 0, "items", 9])?.key === "g:S:G", "out-of-range item falls back to group");
   ok(at(["definition", "name"]) === null, "non-row path → null");
+
+  // mdVarName: field-prefixed, non-identifier chars sanitized.
+  ok(mdVarName("material", "Density") === "material_Density", "md var name");
+  ok(mdVarName("material", "Unit Price") === "material_Unit_Price", "md var name sanitized");
+
+  // deriveMdCols: matches the picked row by its key column, projects only non-key columns.
+  const md = {
+    material: {
+      columns: ["Code", "Density", "Unit Price"],
+      rows: [
+        { Code: "AL", Density: 2.7, "Unit Price": 3 },
+        { Code: "FE", Density: 7.8, "Unit Price": 1 },
+      ],
+    },
+  };
+  const cols = deriveMdCols(["material"], md, { material: "FE" });
+  ok(cols["material_Density"] === 7.8 && cols["material_Unit_Price"] === 1, "derive matched non-key columns");
+  ok(!("material_Code" in cols), "key column not re-exposed");
+  ok(Object.keys(deriveMdCols(["material"], md, {})).length === 0, "no pick → no vars");
+  ok(Object.keys(deriveMdCols(["material"], md, { material: "XX" })).length === 0, "unmatched pick → no vars");
 
   console.log("model lib self-check: OK");
 }

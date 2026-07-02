@@ -32,7 +32,7 @@ const odataRows = (result: unknown): Record<string, unknown>[] => {
 export const masterdataRouter = {
   list: userProcedure.handler(async ({ context }) =>
     db
-      .select({ id: configMasterdata.id, name: configMasterdata.name, kind: configMasterdata.kind })
+      .select({ id: configMasterdata.id, name: configMasterdata.name, kind: configMasterdata.kind, columns: configMasterdata.columns })
       .from(configMasterdata)
       .where(eq(configMasterdata.tenantId, context.tenantId)),
   ),

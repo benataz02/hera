@@ -132,8 +132,8 @@ export async function processRequest(req: RequestRow, sl: SlReadPort, cloud: Req
       case "query":
         result = await sl.queryRaw(String(p.path));
         break;
-      case "warmup":
-        // Pre-establish the B1 session after the user logs in; no payload, side-effect only.
+      case "login":
+        // Pre-establish the B1 session after the user signs in; no payload, side-effect only.
         await sl.ensureSession();
         result = { ok: true };
         break;

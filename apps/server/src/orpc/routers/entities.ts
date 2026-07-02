@@ -94,13 +94,18 @@ function keyQuoted(e: EnabledEntity): boolean {
 }
 
 export const entitiesRouter = {
-  // Any member: nudge the agent to open a B1 Service Layer session up front (called once after
-  // login) so the first real query doesn't wait out the /Login round-trip. Best-effort — the agent
-  // logs in lazily anyway; if it's offline this throws SERVICE_UNAVAILABLE and the caller ignores it.
-  warmup: userProcedure.handler(async ({ context }) => {
-    await assertAgentReady(context.tenantId);
-    await runRequest(context.tenantId, "warmup", {});
-    return { ok: true };
+  // Any member: open the agent's B1 Service Layer session up front (once, after sign-in) so the
+  // first real query skips the /Login round-trip. Fire-and-forget: the agent logs in lazily anyway,
+  // so a failed pre-warm (agent offline, B1 down) returns { ok: false } instead of a 5xx that would
+  // paint a bogus error in the browser console.
+  login: userProcedure.handler(async ({ context }) => {
+    try {
+      await assertAgentReady(context.tenantId);
+      await runRequest(context.tenantId, "login", {});
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
   }),
 
   // Admin: ask the agent for the B1 $metadata catalog (entity sets + their field schemas).
@@ -140,7 +145,7 @@ export const entitiesRouter = {
     .input(
       z.object({
         entity: z.string(),
-        top: z.number().int().min(1).max(200).default(100),
+        top: z.number().int().min(1).max(1000).default(100),
         skip: z.number().int().min(0).default(0),
         q: z.string().optional(),
         // The saved view's OData call. Field names are validated against the schema below — never

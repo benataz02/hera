@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
@@ -65,7 +65,7 @@ export function EntityListPage({ entity }: { entity: string }) {
     orpc.entities.list.infiniteOptions({
       input: (skip: number) => ({
         entity,
-        top: 100,
+        top: 501,
         skip,
         q: liveSpec?.search || undefined,
         // Always project: $select drops B1's navigation collections (the real payload bloat), so the
@@ -210,8 +210,6 @@ export function EntityListPage({ entity }: { entity: string }) {
     </VariantManagement>
   );
 
-  console.log(list.hasNextPage);
-
   // One FilterGroupItem per field. String/key fields are shown in the bar; the rest live in the
   // "Adapt Filters" dialog (hiddenInFilterBar) so the bar isn't a wall of inputs.
   const filterItems = allProps.map((p) => {
@@ -267,7 +265,16 @@ export function EntityListPage({ entity }: { entity: string }) {
   return (
     <DynamicPage
       hidePinButton
-      titleArea={<DynamicPageTitle heading={variantManagement} />}
+      // `heading` is unslotted when the page snaps (UI5 swaps to the `snappedHeading` slot), so feed
+      // both to keep VariantManagement visible after the filter header collapses. Inline vars trim the
+      // title padding (0.5rem→0.25rem). // ponytail: private theme vars, revisit if they get renamed.
+      titleArea={
+        <DynamicPageTitle
+          heading={variantManagement}
+          snappedHeading={variantManagement}
+          style={{ "--_ui5_dynamic_page_title_padding_top": "0.25rem", "--_ui5_dynamic_page_title_padding_bottom": "0.25rem" } as CSSProperties}
+        />
+      }
       headerArea={
         <DynamicPageHeader>
           <FilterBar

@@ -8,9 +8,10 @@ import {
   Table, TableHeaderRow, TableHeaderCell, TableRow, TableCell,
   Icon, SelectDialog, SuggestionItem, RadioButton, MultiComboBox, MultiComboBoxItem, Popover,
 } from "@ui5/webcomponents-react";
-import type { Model, EngineModel, Assignment, Value, ParamDomain, Domains, FormItem as ModelItem } from "@hera/config-engine";
+import type { Model, EngineModel, Assignment, Value, Domains, FormItem as ModelItem } from "@hera/config-engine";
 import { flatten, initialDomains, propagate, validate, explain, enumerate, evaluate, priceBatches, buildScope, evalExpr, truthy } from "@hera/config-engine";
 import { client, orpc, mdResolveKey } from "../orpc.ts";
+import { deriveMdCols, allItems } from "../lib/model.ts";
 
 const STATE: Record<string, "None" | "Information" | "Positive" | "Negative"> = {
   draft: "None", syncing: "Information", synced: "Positive", failed: "Negative",
@@ -72,37 +73,43 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
   const em = useMemo<EngineModel>(() => flatten(model), [model]);
   const canCreate = !!allowCreate && !!modelId;
 
-  // One query per master-data data source: per-field loading, error, and retry, with failures surfaced
-  // (not swallowed). Cached with staleTime: Infinity — a master data (incl. a B1 query) is fetched once
-  // per session and reused; the retry icon is the only manual refresh. `active` gates the fetch so a
-  // hidden preview pane never calls the agent. ponytail: filter-by-current-picks not applied yet.
-  const dsParams = em.parameters.filter((p) => p.domain.kind === "datasource");
+  // One query per master-data field: per-field loading, error, and retry, with failures surfaced (not
+  // swallowed). Cached with staleTime: Infinity — a master data (incl. a B1 query) is fetched once per
+  // session and reused; the retry icon is the only manual refresh. `active` gates the fetch so a hidden
+  // preview pane never calls the agent. Built from the raw items (not em.parameters) so a formula-valued
+  // field keeps its value help too — the formula is just its default. ponytail: filter-by-current-picks not applied yet.
+  const mdFields = allItems(model).flatMap((it) =>
+    it.input.dataSource.kind === "masterdata" ? [{ name: it.name, masterdataId: it.input.dataSource.masterdataId }] : [],
+  );
   const dsQueries = useQueries({
-    queries: dsParams.map((p) => {
-      const source = (p.domain as Extract<ParamDomain, { kind: "datasource" }>).source;
-      const mdId = source.kind === "masterdata" ? source.masterdataId : "";
-      return {
-        queryKey: mdResolveKey(mdId),
-        enabled: active && !!mdId,
-        staleTime: Infinity,
-        gcTime: Infinity,
-        queryFn: (): Promise<MdData> => client.masterdata.resolve({ id: mdId }),
-      };
-    }),
+    queries: mdFields.map((f) => ({
+      queryKey: mdResolveKey(f.masterdataId),
+      enabled: active && !!f.masterdataId,
+      staleTime: Infinity,
+      gcTime: Infinity,
+      queryFn: (): Promise<MdData> => client.masterdata.resolve({ id: f.masterdataId }),
+    })),
   });
   // resolved[name] = the key-column values (engine contract: Value[]); mdByParam[name] = full rows for display.
   const resolved: Record<string, Value[]> = {};
   const mdByParam: Record<string, MdData> = {};
   const dsState: Record<string, DsState> = {};
-  dsParams.forEach((p, i) => {
+  mdFields.forEach((f, i) => {
     const q = dsQueries[i]!;
     if (q.data) {
-      mdByParam[p.name] = q.data;
+      mdByParam[f.name] = q.data;
       const key = q.data.columns[0];
-      resolved[p.name] = key ? q.data.rows.map((r) => r[key]!).filter((v) => v != null) : [];
+      resolved[f.name] = key ? q.data.rows.map((r) => r[key]!).filter((v) => v != null) : [];
     }
-    dsState[p.name] = { loading: q.isFetching, error: q.isError, message: (q.error as Error | null)?.message, retry: () => void q.refetch() };
+    dsState[f.name] = { loading: q.isFetching, error: q.isError, message: (q.error as Error | null)?.message, retry: () => void q.refetch() };
   });
+
+  // Fold a master-data pick's non-key columns into the assignment as `field_column` scope variables
+  // (see lib/model deriveMdCols). Real picks spread LAST so a derived name can never shadow a field.
+  // Applied only where an assignment is evaluated/validated/priced/submitted — NOT to propagate/
+  // enumerate (they read declared parameters only, so these extra keys would be inert there anyway).
+  const dsNames = mdFields.map((f) => f.name);
+  const withCols = (a: Assignment): Assignment => ({ ...deriveMdCols(dsNames, mdByParam, a), ...a });
 
   const [assignment, setAssignment] = useState<Assignment>({});
   const [batchesStr, setBatchesStr] = useState("");
@@ -126,12 +133,12 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
     const r = propagate(em, base, others);
     optionDomains[p.name] = (r.ok ? r.domains[p.name] : undefined) ?? base[p.name]!;
   }
-  const scope = buildScope(em, assignment);
+  const scope = buildScope(em, withCols(assignment));
   const visible = (expr?: string): boolean => {
     if (!expr) return true;
     try { return truthy(evalExpr(expr, scope)); } catch { return true; }
   };
-  const valid = validate(em, assignment, resolved);
+  const valid = validate(em, withCols(assignment), resolved);
   const batches = parseQtys(batchesStr);
 
   const set = (name: string, v: Value | undefined) =>
@@ -148,7 +155,10 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
     const chosen = solutions.filter((_, i) => picked[i]);
     const ids: string[] = [];
     for (const cfg of chosen) {
-      const q = await createQuote.mutateAsync({ config: { modelId, configuration: cfg, batches, resolved } });
+      // ponytail: derived md columns ride in `configuration` so the server's validate() enforces rules
+      // that reference them. Client values are trusted (same posture as `resolved`); server re-resolving
+      // the master data to recompute them is the upgrade path if that trust ever needs tightening.
+      const q = await createQuote.mutateAsync({ config: { modelId, configuration: withCols(cfg), batches, resolved } });
       ids.push(q.id);
     }
     setCreated(ids);
@@ -191,7 +201,7 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
         </MessageStrip>
       ) : null}
       {valid.ok ? (
-        <Title level="H3">{evaluate(em, assignment).price}</Title>
+        <Title level="H3">{evaluate(em, withCols(assignment)).price}</Title>
       ) : valid.rule ? null : (
         <Text style={{ opacity: 0.6 }}>Complete the required fields to price ({valid.reason}).</Text>
       )}
@@ -201,7 +211,7 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
       </div>
       {valid.ok && batches.length ? (
         <Table style={{ marginTop: "0.5rem" }} headerRow={<TableHeaderRow><TableHeaderCell>Qty</TableHeaderCell><TableHeaderCell>Price</TableHeaderCell><TableHeaderCell>Per piece</TableHeaderCell></TableHeaderRow>}>
-          {priceBatches(em, assignment, batches).map((b) => (
+          {priceBatches(em, withCols(assignment), batches).map((b) => (
             <TableRow key={b.qty}><TableCell><Text>{b.qty}</Text></TableCell><TableCell><Text>{b.price}</Text></TableCell><TableCell><Text>{b.perPiece}</Text></TableCell></TableRow>
           ))}
         </Table>
@@ -219,7 +229,7 @@ export function ModelRuntime({ model, modelId, allowCreate, active = true }: {
           </Button>
         ) : null}
       </FlexBox>
-      {solutions ? <Solutions em={em} solutions={solutions} picked={picked} setPicked={setPicked} /> : null}
+      {solutions ? <Solutions em={em} solutions={solutions} picked={picked} setPicked={setPicked} withCols={withCols} /> : null}
       {canCreate && created.length ? (
         <FlexBox direction="Column" style={{ gap: "0.4rem", marginTop: "1rem" }}>
           <Title level="H5">Created quotes</Title>
@@ -244,7 +254,30 @@ function Field({ item, domain, value, derived, onChange, dsState, md, em, base, 
   onChange: (v: Value | undefined) => void; dsState?: DsState; md?: MdData;
   em: EngineModel; base: Domains; assignment: Assignment;
 }) {
-  if (item.input.value.kind === "formula") return <Text>{derived == null ? "—" : String(derived)}</Text>;
+  // Formula field: the formula is only the DEFAULT — the field keeps its data-source control (value
+  // help / manual options) if one is defined, so a pick can override it. buildScope yields to an
+  // override stored under the field's name, so `derived` already reflects override-or-formula; clearing
+  // the control drops the override and the formula takes over again.
+  if (item.input.value.kind === "formula") {
+    const ds = item.input.dataSource;
+    const shown = derived as Value | undefined;
+    if (ds.kind === "masterdata") {
+      const keyCol = md?.columns[0];
+      const keys = keyCol ? (md!.rows.map((r) => r[keyCol]).filter((v) => v != null) as Value[]) : [];
+      return <ValueHelp label={item.label} columns={md?.columns ?? []} rows={md?.rows ?? []} domain={keys} value={shown} onChange={onChange} state={dsState} />;
+    }
+    if (ds.kind === "normal" && ds.values?.length) {
+      const opts = ds.values;
+      // ponytail: Select regardless of inputType — radio not specialized for a derived field.
+      return (
+        <Select value={shown === undefined ? "" : String(shown)} onChange={(e) => onChange(fromDomain(opts, e.detail.selectedOption.value))}>
+          <Option value="">—</Option>
+          {opts.map((v) => <Option key={String(v)} value={String(v)}>{String(v)}</Option>)}
+        </Select>
+      );
+    }
+    return <Input value={shown == null ? "" : String(shown)} onInput={(e) => onChange(e.target.value === "" ? undefined : num(e.target.value))} />;
+  }
 
   const t = item.input.inputType;
   if (t === "checkbox") return <CheckBox checked={value === true} onChange={(e) => onChange(e.target.checked)} />;
@@ -268,7 +301,7 @@ function Field({ item, domain, value, derived, onChange, dsState, md, em, base, 
     const eliminated = full ? full.filter((v) => !domain.includes(v)) : [];
     const control =
       t === "radio" ? (
-        <FlexBox direction="Column" style={{ gap: "0.1rem" }}>
+        <FlexBox direction="Row" style={{ gap: "0.1rem" }}>
           {domain.map((v) => (
             <RadioButton key={String(v)} name={`radio-${item.name}`} text={String(v)} checked={value !== undefined && String(value) === String(v)} onChange={() => onChange(v)} />
           ))}
@@ -432,8 +465,9 @@ function ValueHelp({ label, columns, rows, domain, value, onChange, state }: {
   );
 }
 
-function Solutions({ em, solutions, picked, setPicked }: {
+function Solutions({ em, solutions, picked, setPicked, withCols }: {
   em: EngineModel; solutions: Assignment[]; picked: Record<number, boolean>; setPicked: (p: Record<number, boolean>) => void;
+  withCols: (a: Assignment) => Assignment;
 }) {
   const cols = em.parameters.filter((p) => p.domain.kind === "static" || p.domain.kind === "datasource").map((p) => p.name);
   if (!solutions.length) return <MessageStrip design="Information" hideCloseButton>No valid configurations for the current inputs.</MessageStrip>;
@@ -451,7 +485,7 @@ function Solutions({ em, solutions, picked, setPicked }: {
         <TableRow key={i}>
           <TableCell><CheckBox checked={!!picked[i]} onChange={(e) => setPicked({ ...picked, [i]: e.target.checked })} /></TableCell>
           {cols.map((c) => <TableCell key={c}><Text>{String(s[c] ?? "")}</Text></TableCell>)}
-          <TableCell><Text>{evaluate(em, s).price}</Text></TableCell>
+          <TableCell><Text>{evaluate(em, withCols(s)).price}</Text></TableCell>
         </TableRow>
       ))}
     </Table>
