@@ -14,33 +14,6 @@ multi-entity autodiscovery, and n8n are explicitly out (see `INITIAL-SPEC.md`,
 Posture is deliberately minimal. Shortcuts are marked with `// ponytail:` comments naming the
 upgrade path; do not "fix" them without a reason that has actually fired.
 
-## Commands
-
-Package manager is **bun** (not npm). Uses **isolated install** — every workspace must list its
-own direct deps; transitive resolution does not work here. Run from repo root unless noted.
-
-```
-docker compose up -d db          # just Postgres (dev: run server/web/agent with bun)
-bun run db:migrate               # apply Drizzle migrations
-bun run db:generate              # generate a new migration from schema changes
-bun run db:studio                # Drizzle Studio
-bun run auth:generate            # regenerate Better Auth Drizzle schema -> packages/db/src/schema/auth.ts
-
-bun run dev:server               # Hono+oRPC+auth on :3000, serves SPA in prod
-bun run dev:web                  # Vite SPA on :5173, proxies /rpc + /api to :3000
-bun run dev:agent                # on-prem pull loop (needs B1_* env)
-
-bun run seed:dev                 # seed dev@hera.test + acme org + agent token (server must be up)
-bun run e2e                      # the one end-to-end self-check (see below)
-bun run build:web                # build SPA into apps/web/dist
-docker compose --profile full up # prod: Postgres + server + Caddy wildcard subdomains
-```
-
-No test framework. Verification is `scripts/e2e.ts` (assert-based). It needs Postgres + a running
-server: `docker compose up -d db && bun run db:migrate && bun run dev:server &` then `bun run e2e`.
-Part A exercises the real cloud loop; Part B runs the agent's delivery decision against a mock B1
-(no sandbox needed). `scripts/live-b1.ts` runs the same path against a real B1 sandbox. Other
-`scripts/*.ts` (`b1-ping`, `make-quote`, `notify-test`, `timing`) are throwaway manual probes.
 
 ## Architecture
 
@@ -50,7 +23,7 @@ Three apps + one shared db package, bun workspaces (`apps/*`, `packages/*`), no 
   a `pg` Pool wrapped by Drizzle (`client.ts`), and `listener.ts`.
 - **`apps/server`** — one Bun process running Hono = Better Auth (`/api/auth/*`) + oRPC (`/rpc/*`) +
   static SPA. Exports `AppRouter` **type** consumed by web and agent for end-to-end typing.
-- **`apps/web`** — Vite SPA, UI5 Web Components (`sap_horizon`), TanStack Router (file-based) +
+- **`apps/web`** — Vite SPA, UI5 Web Components, TanStack Router (file-based) +
   TanStack Query + oRPC client. Same-origin with the API so Better Auth cookies just work.
 - **`apps/agent`** — stateless on-prem pull loop. The **only** thing that talks to SAP B1
   (`ServiceLayerClient` lives here). Dials cloud over outbound HTTPS — no inbound ports, no VPN.

@@ -68,12 +68,6 @@ export function EntityListPage({ entity }: { entity: string }) {
         top: 501,
         skip,
         q: liveSpec?.search || undefined,
-        // Always project: $select drops B1's navigation collections (the real payload bloat), so the
-        // agent fetches only rendered columns. Sorted because $select is a SET — display order lives
-        // in visibleCols, so reordering columns never churns the queryKey. The builder runs eagerly
-        // (even while disabled), so visibleCols tolerates a null liveSpec (falls back to allProps).
-        // ponytail: URL grows with column count; a ~200-field Standard view nears B1's request-URL
-        // limit — pin a curated Standard subset if that ever fires.
         select: [...visibleCols].sort(),
         filter: liveSpec?.filter.length ? liveSpec.filter : undefined,
         orderby: liveSpec?.orderby.length ? liveSpec.orderby : undefined,
