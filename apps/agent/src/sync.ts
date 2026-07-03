@@ -62,6 +62,10 @@ export interface RequestCloudPort {
   fail(input: { id: string; error: string }): Promise<unknown>;
 }
 
+export interface BeasPort {
+  get(path: string): Promise<unknown>;
+}
+
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export async function processItem(item: Item, sl: SlPort, cloud: CloudPort): Promise<void> {
@@ -99,7 +103,12 @@ export async function processItem(item: Item, sl: SlPort, cloud: CloudPort): Pro
 // No GET-before-POST/dedup — that machinery is reserved for the 'quote' write kind.
 // ponytail: generic writes (create/update) are at-least-once-via-user-retry; give an entity a
 //           dedup_key + the ack/nack path if it ever needs the quote kind's exactly-once guarantee.
-export async function processRequest(req: RequestRow, sl: SlReadPort, cloud: RequestCloudPort): Promise<void> {
+export async function processRequest(
+  req: RequestRow,
+  sl: SlReadPort,
+  cloud: RequestCloudPort,
+  beas?: BeasPort,
+): Promise<void> {
   try {
     const p = req.payload;
     let result: unknown;
@@ -130,7 +139,12 @@ export async function processRequest(req: RequestRow, sl: SlReadPort, cloud: Req
         result = await sl.updateEntity(String(p.entity), String(p.key), Boolean(p.keyQuoted), (p.data ?? {}) as Record<string, unknown>);
         break;
       case "query":
-        result = await sl.queryRaw(String(p.path));
+        if (p.target === "beas") {
+          if (!beas) throw new Error("Beas is not configured on this agent (set BEAS_BASE_URL in .env)");
+          result = await beas.get(String(p.path));
+        } else {
+          result = await sl.queryRaw(String(p.path));
+        }
         break;
       case "login":
         // Pre-establish the B1 session after the user signs in; no payload, side-effect only.

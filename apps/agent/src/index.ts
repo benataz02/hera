@@ -3,6 +3,7 @@ import { RPCLink } from "@orpc/client/fetch";
 import type { RouterClient } from "@orpc/server";
 import type { AppRouter } from "@hera/server/router";
 import { ServiceLayerClient } from "./service-layer-client.ts";
+import { BeasClient } from "./beas-client.ts";
 import {
   processItem, processRequest, type CloudPort, type RequestCloudPort, type Item, type RequestRow,
 } from "./sync.ts";
@@ -34,6 +35,16 @@ const sl = new ServiceLayerClient({
   timeoutMs: process.env.B1_TIMEOUT_MS ? Number(process.env.B1_TIMEOUT_MS) : undefined,
 });
 
+// Optional second on-prem source; only tenants whose models use target:"beas" need it.
+const beas = process.env.BEAS_BASE_URL
+  ? new BeasClient({
+      baseUrl: process.env.BEAS_BASE_URL,
+      user: process.env.BEAS_USER,
+      pass: process.env.BEAS_PASS,
+      insecureTls: process.env.BEAS_INSECURE_TLS === "true",
+    })
+  : undefined;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // ponytail: diagnostic detail — Bun hides the real syscall error in .cause/.code; flatten them.
 const msg = (e: unknown): string => {
@@ -59,7 +70,7 @@ async function main(): Promise<void> {
         // Per-item isolation: a poison row dead-letters; it never crash-loops the batch.
         try {
           if (row.kind === "quote") await processItem(row as Item, sl, cloud);
-          else await processRequest(row as RequestRow, sl, cloud);
+          else await processRequest(row as RequestRow, sl, cloud, beas);
         } catch (e) {
           console.error("[agent] item failed (lease will redeliver):", row.id, msg(e));
         }
