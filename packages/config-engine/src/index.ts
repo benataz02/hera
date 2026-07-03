@@ -1,4 +1,4 @@
-export { ModelDefZ, LookupRefZ, ParamZ, ConstraintZ, BomLineZ, OperationZ } from "./model";
+export { ModelDefZ, LookupRefZ, ParamZ, ConstraintZ, BomLineZ, OperationZ, ValZ, EntriesZ } from "./model";
 export type { Entries, LookupRef, ModelDef, Option, Param, ResolvedLookups, ResolvedTable, Val } from "./model";
 export { DslError, evaluate, parse } from "./dsl";
 export type { Ast, Scope } from "./dsl";
@@ -8,5 +8,5 @@ export { bindings, domainOf, propagate } from "./propagate";
 export type { Bindings, DomainOption, Propagation } from "./propagate";
 export { enumerate } from "./enumerate";
 export type { Enumeration } from "./enumerate";
-export { computeOutputs } from "./output";
-export type { BomResult, OpResult, Outputs } from "./output";
+export { computeOutputs, OutputOverridesZ } from "./output";
+export type { BomResult, OpResult, Outputs, OutputOverrides } from "./output";

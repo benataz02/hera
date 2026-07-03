@@ -2,7 +2,9 @@ import { z } from "zod";
 
 export type Val = number | string | boolean | null | string[];
 
-const ValZ = z.union([z.number(), z.string(), z.boolean(), z.null()]);
+export const ValZ = z.union([z.number(), z.string(), z.boolean(), z.null()]);
+/** User-entry value: scalar Val, or string[] for multicombo params. */
+export const EntriesZ = z.record(z.string(), z.union([ValZ, z.array(z.string())]));
 
 export const LookupRefZ = z.discriminatedUnion("source", [
   z.object({
