@@ -1,4 +1,4 @@
-import { evaluate, type Scope } from "./dsl";
+import { DslError, evaluate, type Scope } from "./dsl";
 import type { Entries, ModelDef, ResolvedLookups } from "./model";
 import { bindings } from "./propagate";
 
@@ -40,7 +40,7 @@ export function computeOutputs(
   const scope: Scope = { vars: { ...values, qty: batchQty }, tables: lookups.tables };
   const numeric = (src: string, what: string): number => {
     const v = evaluate(src, scope);
-    if (typeof v !== "number") throw new TypeError(`${what} did not evaluate to a number`);
+    if (typeof v !== "number") throw new DslError(`${what} did not evaluate to a number`, 0, src.length);
     return v;
   };
   const included = (condition: string | undefined) => condition === undefined || evaluate(condition, scope) === true;
@@ -74,7 +74,7 @@ export function computeOutputs(
   const unitCost = materialPerUnit + laborPerUnit;
   const priceScope: Scope = { vars: { ...scope.vars, unitCost }, tables: lookups.tables };
   const unitPrice = evaluate(model.pricing.priceExpr, priceScope);
-  if (typeof unitPrice !== "number") throw new TypeError("pricing.priceExpr did not evaluate to a number");
+  if (typeof unitPrice !== "number") throw new DslError("pricing.priceExpr did not evaluate to a number", 0, model.pricing.priceExpr.length);
   // ponytail: raw floats end to end; currency rounding happens at the UI/quote edge
   return { bom, ops, materialPerUnit, laborPerUnit, unitCost, unitPrice, batchTotal: unitPrice * batchQty };
 }

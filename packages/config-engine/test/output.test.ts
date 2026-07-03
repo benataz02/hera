@@ -53,4 +53,10 @@ describe("computeOutputs", () => {
   test("batchQty must be >= 1", () => {
     expect(() => computeOutputs(model, lookups, full, 0)).toThrow(RangeError);
   });
+
+  test("non-numeric expr result throws DslError", () => {
+    const bad = structuredClone(model);
+    bad.bom[0]!.qty = '"5"';
+    expect(() => computeOutputs(bad, lookups, full, 100)).toThrow(DslError);
+  });
 });
