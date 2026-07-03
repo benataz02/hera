@@ -2,7 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { and, eq, sql } from "drizzle-orm";
 import { db, agentRequest, tenantIntegration } from "@hera/db";
-import { outboxChannel, quoteChannel, requestChannel, waitForNotify } from "@hera/db/listener";
+import { outboxChannel, requestChannel, waitForNotify } from "@hera/db/listener";
 import { agentProcedure } from "../base.ts";
 
 const LEASE_SECONDS = 60;
