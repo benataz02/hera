@@ -211,6 +211,6 @@ export function propagate(model: ModelDef, lookups: ResolvedLookups, entries: En
     if (live(domains[k]!).length === 0)
       conflicts.push({ message: `no valid values remain for '${k}'`, path: `parameters.${k}` });
   }
-  const candidateEstimate = open.reduce((acc, k) => acc * Math.max(live(domains[k]!).length, 1), 1);
+  const candidateEstimate = open.reduce((acc, k) => acc * live(domains[k]!).length, 1);
   return { ...b, domains, conflicts, open, candidateEstimate };
 }

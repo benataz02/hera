@@ -99,4 +99,12 @@ describe("propagate", () => {
     // note is unbound and has no domain -> constraint undecidable -> material keeps both values
     expect(p.domains.material!.filter((o) => !o.eliminatedBy)).toHaveLength(2);
   });
+
+  test("empty live domain -> conflict and zero estimate", () => {
+    const m2 = structuredClone(model);
+    m2.constraints.push({ kind: "expr", assert: 'material != "alu" || section == 99', message: "no alu sections" });
+    const p = propagate(m2, lookups, { material: "alu" });
+    expect(p.conflicts.some((c) => c.message.includes("no valid values remain"))).toBe(true);
+    expect(p.candidateEstimate).toBe(0);
+  });
 });
