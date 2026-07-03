@@ -17,7 +17,7 @@ const slug = process.argv[2] ?? process.env.SLUG;
 const token = process.argv[3] ?? `dev-agent-token-${slug}`;
 if (!slug) throw new Error("usage: bun run seed:agent <slug> [token]");
 
-async function main(): Promise<void> {
+async function main(slug: string): Promise<void> {
   const [org] = await db
     .select({ id: organization.id })
     .from(organization)
@@ -43,7 +43,7 @@ async function main(): Promise<void> {
   console.log(`  then restart the agent (bun run dev:agent).`);
 }
 
-main()
+main(slug)
   .catch((e) => {
     console.error(e);
     process.exitCode = 1;
