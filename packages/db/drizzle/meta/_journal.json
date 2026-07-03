@@ -43,6 +43,13 @@
       "when": 1783077632373,
       "tag": "0005_drop_config_masterdata",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783078861719,
+      "tag": "0006_configurator_tables",
+      "breakpoints": true
     }
   ]
 }
