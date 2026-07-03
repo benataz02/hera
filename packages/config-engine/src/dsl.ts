@@ -1,4 +1,4 @@
-import type { Val } from "./model";
+import type { Val, ResolvedTable } from "./model";
 
 export class DslError extends Error {
   constructor(
@@ -166,4 +166,146 @@ export function parse(src: string): Ast {
   const t = peek();
   if (t.k !== "eof") throw new DslError("unexpected trailing input", t.from, t.to);
   return e;
+}
+
+export type Scope = { vars: Record<string, Val>; tables?: Record<string, ResolvedTable> };
+
+function show(v: Val): string {
+  return v === null ? "null" : Array.isArray(v) ? "list" : JSON.stringify(v);
+}
+function num(v: Val, n: Ast): number {
+  if (typeof v !== "number") throw new DslError(`expected number, got ${show(v)}`, n.from, n.to);
+  return v;
+}
+function bool(v: Val, n: Ast): boolean {
+  if (typeof v !== "boolean") throw new DslError(`expected boolean, got ${show(v)}`, n.from, n.to);
+  return v;
+}
+
+export function evalAst(n: Ast, scope: Scope): Val {
+  switch (n.t) {
+    case "lit":
+      return n.v;
+    case "ident": {
+      if (!(n.name in scope.vars)) throw new DslError(`unknown or unbound identifier '${n.name}'`, n.from, n.to);
+      return scope.vars[n.name]!;
+    }
+    case "un": {
+      const v = evalAst(n.e, scope);
+      return n.op === "-" ? -num(v, n.e) : !bool(v, n.e);
+    }
+    case "bin": {
+      if (n.op === "&&") return bool(evalAst(n.l, scope), n.l) ? bool(evalAst(n.r, scope), n.r) : false;
+      if (n.op === "||") return bool(evalAst(n.l, scope), n.l) ? true : bool(evalAst(n.r, scope), n.r);
+      const l = evalAst(n.l, scope);
+      const r = evalAst(n.r, scope);
+      if (n.op === "==" || n.op === "!=") {
+        if (Array.isArray(l) || Array.isArray(r)) throw new DslError("cannot compare lists", n.from, n.to);
+        return n.op === "==" ? l === r : l !== r;
+      }
+      const a = num(l, n.l);
+      const b = num(r, n.r);
+      switch (n.op) {
+        case "+":
+          return a + b;
+        case "-":
+          return a - b;
+        case "*":
+          return a * b;
+        case "/":
+          if (b === 0) throw new DslError("division by zero", n.from, n.to);
+          return a / b;
+        case "%":
+          if (b === 0) throw new DslError("modulo by zero", n.from, n.to);
+          return a % b;
+        case "<":
+          return a < b;
+        case "<=":
+          return a <= b;
+        case ">":
+          return a > b;
+        case ">=":
+          return a >= b;
+        default:
+          throw new DslError(`unknown operator '${n.op}'`, n.from, n.to);
+      }
+    }
+    case "tern":
+      return bool(evalAst(n.c, scope), n.c) ? evalAst(n.a, scope) : evalAst(n.b, scope);
+    case "call":
+      return call(n, scope);
+  }
+}
+
+function call(n: Extract<Ast, { t: "call" }>, scope: Scope): Val {
+  const arg = (i: number) => evalAst(n.args[i]!, scope);
+  const argN = (i: number) => num(arg(i), n.args[i]!);
+  const arity = (min: number, max = min) => {
+    if (n.args.length < min || n.args.length > max)
+      throw new DslError(`${n.name} expects ${min === max ? min : `${min}-${max}`} arguments`, n.from, n.to);
+  };
+  switch (n.name) {
+    case "IF":
+      arity(3);
+      return bool(arg(0), n.args[0]!) ? arg(1) : arg(2);
+    case "MIN":
+    case "MAX": {
+      arity(1, 99);
+      const vals = n.args.map((a, i) => argN(i));
+      return n.name === "MIN" ? Math.min(...vals) : Math.max(...vals);
+    }
+    case "ROUND": {
+      arity(1, 2);
+      const f = 10 ** (n.args.length === 2 ? argN(1) : 0);
+      return Math.round(argN(0) * f) / f;
+    }
+    case "CEIL":
+      arity(1);
+      return Math.ceil(argN(0));
+    case "FLOOR":
+      arity(1);
+      return Math.floor(argN(0));
+    case "ABS":
+      arity(1);
+      return Math.abs(argN(0));
+    case "CONCAT":
+      return n.args
+        .map((a) => {
+          const v = evalAst(a, scope);
+          if (Array.isArray(v)) throw new DslError("cannot CONCAT a list", a.from, a.to);
+          return v === null ? "" : String(v);
+        })
+        .join("");
+    case "HAS": {
+      arity(2);
+      const l = arg(0);
+      if (!Array.isArray(l))
+        throw new DslError("HAS expects a multi-value parameter as first argument", n.args[0]!.from, n.args[0]!.to);
+      return l.includes(arg(1) as string);
+    }
+    case "LOOKUP": {
+      arity(4);
+      const tn = arg(0);
+      const kc = arg(1);
+      const kv = arg(2);
+      const vc = arg(3);
+      if (typeof tn !== "string" || typeof kc !== "string" || typeof vc !== "string")
+        throw new DslError("LOOKUP(table, keyCol, key, valueCol): table and columns must be strings", n.from, n.to);
+      const table = scope.tables?.[tn];
+      if (!table) throw new DslError(`unknown table '${tn}'`, n.args[0]!.from, n.args[0]!.to);
+      const ki = table.columns.indexOf(kc);
+      const vi = table.columns.indexOf(vc);
+      if (ki < 0) throw new DslError(`unknown column '${kc}'`, n.args[1]!.from, n.args[1]!.to);
+      if (vi < 0) throw new DslError(`unknown column '${vc}'`, n.args[3]!.from, n.args[3]!.to);
+      const row = table.rows.find((r) => r[ki] === kv);
+      if (!row) throw new DslError(`no '${tn}' row with ${kc} = ${show(kv)}`, n.from, n.to);
+      return row[vi] ?? null;
+    }
+    default:
+      throw new DslError(`unknown function '${n.name}'`, n.from, n.to);
+  }
+}
+
+export function evaluate(src: string, scope: Scope): Val {
+  return evalAst(parse(src), scope);
 }
