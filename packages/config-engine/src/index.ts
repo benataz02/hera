@@ -2,7 +2,7 @@ export { ModelDefZ, LookupRefZ, ParamZ, ConstraintZ, BomLineZ, OperationZ, ValZ,
 export type { Entries, LookupRef, ModelDef, Option, Param, ResolvedLookups, ResolvedTable, Val } from "./model";
 export { DslError, evaluate, parse } from "./dsl";
 export type { Ast, Scope } from "./dsl";
-export { checkModel } from "./check";
+export { checkModel, FUNCS } from "./check";
 export type { Issue } from "./check";
 export { bindings, domainOf, propagate } from "./propagate";
 export type { Bindings, DomainOption, Propagation } from "./propagate";

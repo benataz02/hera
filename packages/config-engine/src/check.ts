@@ -3,7 +3,7 @@ import type { ModelDef } from "./model";
 
 export type Issue = { path: string; message: string; from?: number; to?: number };
 
-const FUNCS = new Set(["IF", "MIN", "MAX", "ROUND", "CEIL", "FLOOR", "ABS", "CONCAT", "HAS", "LOOKUP"]);
+export const FUNCS = new Set(["IF", "MIN", "MAX", "ROUND", "CEIL", "FLOOR", "ABS", "CONCAT", "HAS", "LOOKUP"]);
 
 type Ref = { name: string; from: number; to: number; kind: "ident" | "call" };
 
