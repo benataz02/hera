@@ -1,8 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { ModelBuilderPage } from "../../../components/configurator/ModelBuilderPage.tsx";
 
 export const Route = createFileRoute("/_authed/models/$id")({ component: Builder });
 
 function Builder() {
   const { id } = Route.useParams();
-  return <div style={{ padding: "1rem" }}>Builder for {id} (Task 4)</div>;
+  return <ModelBuilderPage key={id} id={id} />;
 }
