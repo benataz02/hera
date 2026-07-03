@@ -1,0 +1,116 @@
+import { z } from "zod";
+
+export type Val = number | string | boolean | null | string[];
+
+const ValZ = z.union([z.number(), z.string(), z.boolean(), z.null()]);
+
+export const LookupRefZ = z.discriminatedUnion("source", [
+  z.object({
+    source: z.literal("manual"),
+    options: z.array(z.object({ value: ValZ, label: z.string().optional() })),
+  }),
+  z.object({
+    source: z.literal("table"),
+    table: z.string(),
+    valueCol: z.string(),
+    labelCol: z.string().optional(),
+  }),
+  z.object({
+    source: z.literal("query"),
+    target: z.enum(["b1", "beas"]),
+    path: z.string(),
+    valueField: z.string(),
+    labelField: z.string().optional(),
+  }),
+]);
+export type LookupRef = z.infer<typeof LookupRefZ>;
+
+const KeyZ = z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, "must be a valid identifier");
+
+export const ParamZ = z.object({
+  key: KeyZ,
+  label: z.string(),
+  type: z.enum(["string", "number", "boolean"]),
+  ui: z.enum(["input", "select", "radio", "checkbox", "multicombo", "step"]),
+  domain: z
+    .union([
+      z.object({ kind: z.literal("options"), ref: LookupRefZ }),
+      z.object({ kind: z.literal("range"), min: z.number(), max: z.number(), step: z.number().optional() }),
+    ])
+    .optional(),
+  defaultExpr: z.string().optional(),
+  visibleWhen: z.string().optional(),
+  requiredWhen: z.string().optional(),
+  unit: z.string().optional(),
+  help: z.string().optional(),
+});
+export type Param = z.infer<typeof ParamZ>;
+
+export const ConstraintZ = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("expr"),
+    when: z.string().optional(),
+    assert: z.string(),
+    message: z.string(),
+  }),
+  z.object({
+    kind: z.literal("table"),
+    params: z.array(KeyZ).min(2),
+    rows: z.array(z.array(ValZ)),
+    mode: z.enum(["allow", "forbid"]),
+  }),
+]);
+export type Constraint = z.infer<typeof ConstraintZ>;
+
+export const BomLineZ = z.object({
+  id: z.string(),
+  itemCode: z.string(), // expr
+  desc: z.string().optional(), // expr
+  condition: z.string().optional(), // expr -> boolean
+  qty: z.string(), // expr, per finished unit; batch qty available as `qty`
+  price: z.string(), // expr, cost per item unit
+  scrapPct: z.number().default(0),
+});
+
+export const OperationZ = z.object({
+  id: z.string(),
+  resource: z.string(),
+  condition: z.string().optional(),
+  setupMin: z.string(), // expr, minutes per batch
+  runMinPerUnit: z.string(), // expr, minutes per unit
+  ratePerHour: z.string(), // expr, cost per hour
+});
+
+export const ModelDefZ = z.object({
+  name: z.string(),
+  parameters: z.array(ParamZ),
+  structure: z.object({
+    sections: z.array(
+      z.object({
+        key: KeyZ,
+        title: z.string(),
+        groups: z.array(z.object({ key: KeyZ, title: z.string(), params: z.array(KeyZ) })),
+      }),
+    ),
+  }),
+  computed: z.array(z.object({ key: KeyZ, expr: z.string() })),
+  constraints: z.array(ConstraintZ),
+  bom: z.array(BomLineZ),
+  routing: z.array(OperationZ),
+  queryTables: z.array(
+    z.object({ name: z.string(), target: z.enum(["b1", "beas"]), path: z.string(), columns: z.array(z.string()) }),
+  ),
+  pricing: z.object({ priceExpr: z.string(), quoteItemCode: z.string().min(1) }),
+  batchDefaults: z.array(z.number().int().positive()),
+});
+export type ModelDef = z.infer<typeof ModelDefZ>;
+
+export type Option = { value: Val; label: string };
+export type ResolvedTable = { columns: string[]; rows: Val[][] };
+/** Everything external, already fetched: engine never sees source kinds. */
+export type ResolvedLookups = {
+  domains: Record<string, Option[]>;
+  tables: Record<string, ResolvedTable>;
+};
+/** User-entered values only; absent key = open parameter. */
+export type Entries = Record<string, Val>;
