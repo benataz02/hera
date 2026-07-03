@@ -144,4 +144,8 @@ describe("evaluate", () => {
   test("unknown function errors", () => {
     expect(() => evaluate("NOPE(1)", scope)).toThrow(DslError);
   });
+
+  test("prototype members are not identifiers", () => {
+    expect(() => evaluate("toString", scope)).toThrow(DslError);
+  });
 });

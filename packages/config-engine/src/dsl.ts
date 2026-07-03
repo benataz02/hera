@@ -187,7 +187,7 @@ export function evalAst(n: Ast, scope: Scope): Val {
     case "lit":
       return n.v;
     case "ident": {
-      if (!(n.name in scope.vars)) throw new DslError(`unknown or unbound identifier '${n.name}'`, n.from, n.to);
+      if (!Object.hasOwn(scope.vars, n.name)) throw new DslError(`unknown or unbound identifier '${n.name}'`, n.from, n.to);
       return scope.vars[n.name]!;
     }
     case "un": {
