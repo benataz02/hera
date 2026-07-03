@@ -240,7 +240,10 @@ export const configsRouter = {
         .limit(1);
       if (!run) throw new ORPCError("NOT_FOUND");
       const selections = applySelection(run, input.selection);
-      await db.update(configRun).set({ selection: input.selection }).where(eq(configRun.id, run.id));
+      await db
+        .update(configRun)
+        .set({ selection: input.selection })
+        .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, context.tenantId)));
       return { selections };
     }),
 };
