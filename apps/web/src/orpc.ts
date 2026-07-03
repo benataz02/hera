@@ -8,7 +8,3 @@ import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 const link = new RPCLink({ url: `${window.location.origin}/rpc` });
 export const client: RouterClient<AppRouter> = createORPCClient(link);
 export const orpc = createTanstackQueryUtils(client);
-
-// Query key for a master-data source resolution (Configurator value-help). Shared so the editor can
-// invalidate the exact entry the runtime caches with staleTime/gcTime: Infinity — keep them in sync.
-export const mdResolveKey = (id: string) => ["cfg-md", id] as const;
