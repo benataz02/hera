@@ -187,13 +187,6 @@ export function AppShell() {
               selected={pathname === `/${ent.name}`}
             />
           ))}
-          <SideNavigationItem text="Configure" icon="wrench" data-to="/configure" selected={pathname === "/configure"} />
-          {isAdmin ? (
-            <SideNavigationItem text="Models" icon="tree" data-to="/models" selected={pathname.startsWith("/models")} />
-          ) : null}
-          {isAdmin ? (
-            <SideNavigationItem text="Master data" icon="database" data-to="/masterdata" selected={pathname.startsWith("/masterdata")} />
-          ) : null}
           {isAdmin ? (
             <SideNavigationItem
               text="Settings"

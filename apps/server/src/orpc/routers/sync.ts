@@ -1,7 +1,7 @@
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { and, eq, sql } from "drizzle-orm";
-import { db, agentRequest, quote, tenantIntegration } from "@hera/db";
+import { db, agentRequest, tenantIntegration } from "@hera/db";
 import { outboxChannel, quoteChannel, requestChannel, waitForNotify } from "@hera/db/listener";
 import { agentProcedure } from "../base.ts";
 
@@ -59,32 +59,6 @@ export const syncRouter = {
         items = await claim(tenantId, input.max);
       }
       return { items };
-    }),
-
-  // 'quote' kind only. Call on a CONFIRMED B1 result. Idempotent: re-acking just re-sets done.
-  ack: agentProcedure
-    .input(z.object({ id: z.string(), docEntry: z.string() }))
-    .handler(async ({ input, context }) => {
-      await db.transaction(async (tx) => {
-        const [ar] = await tx
-          .select()
-          .from(agentRequest)
-          .where(and(eq(agentRequest.id, input.id), eq(agentRequest.tenantId, context.tenantId)))
-          .limit(1);
-        if (!ar) throw new ORPCError("NOT_FOUND");
-        await tx
-          .update(agentRequest)
-          .set({ status: "done", docEntry: input.docEntry, leaseUntil: null, updatedAt: new Date() })
-          .where(eq(agentRequest.id, ar.id));
-        if (ar.kind === "quote" && ar.dedupKey) {
-          await tx
-            .update(quote)
-            .set({ status: "synced", docEntry: input.docEntry, updatedAt: new Date() })
-            .where(eq(quote.id, ar.dedupKey));
-          await tx.execute(sql`select pg_notify(${quoteChannel(ar.dedupKey)}, '')`);
-        }
-      });
-      return { ok: true };
     }),
 
   // transient -> hold with a backoff lease (redelivered when it expires).
