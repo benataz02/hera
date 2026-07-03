@@ -4,9 +4,7 @@ import type { RouterClient } from "@orpc/server";
 import type { AppRouter } from "@hera/server/router";
 import { ServiceLayerClient } from "./service-layer-client.ts";
 import { BeasClient } from "./beas-client.ts";
-import {
-  processItem, processRequest, type CloudPort, type RequestCloudPort, type Item, type RequestRow,
-} from "./sync.ts";
+import { processRequest, type RequestCloudPort, type RequestRow } from "./sync.ts";
 
 function env(name: string): string {
   const v = process.env[name];
@@ -19,9 +17,7 @@ const link = new RPCLink({
   headers: { authorization: `Bearer ${env("HERA_AGENT_TOKEN")}` },
 });
 const orpc: RouterClient<AppRouter> = createORPCClient(link);
-const cloud: CloudPort & RequestCloudPort = {
-  ack: (i) => orpc.sync.ack(i),
-  nack: (i) => orpc.sync.nack(i),
+const cloud: RequestCloudPort = {
   fulfill: (i) => orpc.sync.fulfill(i),
   fail: (i) => orpc.sync.fail(i),
 };
@@ -69,8 +65,7 @@ async function main(): Promise<void> {
       for (const row of items) {
         // Per-item isolation: a poison row dead-letters; it never crash-loops the batch.
         try {
-          if (row.kind === "quote") await processItem(row as Item, sl, cloud);
-          else await processRequest(row as RequestRow, sl, cloud, beas);
+          await processRequest(row as RequestRow, sl, cloud, beas);
         } catch (e) {
           console.error("[agent] item failed (lease will redeliver):", row.id, msg(e));
         }
