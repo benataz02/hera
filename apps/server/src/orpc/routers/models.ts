@@ -5,7 +5,7 @@ import { db, configModel, configProject, configTable } from "@hera/db";
 import { checkModel, LookupRefZ, ModelDefZ, ValZ } from "@hera/config-engine";
 import { adminProcedure } from "../base.ts";
 import { assertAgentReady, runRequest } from "./entities.ts";
-import { optionsFromRef, tablesFromTenant, type QueryFetcher, type TenantTable } from "../../lookups.ts";
+import { optionsFromRef, resolveLookups, tablesFromTenant, type QueryFetcher, type TenantTable } from "../../lookups.ts";
 
 // Admin-only configurator model builder API. save is the gate: a model that passes
 // ModelDefZ + checkModel here can never produce a parse/unknown-ref error at runtime.
@@ -140,5 +140,19 @@ export const modelsRouter = {
       const tables = tablesFromTenant(await tenantTables(context.tenantId));
       const options = await optionsFromRef(input.ref, tables, agentFetcher(context.tenantId));
       return { options: options.slice(0, input.limit) };
+    }),
+
+  // Live preview for the (possibly unsaved) builder draft: same resolver as configs.lookups/run,
+  // keyed by the posted definition instead of a saved model id. Client sends a stripped-down
+  // "lookup skeleton" so typing in expression fields doesn't refetch.
+  previewLookups: adminProcedure
+    .input(z.object({ definition: ModelDefZ }))
+    .handler(async ({ input, context }) => {
+      try {
+        return await resolveLookups(input.definition, await tenantTables(context.tenantId), agentFetcher(context.tenantId));
+      } catch (e) {
+        if (e instanceof ORPCError) throw e; // agent offline etc. — keep the specific message
+        throw new ORPCError("BAD_GATEWAY", { message: e instanceof Error ? e.message : String(e) });
+      }
     }),
 };
