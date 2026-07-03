@@ -1,5 +1,5 @@
 export { ModelDefZ, LookupRefZ, ParamZ, ConstraintZ, BomLineZ, OperationZ, ValZ, EntriesZ } from "./model";
-export type { Entries, LookupRef, ModelDef, Option, Param, ResolvedLookups, ResolvedTable, Val } from "./model";
+export type { Constraint, Entries, LookupRef, ModelDef, Option, Param, ResolvedLookups, ResolvedTable, Val } from "./model";
 export { DslError, evaluate, parse } from "./dsl";
 export type { Ast, Scope } from "./dsl";
 export { checkModel, FUNCS } from "./check";

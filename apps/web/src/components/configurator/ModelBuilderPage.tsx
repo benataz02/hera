@@ -7,6 +7,7 @@ import type { Issue } from "@hera/config-engine";
 import { tabOf, useDraftModel, type TabKey } from "./useDraftModel.ts";
 import { SettingsTab } from "./SettingsTab.tsx";
 import { ParamsTab } from "./ParamsTab.tsx";
+import { RulesTab } from "./RulesTab.tsx";
 
 // Tab components land in Tasks 5-9; until then a stub renders in their place.
 const Stub = ({ name }: { name: string }) => <Text style={{ padding: "1rem" }}>{name} — next task.</Text>;
@@ -85,7 +86,9 @@ export function ModelBuilderPage({ id }: { id: string }) {
             <Tab {...tabProps("params", "Parameters")}>
               <ParamsTab draft={draft} update={m.update} issues={allIssues} tables={m.tables} />
             </Tab>
-            <Tab {...tabProps("rules", "Rules")}><Stub name="Rules" /></Tab>
+            <Tab {...tabProps("rules", "Rules")}>
+              <RulesTab draft={draft} update={m.update} issues={allIssues} />
+            </Tab>
             <Tab {...tabProps("bom", "BOM")}><Stub name="BOM" /></Tab>
             <Tab {...tabProps("routing", "Routing")}><Stub name="Routing" /></Tab>
             <Tab {...tabProps("tables", "Tables")}><Stub name="Tables" /></Tab>
