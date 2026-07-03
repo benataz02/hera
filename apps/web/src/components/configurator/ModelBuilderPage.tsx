@@ -3,21 +3,31 @@ import {
   Bar, Button, BusyIndicator, MessageStrip, MessageItem, MessageView, MessageViewButton,
   ObjectStatus, ResponsivePopover, SplitterElement, SplitterLayout, Tab, TabContainer, Text, Title,
 } from "@ui5/webcomponents-react";
-import type { Issue } from "@hera/config-engine";
+import type { Issue, ModelDef } from "@hera/config-engine";
 import { tabOf, useDraftModel, type TabKey } from "./useDraftModel.ts";
 import { SettingsTab } from "./SettingsTab.tsx";
 import { ParamsTab } from "./ParamsTab.tsx";
 import { RulesTab } from "./RulesTab.tsx";
 import { BomTab, RoutingTab } from "./LinesTabs.tsx";
 import { TablesTab } from "./TablesTab.tsx";
+import { PreviewPane } from "./PreviewPane.tsx";
+import { usePreviewLookups } from "./usePreviewLookups.ts";
 
-// Tab components land in Tasks 5-9; until then a stub renders in their place.
-const Stub = ({ name }: { name: string }) => <Text style={{ padding: "1rem" }}>{name} — next task.</Text>;
+// Tab components mount their own editors now; the preview pane test-drives the draft.
+
+// Stable placeholder so usePreviewLookups runs unconditionally (rules of hooks) before the
+// draft has loaded; resolves to empty domains/tables without touching the agent.
+const EMPTY_MODEL: ModelDef = {
+  name: "", parameters: [], structure: { sections: [] }, computed: [], constraints: [],
+  bom: [], routing: [], queryTables: [], pricing: { priceExpr: "0", quoteItemCode: "X" }, batchDefaults: [1],
+};
 
 export function ModelBuilderPage({ id }: { id: string }) {
   const m = useDraftModel(id);
   const [tab, setTab] = useState<TabKey>("params");
   const [msgOpen, setMsgOpen] = useState(false);
+  // Shared with PreviewPane by query key (same skeleton) — RulesTab combo-table cells use its domains.
+  const lookups = usePreviewLookups(m.draft ?? EMPTY_MODEL);
   const allIssues: Issue[] = [...m.issues, ...m.serverIssues];
   const count = (t: TabKey) => allIssues.filter((i) => tabOf(i.path) === t).length;
 
@@ -89,7 +99,7 @@ export function ModelBuilderPage({ id }: { id: string }) {
               <ParamsTab draft={draft} update={m.update} issues={allIssues} tables={m.tables} />
             </Tab>
             <Tab {...tabProps("rules", "Rules")}>
-              <RulesTab draft={draft} update={m.update} issues={allIssues} />
+              <RulesTab draft={draft} update={m.update} issues={allIssues} lookups={lookups.data} />
             </Tab>
             <Tab {...tabProps("bom", "BOM")}><BomTab draft={draft} update={m.update} issues={allIssues} /></Tab>
             <Tab {...tabProps("routing", "Routing")}><RoutingTab draft={draft} update={m.update} issues={allIssues} /></Tab>
@@ -100,7 +110,7 @@ export function ModelBuilderPage({ id }: { id: string }) {
           </TabContainer>
         </SplitterElement>
         <SplitterElement minSize={320}>
-          <Stub name="Live preview (Task 9)" />
+          <PreviewPane draft={draft} issues={m.issues} />
         </SplitterElement>
       </SplitterLayout>
     </div>
