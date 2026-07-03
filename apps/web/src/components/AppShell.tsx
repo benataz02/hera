@@ -188,12 +188,20 @@ export function AppShell() {
             />
           ))}
           {isAdmin ? (
-            <SideNavigationItem
-              text="Settings"
-              icon="action-settings"
-              data-to="/settings"
-              selected={pathname === "/settings"}
-            />
+            <>
+              <SideNavigationItem
+                text="Configurator models"
+                icon="tree"
+                data-to="/models"
+                selected={pathname === "/models" || pathname.startsWith("/models/")}
+              />
+              <SideNavigationItem
+                text="Settings"
+                icon="action-settings"
+                data-to="/settings"
+                selected={pathname === "/settings"}
+              />
+            </>
           ) : null}
         </SideNavigation>
       }
