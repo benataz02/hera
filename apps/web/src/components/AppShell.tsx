@@ -187,6 +187,12 @@ export function AppShell() {
               selected={pathname === `/${ent.name}`}
             />
           ))}
+          <SideNavigationItem
+            text="Configurations"
+            icon="sales-quote"
+            data-to="/configs"
+            selected={pathname === "/configs" || pathname.startsWith("/configs/")}
+          />
           {isAdmin ? (
             <>
               <SideNavigationItem
