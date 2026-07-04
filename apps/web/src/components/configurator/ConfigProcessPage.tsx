@@ -8,6 +8,7 @@ import { orpc } from "../../orpc.ts";
 import { cleanOverrides, statusUi, toggleSelection, type Sel } from "./runView.ts";
 import { StepConfigure } from "./StepConfigure.tsx";
 import { StepBatches } from "./StepBatches.tsx";
+import { StepCandidates } from "./StepCandidates.tsx";
 
 // The configuration process: 5 steps, gated left to right. Steps 1–2 work on live model +
 // lookups; steps 3–4 render ONLY from the immutable run snapshot. Local state overlays
@@ -109,7 +110,14 @@ export function ConfigProcessPage({ id }: { id: string }) {
             staleRun={!!latestRun && (project.status === "draft" || entriesDirty || batchesDirty)} />
         </WizardStep>
         <WizardStep titleText="Candidates" icon="grid" data-idx="2" selected={step === 2} disabled={!runReady}>
-          <Text>Candidates — Task 5 replaces this.</Text>
+          {runReady && latestRun ? (
+            <StepCandidates model={latestRun.modelSnapshot} runEntries={latestRun.entries}
+              candidates={latestRun.candidates} selection={selection}
+              onToggle={(i, b) => setSel(toggleSelection(selection, i, b))}
+              onNext={() => goto(3)}
+              capped={runMeta?.capped ?? latestRun.candidates.length >= 200}
+              widest={runMeta?.widest} />
+          ) : null}
         </WizardStep>
         <WizardStep titleText="Review outputs" icon="activity-items" data-idx="3" selected={step === 3}
           disabled={!runReady || selection.length === 0}>
