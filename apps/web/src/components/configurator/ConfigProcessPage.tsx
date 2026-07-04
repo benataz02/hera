@@ -9,6 +9,7 @@ import { cleanOverrides, statusUi, toggleSelection, type Sel } from "./runView.t
 import { StepConfigure } from "./StepConfigure.tsx";
 import { StepBatches } from "./StepBatches.tsx";
 import { StepCandidates } from "./StepCandidates.tsx";
+import { StepReview } from "./StepReview.tsx";
 
 // The configuration process: 5 steps, gated left to right. Steps 1–2 work on live model +
 // lookups; steps 3–4 render ONLY from the immutable run snapshot. Local state overlays
@@ -121,7 +122,13 @@ export function ConfigProcessPage({ id }: { id: string }) {
         </WizardStep>
         <WizardStep titleText="Review outputs" icon="activity-items" data-idx="3" selected={step === 3}
           disabled={!runReady || selection.length === 0}>
-          <Text>Review — Task 6 replaces this.</Text>
+          {runReady && latestRun ? (
+            <StepReview model={latestRun.modelSnapshot} lookups={latestRun.lookupSnapshot}
+              runEntries={latestRun.entries} candidates={latestRun.candidates}
+              selection={selection} onChange={setSel}
+              onSave={saveSelection} saving={select.isPending}
+              error={select.error?.message ?? null} saved={select.isSuccess} />
+          ) : null}
         </WizardStep>
         <WizardStep titleText="Create quote" icon="sales-quote" data-idx="4" disabled>
           <Text>Available after review — coming in phase 5.</Text>
