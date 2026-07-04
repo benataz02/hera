@@ -7,6 +7,7 @@ import { propagate, type Entries } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
 import { cleanOverrides, statusUi, toggleSelection, type Sel } from "./runView.ts";
 import { StepConfigure } from "./StepConfigure.tsx";
+import { StepBatches } from "./StepBatches.tsx";
 
 // The configuration process: 5 steps, gated left to right. Steps 1–2 work on live model +
 // lookups; steps 3–4 render ONLY from the immutable run snapshot. Local state overlays
@@ -102,7 +103,10 @@ export function ConfigProcessPage({ id }: { id: string }) {
             onChange={setEntries} onNext={() => goto(1)} saving={update.isPending} conflicted={conflicted} />
         </WizardStep>
         <WizardStep titleText="Batches" icon="multiselect-all" data-idx="1" selected={step === 1} disabled={conflicted}>
-          <Text>Batch quantities — Task 4 replaces this.</Text>
+          <StepBatches batches={batches} onChange={setBatches} onCalculate={() => void calculate()}
+            running={update.isPending || run.isPending}
+            error={update.error?.message ?? run.error?.message ?? null}
+            staleRun={!!latestRun && (project.status === "draft" || entriesDirty || batchesDirty)} />
         </WizardStep>
         <WizardStep titleText="Candidates" icon="grid" data-idx="2" selected={step === 2} disabled={!runReady}>
           <Text>Candidates — Task 5 replaces this.</Text>
