@@ -1,0 +1,38 @@
+/* Preview pane slides in/out from the right when toggled. Kept mounted through the slide-out
+   (see onAnimationEnd in ModelBuilderPage.tsx) so both directions animate. */
+.preview-pane-slide-in,
+.preview-pane-slide-out {
+  width: 100%;
+  height: 100%;
+}
+
+.preview-pane-slide-in {
+  animation: preview-slide-in 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.preview-pane-slide-out {
+  /* forwards: hold the off-screen end state until the node unmounts, so it doesn't flash back. */
+  animation: preview-slide-out 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes preview-slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes preview-slide-out {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}

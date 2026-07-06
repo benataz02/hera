@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Bar, Button, Dialog, Input, Label, List, ListItemStandard, MessageStrip,
+  Bar, Button, Dialog, Icon, Input, Label, List, ListItemStandard, MessageStrip,
   Option, Select, StepInput, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow,
   TableRowAction, Text, Title,
 } from "@ui5/webcomponents-react";
@@ -22,12 +22,21 @@ export function ParamsTab({ draft, update, issues, tables }: {
 }) {
   const [editing, setEditing] = useState<{ param: Param; isNew: boolean } | null>(null);
   const [titleEdit, setTitleEdit] = useState<string | null>(null);
+  // Keyed by stable section/group key (not row index) so collapse survives drag-reordering.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggle = (id: string) =>
+    setCollapsed((c) => { const n = new Set(c); n.delete(id) || n.add(id); return n; });
 
-  const rows: { key: string; depth: number; label: string; detail: string; ref: ReturnType<typeof parseRowKey> }[] = [];
+  type Row = { key: string; depth: number; label: string; detail: string; ref: ReturnType<typeof parseRowKey>; collapseId?: string };
+  const rows: Row[] = [];
   draft.structure.sections.forEach((s, si) => {
-    rows.push({ key: `s:${si}`, depth: 0, label: s.title, detail: `section · ${s.key}`, ref: { kind: "section", s: si } });
+    const sId = `S:${s.key}`;
+    rows.push({ key: `s:${si}`, depth: 0, label: s.title, detail: `section · ${s.key}`, ref: { kind: "section", s: si }, collapseId: sId });
+    if (collapsed.has(sId)) return;
     s.groups.forEach((g, gi) => {
-      rows.push({ key: `g:${si}.${gi}`, depth: 1, label: g.title, detail: `group · ${g.key}`, ref: { kind: "group", s: si, g: gi } });
+      const gId = `G:${s.key}/${g.key}`;
+      rows.push({ key: `g:${si}.${gi}`, depth: 1, label: g.title, detail: `group · ${g.key}`, ref: { kind: "group", s: si, g: gi }, collapseId: gId });
+      if (collapsed.has(gId)) return;
       g.params.forEach((pk) => {
         const p = draft.parameters.find((x) => x.key === pk);
         rows.push({
@@ -39,6 +48,8 @@ export function ParamsTab({ draft, update, issues, tables }: {
     });
   });
   const loose = unplacedParams(draft);
+  // Model-level issues have no row of their own (duplicate key, computed cycle, bad structure ref).
+  const modelIssues = issues.filter((i) => i.path === "model" || i.path === "computed" || i.path === "structure");
 
   const saveParam = (p: Param, isNew: boolean, place?: { s: number; g: number }) =>
     update((d) => {
@@ -65,6 +76,11 @@ export function ParamsTab({ draft, update, issues, tables }: {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", padding: "1rem" }}>
+      {modelIssues.length ? (
+        <MessageStrip design="Negative" hideCloseButton>
+          {modelIssues.map((i) => i.message).join(" · ")}
+        </MessageStrip>
+      ) : null}
       <Bar design="Subheader"
         startContent={<Title level="H5">Form structure</Title>}
         endContent={
@@ -89,7 +105,7 @@ export function ParamsTab({ draft, update, issues, tables }: {
 
       <Table
         noDataText="Add a section to start structuring the form."
-        rowActionCount={2}
+        rowActionCount={1}
         onMoveOver={(e) => {
           const src = (e.detail.source.element as HTMLElement | null)?.getAttribute("row-key");
           const dst = (e.detail.destination.element as HTMLElement | null)?.getAttribute("row-key");
@@ -102,12 +118,10 @@ export function ParamsTab({ draft, update, issues, tables }: {
           const placement = e.detail.destination.placement as Placement;
           if (src && dst) update((d) => applyMove(d, src, dst, placement));
         }}
-        onRowActionClick={(e) => {
-          const row = (e.detail.row as unknown) as HTMLElement;
-          const action = (e.detail.action as unknown) as HTMLElement;
-          const ref = parseRowKey(row.getAttribute("row-key")!);
-          if (action.getAttribute("icon") === "delete") deleteRow(ref);
-          else if (ref.kind === "param") {
+        onRowActionClick={(e) => deleteRow(parseRowKey(((e.detail.row as unknown) as HTMLElement).getAttribute("row-key")!))}
+        onRowClick={(e) => {
+          const ref = parseRowKey(((e.detail.row as unknown) as HTMLElement).getAttribute("row-key")!);
+          if (ref.kind === "param") {
             const p = draft.parameters.find((x) => x.key === ref.key);
             if (p) setEditing({ param: structuredClone(p), isNew: false });
           } else {
@@ -122,34 +136,43 @@ export function ParamsTab({ draft, update, issues, tables }: {
         }
       >
         {rows.map((r) => (
-          <TableRow key={r.key} rowKey={r.key} movable
-            actions={
-              <>
-                <TableRowAction icon="edit" text="Edit" />
-                <TableRowAction icon="delete" text="Delete" />
-              </>
-            }>
+          <TableRow key={r.key} rowKey={r.key} movable interactive
+            actions={<TableRowAction icon="delete" text="Delete" />}>
             <TableCell>
-              {titleEdit === r.key && r.ref.kind !== "param" ? (
-                <Input
-                  value={r.label}
-                  onBlur={() => setTitleEdit(null)}
-                  onInput={(e) => {
-                    const title = e.target.value;
-                    update((d) => ({
-                      ...d,
-                      structure: {
-                        sections: d.structure.sections.map((s, si) => {
-                          if (r.ref.kind === "section") return si === r.ref.s ? { ...s, title } : s;
-                          return si === (r.ref as { s: number }).s
-                            ? { ...s, groups: s.groups.map((g, gi) => (gi === (r.ref as { g: number }).g ? { ...g, title } : g)) }
-                            : s;
-                        }),
-                      },
-                    }));
-                  }}
-                />
-              ) : (
+                <span style={{ width: "1rem", display: "inline-flex", justifyContent: "center", flex: "0 0 auto" }}>
+                  {r.collapseId ? (
+                    <span role="button" tabIndex={0}
+                      aria-label={collapsed.has(r.collapseId) ? "Expand" : "Collapse"}
+                      style={{ display: "inline-flex", cursor: "pointer" }}
+                      // stopPropagation so toggling collapse never enters edit (onRowClick).
+                      onClick={(e) => { e.stopPropagation(); toggle(r.collapseId!); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); toggle(r.collapseId!); } }}
+                    >
+                      <Icon mode="Decorative" style={{ width: "0.75rem", height: "0.75rem" }}
+                        name={collapsed.has(r.collapseId) ? "slim-arrow-right" : "slim-arrow-down"} />
+                    </span>
+                  ) : null}
+                </span>
+                {titleEdit === r.key && r.ref.kind !== "param" ? (
+                  <Input
+                    value={r.label}
+                    onBlur={() => setTitleEdit(null)}
+                    onInput={(e) => {
+                      const title = e.target.value;
+                      update((d) => ({
+                        ...d,
+                        structure: {
+                          sections: d.structure.sections.map((s, si) => {
+                            if (r.ref.kind === "section") return si === r.ref.s ? { ...s, title } : s;
+                            return si === (r.ref as { s: number }).s
+                              ? { ...s, groups: s.groups.map((g, gi) => (gi === (r.ref as { g: number }).g ? { ...g, title } : g)) }
+                              : s;
+                          }),
+                        },
+                      }));
+                    }}
+                  />
+                ) : (
                 <Text style={{ paddingInlineStart: `${r.depth * 1.5}rem`, fontWeight: r.depth === 0 ? "bold" : "normal" }}>
                   {r.label}
                 </Text>

@@ -1,7 +1,9 @@
 import { useState } from "react";
 import {
-  Bar, Button, BusyIndicator, MessageStrip, MessageItem, MessageView, MessageViewButton,
-  ObjectStatus, ResponsivePopover, SplitterElement, SplitterLayout, Tab, TabContainer, Text, Title,
+  Button, BusyIndicator, MessageStrip,
+  ObjectPage, ObjectPageSection, ObjectPageTitle, ObjectStatus,
+  SplitterElement, SplitterLayout, Title, ToggleButton,
+  Toolbar,
 } from "@ui5/webcomponents-react";
 import type { Issue, ModelDef } from "@hera/config-engine";
 import { tabOf, useDraftModel, type TabKey } from "./useDraftModel.ts";
@@ -12,6 +14,7 @@ import { BomTab, RoutingTab } from "./LinesTabs.tsx";
 import { TablesTab } from "./TablesTab.tsx";
 import { PreviewPane } from "./PreviewPane.tsx";
 import { usePreviewLookups } from "./usePreviewLookups.ts";
+import "./ModelBuilderPage.css";
 
 // Tab components mount their own editors now; the preview pane test-drives the draft.
 
@@ -25,7 +28,12 @@ const EMPTY_MODEL: ModelDef = {
 export function ModelBuilderPage({ id }: { id: string }) {
   const m = useDraftModel(id);
   const [tab, setTab] = useState<TabKey>("params");
-  const [msgOpen, setMsgOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(true);
+  // previewRender lags previewOpen: it stays true through the slide-out so the exit animation plays,
+  // then onAnimationEnd unmounts the pane (and lets the editor reclaim full width).
+  const [previewRender, setPreviewRender] = useState(true);
+  const togglePreview = () =>
+    previewOpen ? setPreviewOpen(false) : (setPreviewRender(true), setPreviewOpen(true));
   // Shared with PreviewPane by query key (same skeleton) — RulesTab combo-table cells use its domains.
   const lookups = usePreviewLookups(m.draft ?? EMPTY_MODEL);
   const allIssues: Issue[] = [...m.issues, ...m.serverIssues];
@@ -38,81 +46,71 @@ export function ModelBuilderPage({ id }: { id: string }) {
   }
   const draft = m.draft;
 
-  // Jump from a MessageView item to its field: switch tab, then focus by the expr-<path> id.
-  const jumpTo = (path: string) => {
-    setTab(tabOf(path));
-    setMsgOpen(false);
-    setTimeout(() => document.getElementById(`expr-${path}`)?.focus(), 120);
-  };
-
-  const tabProps = (key: TabKey, text: string) => ({
-    text,
-    "data-key": key,
-    selected: tab === key,
-    additionalText: count(key) ? String(count(key)) : undefined,
-    design: count(key) ? ("Negative" as const) : ("Default" as const),
-  });
+  // Anchor-bar label carries the section's open issue count, e.g. "Rules (2)".
+  const secTitle = (label: string, key: TabKey) => (count(key) ? `${label} (${count(key)})` : label);
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-      <Bar
-        design="Header"
-        startContent={
-          <>
-            <Title level="H4">{draft.name || "Untitled model"}</Title>
-            {m.dirty ? <ObjectStatus state="Critical">Unsaved changes</ObjectStatus> : null}
-          </>
-        }
-        endContent={
-          <>
-            <MessageViewButton id="model-msgs" counter={allIssues.length}
-              type={allIssues.length ? "Negative" : "Positive"} onClick={() => setMsgOpen((o) => !o)} />
-            <Button design="Emphasized" disabled={m.issues.length > 0 || !m.dirty || m.saving} onClick={m.save}>
-              {m.saving ? "Saving…" : "Save model"}
-            </Button>
-          </>
-        }
-      />
-      {m.saveError && m.serverIssues.length === 0 ? (
-        <MessageStrip design="Negative" hideCloseButton>{m.saveError.message}</MessageStrip>
-      ) : null}
+    // Signature layout: editor left, live test-drive right. Preview toggles off to give the editor
+    // full width; toggling on slides it back in (SplitterElement can't animate, so we render/unrender).
+    <SplitterLayout style={{ height: "100%", width: "100%" }}>
+      <SplitterElement size={previewRender ? "58%" : "100%"} minSize={480}>
 
-      <ResponsivePopover opener="model-msgs" open={msgOpen} onClose={() => setMsgOpen(false)}>
-        <MessageView showDetailsPageHeader={false}>
-          {allIssues.map((i, idx) => (
-            <MessageItem key={idx} type="Negative" titleText={i.message} subtitleText={i.path}
-              onClick={() => jumpTo(i.path)} />
-          ))}
-        </MessageView>
-        {allIssues.length === 0 ? <Text style={{ padding: "1rem" }}>Model is valid.</Text> : null}
-      </ResponsivePopover>
+          {m.saveError && m.serverIssues.length === 0 ? (
+            <MessageStrip design="Negative" hideCloseButton>{m.saveError.message}</MessageStrip>
+          ) : null}
 
-      {/* Signature layout: editor left, live test-drive right. */}
-      <SplitterLayout style={{ flex: "1 1 0", minHeight: 0, width: "100%" }}>
-        <SplitterElement size="58%" minSize={480}>
-          <TabContainer
-            style={{ height: "100%", width: "100%" }}
-            contentBackgroundDesign="Transparent"
-            onTabSelect={(e) => setTab(((e.detail.tab as HTMLElement).dataset.key ?? "params") as TabKey)}
+          <ObjectPage
+            mode="IconTabBar"
+            selectedSectionId={tab}
+            onSelectedSectionChange={(e) => setTab(e.detail.selectedSectionId as TabKey)}
+            titleArea={
+              <ObjectPageTitle header={<Title level="H4">{draft.name || "Untitled model"}</Title>}
+                subHeader={m.dirty ? <ObjectStatus state="Critical">Unsaved changes</ObjectStatus> : undefined}
+                actionsBar={
+                  <Toolbar design="Transparent">
+                    <ToggleButton icon="show" pressed={previewOpen} onClick={togglePreview}>
+                      Preview
+                    </ToggleButton>
+                    <Button design="Emphasized" disabled={m.issues.length > 0 || !m.dirty || m.saving} onClick={m.save}>
+                      {m.saving ? "Saving…" : "Save"}
+                    </Button>
+                  </Toolbar>
+                }
+              />
+            }
           >
-            <Tab {...tabProps("params", "Parameters")}>
+            <ObjectPageSection id="params" titleText={secTitle("Parameters", "params")}>
               <ParamsTab draft={draft} update={m.update} issues={allIssues} tables={m.tables} />
-            </Tab>
-            <Tab {...tabProps("rules", "Rules")}>
+            </ObjectPageSection>
+            <ObjectPageSection id="rules" titleText={secTitle("Rules", "rules")}>
               <RulesTab draft={draft} update={m.update} issues={allIssues} lookups={lookups.data} />
-            </Tab>
-            <Tab {...tabProps("bom", "BOM")}><BomTab draft={draft} update={m.update} issues={allIssues} /></Tab>
-            <Tab {...tabProps("routing", "Routing")}><RoutingTab draft={draft} update={m.update} issues={allIssues} /></Tab>
-            <Tab {...tabProps("tables", "Tables")}><TablesTab /></Tab>
-            <Tab {...tabProps("settings", "Settings")}>
+            </ObjectPageSection>
+            <ObjectPageSection id="bom" titleText={secTitle("BOM", "bom")}>
+              <BomTab draft={draft} update={m.update} issues={allIssues} />
+            </ObjectPageSection>
+            <ObjectPageSection id="routing" titleText={secTitle("Routing", "routing")}>
+              <RoutingTab draft={draft} update={m.update} issues={allIssues} />
+            </ObjectPageSection>
+            <ObjectPageSection id="tables" titleText="Tables"><TablesTab /></ObjectPageSection>
+            <ObjectPageSection id="settings" titleText={secTitle("Settings", "settings")}>
               <SettingsTab draft={draft} update={m.update} issues={allIssues} />
-            </Tab>
-          </TabContainer>
-        </SplitterElement>
+            </ObjectPageSection>
+          </ObjectPage>
+
+      </SplitterElement>
+      {previewRender ? (
         <SplitterElement minSize={320}>
-          <PreviewPane draft={draft} issues={m.issues} />
+          <div
+            className={previewOpen ? "preview-pane-slide-in" : "preview-pane-slide-out"}
+            // Own animation only (onAnimationEnd bubbles from UI5 children); unmount after slide-out.
+            onAnimationEnd={(e) => {
+              if (e.target === e.currentTarget && !previewOpen) setPreviewRender(false);
+            }}
+          >
+            <PreviewPane draft={draft} issues={m.issues} />
+          </div>
         </SplitterElement>
-      </SplitterLayout>
-    </div>
+      ) : null}
+    </SplitterLayout>
   );
 }

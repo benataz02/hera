@@ -1,18 +1,21 @@
 import { useMemo } from "react";
 import {
   Bar, CheckBox, Form, FormGroup, FormItem, Input, Label, MessageStrip, MultiComboBox,
-  MultiComboBoxItem, ObjectStatus, Option, Panel, RadioButton, Select, StepInput, Text,
+  MultiComboBoxItem, ObjectPage, ObjectPageSection, ObjectStatus, Option, Panel, RadioButton,
+  Select, StepInput, Text,
 } from "@ui5/webcomponents-react";
 import { propagate, type DomainOption, type Entries, type ModelDef, type ResolvedLookups, type Val } from "@hera/config-engine";
 
 // The one form both the builder preview and the phase-4 wizard render. Fully controlled:
 // entries in, entries out; all engine work happens in propagate().
 
-export function ConfiguratorForm({ model, lookups, entries, onChange }: {
+export function ConfiguratorForm({ model, lookups, entries, onChange, layout = "flow" }: {
   model: ModelDef;
   lookups: ResolvedLookups;
   entries: Entries;
   onChange: (next: Entries) => void;
+  // "page" -> ObjectPage/ObjectPageSection (builder preview); "flow" -> Panels (wizard step).
+  layout?: "flow" | "page";
 }) {
   const prop = useMemo(() => propagate(model, lookups, entries), [model, lookups, entries]);
 
@@ -103,59 +106,75 @@ export function ConfiguratorForm({ model, lookups, entries, onChange }: {
     );
   };
 
+  // Groups/params render identically in both layouts (FormGroup = model group, FormItem = param);
+  // only the section wrapper (Panel vs ObjectPageSection) and status placement differ.
+  const groups = (s: ModelDef["structure"]["sections"][number]) => (
+    <Form labelSpan="S12 M4" layout="S1 M1 L1 XL1">
+      {s.groups.map((g) => (
+        <FormGroup key={g.key} headerText={g.title}>
+          {g.params.filter((k) => prop.visible[k]).map((k) => {
+            const p = model.parameters.find((x) => x.key === k);
+            if (!p) return null;
+            return (
+              <FormItem key={k} labelContent={<Label>{p.label + (p.unit ? ` (${p.unit})` : "")}</Label>}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", width: "100%" }}>
+                  {control(k)}
+                  {prop.defaulted.has(k) ? <ObjectStatus state="Information">auto</ObjectStatus> : null}
+                </div>
+              </FormItem>
+            );
+          })}
+        </FormGroup>
+      ))}
+    </Form>
+  );
+
+  const computed = model.computed.length ? (
+    <Form labelSpan="S12 M4" layout="S1 M1 L1 XL1">
+      <FormGroup>
+        {model.computed.map((c) => (
+          <FormItem key={c.key} labelContent={<Label>{c.key}</Label>}>
+            <Text>{String(prop.values[c.key] ?? "—")}</Text>
+          </FormItem>
+        ))}
+      </FormGroup>
+    </Form>
+  ) : null;
+
+  // The signature answer to "is this consistent and how big is it?"
+  const conflict = prop.conflicts.length ? prop.conflicts.map((c) => c.message).join(" · ") : null;
+  const consistent = `✓ Consistent · ${prop.open.length} open · ~${prop.candidateEstimate} candidate${prop.candidateEstimate === 1 ? "" : "s"}`;
+
+  if (layout === "page")
+    return (
+      <ObjectPage
+        style={{ height: "100%" }}
+        footerArea={
+          <Bar design="FloatingFooter"
+            startContent={<ObjectStatus state={conflict ? "Negative" : "Positive"}>{conflict ?? consistent}</ObjectStatus>} />
+        }
+      >
+        {[
+          ...model.structure.sections.map((s) => (
+            <ObjectPageSection key={s.key} id={s.key} titleText={s.title}>{groups(s)}</ObjectPageSection>
+          )),
+          ...(computed ? [<ObjectPageSection key="__computed" id="__computed" titleText="Computed">{computed}</ObjectPageSection>] : []),
+        ]}
+      </ObjectPage>
+    );
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
       <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "0.75rem", padding: "1rem" }}>
         {model.structure.sections.map((s) => (
-          <Panel key={s.key} headerText={s.title}>
-            <Form labelSpan="S12 M4" layout="S1 M1 L1 XL1">
-              {s.groups.map((g) => (
-                <FormGroup key={g.key} headerText={g.title}>
-                  {g.params.filter((k) => prop.visible[k]).map((k) => {
-                    const p = model.parameters.find((x) => x.key === k);
-                    if (!p) return null;
-                    return (
-                      <FormItem key={k} labelContent={<Label>{p.label + (p.unit ? ` (${p.unit})` : "")}</Label>}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", width: "100%" }}>
-                          {control(k)}
-                          {prop.defaulted.has(k) ? <ObjectStatus state="Information">auto</ObjectStatus> : null}
-                        </div>
-                      </FormItem>
-                    );
-                  })}
-                </FormGroup>
-              ))}
-            </Form>
-          </Panel>
+          <Panel key={s.key} headerText={s.title}>{groups(s)}</Panel>
         ))}
-        {model.computed.length ? (
-          <Panel headerText="Computed" collapsed>
-            <Form labelSpan="S12 M4" layout="S1 M1 L1 XL1">
-              <FormGroup>
-                {model.computed.map((c) => (
-                  <FormItem key={c.key} labelContent={<Label>{c.key}</Label>}>
-                    <Text>{String(prop.values[c.key] ?? "—")}</Text>
-                  </FormItem>
-                ))}
-              </FormGroup>
-            </Form>
-          </Panel>
-        ) : null}
+        {computed ? <Panel headerText="Computed" collapsed>{computed}</Panel> : null}
       </div>
-
-      {/* Sticky status: the signature answer to "is this consistent and how big is it?" */}
-      {prop.conflicts.length ? (
-        <MessageStrip design="Negative" hideCloseButton style={{ margin: "0 1rem 0.5rem" }}>
-          {prop.conflicts.map((c) => c.message).join(" · ")}
-        </MessageStrip>
+      {conflict ? (
+        <MessageStrip design="Negative" hideCloseButton style={{ margin: "0 1rem 0.5rem" }}>{conflict}</MessageStrip>
       ) : (
-        <Bar design="Footer"
-          startContent={
-            <Text>
-              ✓ Consistent · {prop.open.length} open · ~{prop.candidateEstimate} candidate{prop.candidateEstimate === 1 ? "" : "s"}
-            </Text>
-          }
-        />
+        <Bar design="Footer" startContent={<Text>{consistent}</Text>} />
       )}
     </div>
   );
