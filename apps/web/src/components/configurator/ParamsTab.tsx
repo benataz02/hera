@@ -312,6 +312,12 @@ function ParamDialog({ draft, tables, initial, isNew, onOk, onCancel }: {
           <Label>Help text</Label>
           <Input value={p.help ?? ""} onInput={(e) => set({ help: e.target.value || undefined })} />
         </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <Label>Extraction hint</Label>
+          <Input value={p.extractionHint ?? ""}
+            placeholder='Where/how this appears on drawings, e.g. "title block MATERIAL field"'
+            onInput={(e) => set({ extractionHint: e.target.value || undefined })} />
+        </div>
       </div>
     </Dialog>
   );

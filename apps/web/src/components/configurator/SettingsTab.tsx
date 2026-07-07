@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Form, FormGroup, FormItem, Input, Label, Option, Select, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, TableRowAction, Text } from "@ui5/webcomponents-react";
+import { Button, Form, FormGroup, FormItem, Input, Label, Option, Select, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, TableRowAction, Text, TextArea } from "@ui5/webcomponents-react";
 import type { Issue, ModelDef } from "@hera/config-engine";
 import { ExprInput } from "./ExprInput.tsx";
 import { issueFor } from "./useDraftModel.ts";
@@ -31,6 +31,12 @@ export function SettingsTab({ draft, update, issues }: {
             <Input value={batchText} placeholder="1, 10, 100" onInput={(e) => setBatches(e.target.value)}
               valueState={draft.batchDefaults.length ? "None" : "Negative"}
               valueStateMessage={<div>At least one positive integer batch size</div>} />
+          </FormItem>
+          <FormItem labelContent={<Label>Extraction context</Label>}>
+            <TextArea value={draft.extraction?.context ?? ""} rows={3}
+              placeholder="Drawing conventions the AI should know (units, title-block layout, notation)…"
+              onInput={(e) =>
+                update((d) => ({ ...d, extraction: e.target.value ? { context: e.target.value } : undefined }))} />
           </FormItem>
         </FormGroup>
         <FormGroup headerText="Pricing">
