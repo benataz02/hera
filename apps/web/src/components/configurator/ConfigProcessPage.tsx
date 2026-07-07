@@ -101,7 +101,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
       <Wizard contentLayout="MultipleSteps" style={{ flex: 1, minHeight: 0 }}
         onStepChange={(e) => goto(Number((e.detail.step as HTMLElement).dataset.idx))}>
         <WizardStep titleText="Configure" icon="settings" data-idx="0" selected={step === 0}>
-          <StepConfigure model={model.definition} lookups={lookups} entries={entries}
+          <StepConfigure model={model.definition} modelId={project.modelId} lookups={lookups} entries={entries}
             onChange={setEntries} onNext={() => goto(1)} saving={update.isPending} conflicted={conflicted} />
         </WizardStep>
         <WizardStep titleText="Batches" icon="multiselect-all" data-idx="1" selected={step === 1} disabled={conflicted}>
