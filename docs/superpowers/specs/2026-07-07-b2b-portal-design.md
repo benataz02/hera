@@ -24,6 +24,12 @@ real B1 quotations. External users never write to SAP.
 | Notification | In-app only (`requested` filter/badge); no email machinery in v1 |
 | Lifecycle | Submitted = locked; client can withdraw; reject (with note) reopens as draft |
 | Placement | Role-gated inside `apps/web` + new `clientProcedure`; no new app, no new subdomain |
+| Portal shell | Same `NavigationLayout`/`AppShell` with a 2-item client SideNavigation (My Requests, New Request) |
+| Requests list | UI5 `Table` (same pattern as internal lists), `IllustratedMessage` empty state |
+| New request | Catalog page of `Card`s per published model (+ `portal_description`), name dialog → wizard |
+| Request flow | UI5 `Wizard`, 4 steps: Configure → Quantities → Prices → Submit (max reuse of Step* components) |
+| Price detail | Assignment summary + price/quantity table (no charts package installed; none added) |
+| Status view | Read-only summary + UI5 `Timeline` from a new `events` jsonb on the project |
 
 ## Architecture
 
@@ -68,7 +74,7 @@ Flow:
    (`entities.list`), enters the client's email → `portalClients.invite` mints a token, stores the
    hash, returns the accept URL once. Admin copies the link and sends it themselves.
    `// ponytail: copy-link invites; email provider when onboarding volume demands`
-2. Client opens `https://<slug>.<baseDomain>/portal/accept?token=…`, signs up or logs in
+2. Client opens `https://<slug>.<baseDomain>/accept?token=…`, signs up or logs in
    (existing pages, redirect back), then the page calls `portal.acceptInvite({ token })` — a
    session-only procedure (no membership yet). Server verifies token hash + host tenant +
    unexpired + unaccepted, inserts the `member` row with role `client`, stamps
@@ -79,11 +85,14 @@ Flow:
 ## Data model changes (`packages/db/src/schema/configurator.ts` + portal table)
 
 - `config_model` + `portal boolean not null default false` — the publish flag (column, not
-  jsonb, so lists filter on it).
+  jsonb, so lists filter on it) — and `+ portal_description text` (catalog card subtitle).
 - `config_project`:
   - status set grows to `draft | calculated | quoted | requested | rejected`
   - `+ source text ('internal' | 'portal') not null default 'internal'`
   - `+ rejection_note text`
+  - `+ events jsonb not null default []` — `{ at, kind: 'created'|'submitted'|'withdrawn'|'rejected'|'quoted', note? }[]`,
+    appended inside each transition. Feeds the client-facing Timeline and survives
+    submit → reject → resubmit cycles without extra timestamp columns.
   - Portal projects always carry `customer` = the client's bound CardCode, forced server-side.
 - `config_run` — unchanged. Client submissions reuse `run.selection`
   (`{ candidateIdx, batchQty }[]`, no overrides). Snapshots keep **full** outputs — the internal
@@ -126,30 +135,89 @@ Internal-side additions:
 
 ## Web (`apps/web/src/routes/_authed/`)
 
-Role branch in the `_authed` layout: role `client` → slim portal shell (product name +
-"My Requests"; no SideNavigation) and only `/portal/*` routes. Clients hitting internal routes
-redirect to `/portal`; internal users hitting `/portal` redirect to `/`.
+All components below exist in the installed `@ui5/webcomponents-react@2.23.1` (verified against
+`dist/webComponents`); no new UI dependency. Notably **no charts package is installed** — the
+portal uses tables, not charts. New components live in `apps/web/src/components/portal/`.
 
-- `portal/index` — requests list: name, model, status as `ObjectStatus`
-  (`draft / requested / quoted / rejected`), updated at. "New request" → published-model picker →
-  creates a draft.
-- `portal/$id` — 4-step wizard reusing existing components:
-  1. **Configure** — same `ConfiguratorForm`, live propagation, drawing upload + extraction
-     suggestions (calls `portal.extract`).
-  2. **Batches** — same tokens/StepInput.
-  3. **Candidates** — same matrix (cells = unit price, per-column best highlighted); detail panel
-     shows the price-vs-batch chart only — no cost breakdown, no BOM/routing tabs.
-  4. **Submit** — summary + submit; then read-only with Withdraw.
-  `quoted` → read-only result with final line prices. `rejected` → note + "Reopen as draft".
-- `portal/accept` — invite landing: token check, auth redirect, `acceptInvite`, then `/portal`.
+### Shell — same `AppShell`, role branch
 
-Internal deltas:
-- Model builder header: "Available in portal" switch.
-- Configurations list: status filter includes `requested`; badge count on the nav item.
-- Wizard on a `requested` project: banner "Requested by <client user> for <customer>" +
-  Reject-with-note action. Reviewer can re-run, adjust, and `createQuote` as today.
-- Settings: "Portal clients" panel — invite dialog (BP picker + email → copy-link once), table of
-  invites/active clients with revoke.
+Clients get the **same `NavigationLayout` + `ShellBar` + `SideNavigation`** as internal users
+(settled in brainstorming — consistency over a bespoke shell), with a role branch inside
+`AppShell`:
+
+- `SideNavigation` for clients shows exactly two items: **My Requests** (`/portal`, icon
+  `sales-quote`) and **New Request** (`/portal/new`, icon `add-document`). Entities,
+  Configurations, Models, Settings are not rendered.
+- Internal-only side effects are gated on role: `entities.getEnabled` query and the
+  `client.entities.login()` B1 warm-up don't fire for clients (they'd be FORBIDDEN anyway).
+- `ShellBar` search hidden for clients (nothing to search in v1). `UserMenu`
+  (themes/density/sign-out) unchanged.
+- Routing guards: clients hitting internal routes redirect to `/portal`; internal users hitting
+  `/portal/*` redirect to `/`. The server procedures are the real boundary; this is UX.
+- `SideNavigationItem` has no counter prop in 2.23.1 — the internal "requested" count lives in
+  the Configurations list filter, not the nav (verified against the .d.ts).
+
+### `portal/index` — My Requests
+
+`DynamicPage` + UI5 `Table`, same pattern as the internal lists: Name · Product (model name) ·
+Status (`ObjectStatus`) · Updated. Row click navigates. Empty state: `IllustratedMessage`
+(NoEntries) with a "New request" button. Client-facing status wording:
+`draft|calculated` → **Draft** (Information) · `requested` → **Submitted** (Critical) ·
+`quoted` → **Quoted** (Positive) · `rejected` → **Needs changes** (Negative).
+
+### `portal/new` — product catalog
+
+Grid of `Card`s (`CardHeader`: model name + `portal_description` subtitle, `Icon` avatar
+`product`), one per published model. Click → name-your-request `Dialog` (single `Input`) →
+`portal.projects.create` → navigate to the wizard. This is the one place cards beat a table:
+it's the client's storefront, and it grows into images later. `// ponytail: icon avatar; model
+image column when someone uploads one`
+
+### `portal/$id` — request wizard (draft/calculated) and summary (after submit)
+
+While `draft`/`calculated`: UI5 `Wizard` (same MultipleSteps pattern as `ConfigProcessPage`),
+4 steps:
+
+1. **Configure** — reuses `StepConfigure` as-is: `ConfiguratorForm` with live client-side
+   `propagate()` (eliminated options disabled with the constraint message), `ExtractPanel`
+   drawing upload wired to `portal.extract`, sticky consistency bar.
+2. **Quantities** — reuses `StepBatches` (Tokenizer + StepInput, model batch defaults).
+3. **Prices** — reuses the `StepCandidates` matrix (rows = candidates labeled by open params,
+   columns = quantities, price cell = selection control, green = lowest per column) fed by
+   `PortalCandidate` data. The internal `CandidateDetail` (cost breakdown, BOM/routing) is
+   replaced by `PortalCandidateDetail`: a two-column `Form` with the full parameter assignment
+   + a small price-per-quantity table with the selected cells checked. No costs, no chart.
+4. **Submit** — summary `Card`: one line per selected cell (configuration label, quantity, unit
+   price, line total) + grand total; `MessageStrip` (Information): "Prices are indicative until
+   your supplier confirms the quote."; Submit → `MessageBox` confirm → `portal.submit`.
+
+After submit the same route renders `PortalRequestSummary` (read-only): `DynamicPage` header
+with `ObjectStatus` + contextual actions (**Withdraw** while `requested`, **Reopen as draft**
+when `rejected`), the selected-lines table (final prices once `quoted`, from
+`portal.quotedResult`), the rejection note as a `MessageStrip` (Negative) when present, and a
+UI5 `Timeline` rendered straight from `project.events` (created → submitted → quoted/rejected,
+icons `create-form` / `paper-plane` / `sales-quote` / `decline`).
+
+### `/accept` — invite landing (outside `_authed`)
+
+The accept route can't live under `_authed` (its layout reconciles org membership, which the
+invitee doesn't have yet). Top-level route `/accept?token=…` on the tenant subdomain:
+requires only a session (redirects to login/signup with a return URL), calls
+`portal.acceptInvite`, then hard-navigates to `/portal`. Errors (expired/used/unknown token)
+render as `IllustratedMessage` + message.
+
+### Internal deltas
+
+- Model builder (`SettingsTab`): "Available in portal" `Switch` + portal description `Input`.
+- Configurations list: status filter (`SegmentedButton`: All | Requested (n) | Draft | Quoted)
+  with requested sorted first.
+- Wizard on a `requested` project: `MessageStrip` banner "Requested by <client email> for
+  <customer>" + **Reject** button → `Dialog` with `TextArea` note → `configs.reject`. Reviewer
+  can re-run, adjust, and `createQuote` as today.
+- Settings: "Portal clients" `Panel` — `Table` of invites/active clients (email, customer,
+  status, revoke `TableRowAction`) + invite `Dialog` (BP picker via existing `entities.list`
+  value help + email `Input`) → server returns the accept URL once → copy button
+  (`navigator.clipboard`) + `Toast` "Invite link copied".
 
 ## Error handling
 
