@@ -10,3 +10,5 @@ export { enumerate } from "./enumerate";
 export type { Enumeration } from "./enumerate";
 export { computeOutputs, OutputOverridesZ } from "./output";
 export type { BomResult, OpResult, Outputs, OutputOverrides } from "./output";
+export { buildExtractionRequest } from "./extract";
+export type { ExtractionRequest, JsonSchema } from "./extract";
