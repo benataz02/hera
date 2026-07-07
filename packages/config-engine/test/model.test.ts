@@ -13,6 +13,15 @@ describe("ModelDefZ", () => {
     expect(() => ModelDefZ.parse(bad)).toThrow();
   });
 
+  test("keeps extraction context and per-parameter hints", () => {
+    const m = structuredClone(model) as any;
+    m.extraction = { context: "Dimensions are in millimetres unless noted." };
+    m.parameters[0].extractionHint = "Title block MATERIAL field";
+    const parsed = ModelDefZ.parse(m);
+    expect(parsed.extraction?.context).toBe("Dimensions are in millimetres unless noted.");
+    expect(parsed.parameters[0]!.extractionHint).toBe("Title block MATERIAL field");
+  });
+
   test("rejects unknown constraint kind", () => {
     const bad = structuredClone(model) as any;
     bad.constraints.push({ kind: "magic" });

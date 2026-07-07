@@ -45,6 +45,7 @@ export const ParamZ = z.object({
   requiredWhen: z.string().optional(),
   unit: z.string().optional(),
   help: z.string().optional(),
+  extractionHint: z.string().optional(),
 });
 export type Param = z.infer<typeof ParamZ>;
 
@@ -104,6 +105,7 @@ export const ModelDefZ = z.object({
   ),
   pricing: z.object({ priceExpr: z.string(), quoteItemCode: z.string().min(1) }),
   batchDefaults: z.array(z.number().int().positive()),
+  extraction: z.object({ context: z.string().optional() }).optional(),
 });
 export type ModelDef = z.infer<typeof ModelDefZ>;
 
