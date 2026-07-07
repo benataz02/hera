@@ -12,6 +12,7 @@
     "better-auth-generate": "bunx @better-auth/cli generate --config src/auth.ts --output ../../packages/db/src/schema/auth.ts -y"
   },
   "dependencies": {
+    "@google/genai": "^2.10.0",
     "@hera/config-engine": "workspace:*",
     "@hera/db": "workspace:*",
     "@orpc/client": "^1.14.6",

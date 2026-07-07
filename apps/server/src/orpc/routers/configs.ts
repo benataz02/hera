@@ -15,10 +15,10 @@ import { resolveLookups, type QueryFetcher } from "../../lookups.ts";
 // Trust model: browser propagates for preview; THESE handlers compute the numbers that get
 // stored. Lookups: ~5-min cache for interactive use, always fresh inside executeRun.
 
-const needsAgent = (m: ModelDef): boolean =>
+export const needsAgent = (m: ModelDef): boolean =>
   m.queryTables.length > 0 || m.parameters.some((p) => p.domain?.kind === "options" && p.domain.ref.source === "query");
 
-async function loadModel(tenantId: string, modelId: string) {
+export async function loadModel(tenantId: string, modelId: string) {
   const [m] = await db
     .select({ id: configModel.id, name: configModel.name, definition: configModel.definition, updatedAt: configModel.updatedAt })
     .from(configModel)
@@ -28,7 +28,7 @@ async function loadModel(tenantId: string, modelId: string) {
   return m;
 }
 
-async function freshLookups(tenantId: string, model: ModelDef, fetchQuery: QueryFetcher): Promise<ResolvedLookups> {
+export async function freshLookups(tenantId: string, model: ModelDef, fetchQuery: QueryFetcher): Promise<ResolvedLookups> {
   try {
     return await resolveLookups(model, await tenantTables(tenantId), fetchQuery);
   } catch (e) {
