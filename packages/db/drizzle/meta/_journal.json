@@ -5,50 +5,15 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1782550127366,
-      "tag": "0000_cool_the_leader",
+      "when": 1783428440403,
+      "tag": "0000_amusing_the_enforcers",
       "breakpoints": true
     },
     {
       "idx": 1,
       "version": "7",
-      "when": 1782592595605,
-      "tag": "0001_add_config_masterdata",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1782592609105,
-      "tag": "0002_drop_config_table",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1782835769523,
-      "tag": "0003_bitter_outlaw_kid",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1782891630622,
-      "tag": "0004_perfect_xavin",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1783077632373,
-      "tag": "0005_drop_config_masterdata",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1783078861719,
-      "tag": "0006_configurator_tables",
+      "when": 1783455802734,
+      "tag": "0001_solid_caretaker",
       "breakpoints": true
     }
   ]

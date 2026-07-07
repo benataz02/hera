@@ -3,3 +3,4 @@ export * from "./tenant.ts";
 export * from "./agent-request.ts";
 export * from "./variant.ts";
 export * from "./configurator.ts";
+export * from "./portal.ts";

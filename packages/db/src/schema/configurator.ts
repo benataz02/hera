@@ -1,4 +1,4 @@
-import { index, jsonb, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, jsonb, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import type { Entries, ModelDef, OutputOverrides, Outputs, ResolvedLookups, Val } from "@hera/config-engine";
 
 // Configurator persistence: mutable model + immutable snapshot-on-run (model + lookups + computed
@@ -12,6 +12,9 @@ export const configModel = pgTable(
     tenantId: text("tenant_id").notNull(),
     name: text("name").notNull(),
     definition: jsonb("definition").$type<ModelDef>().notNull(),
+    // Client portal publish flag + catalog card subtitle. Columns (not jsonb) so lists filter on them.
+    portal: boolean("portal").notNull().default(false),
+    portalDescription: text("portal_description"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -35,8 +38,16 @@ export const configTable = pgTable(
   (t) => [uniqueIndex("config_table_tenant_name_uq").on(t.tenantId, t.name)],
 );
 
-export type ProjectStatus = "draft" | "calculated" | "quoted";
+export type ProjectStatus = "draft" | "calculated" | "quoted" | "requested" | "rejected";
+export type ProjectSource = "internal" | "portal";
 export type ProjectCustomer = { cardCode: string; cardName: string };
+// Client-facing history; appended inside each transition. Feeds the portal Timeline and
+// survives submit → reject → resubmit cycles without extra timestamp columns.
+export type ProjectEvent = {
+  at: string;
+  kind: "created" | "submitted" | "withdrawn" | "rejected" | "quoted";
+  note?: string;
+};
 
 // The "Configurations" document: customer + model + entries + batches; runs hang off it.
 export const configProject = pgTable(
@@ -48,6 +59,9 @@ export const configProject = pgTable(
     name: text("name").notNull(),
     customer: jsonb("customer").$type<ProjectCustomer>(),
     status: text("status").$type<ProjectStatus>().notNull().default("draft"),
+    source: text("source").$type<ProjectSource>().notNull().default("internal"),
+    rejectionNote: text("rejection_note"),
+    events: jsonb("events").$type<ProjectEvent[]>().notNull().default([]),
     entries: jsonb("entries").$type<Entries>().notNull().default({}),
     batches: jsonb("batches").$type<number[]>().notNull().default([]),
     createdBy: text("created_by").notNull(),
