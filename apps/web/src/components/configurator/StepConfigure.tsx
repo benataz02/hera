@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { Bar, BusyIndicator, Button, MessageStrip } from "@ui5/webcomponents-react";
 import type { Entries, ModelDef, ResolvedLookups } from "@hera/config-engine";
@@ -6,7 +7,7 @@ import { ExtractPanel } from "./ExtractPanel.tsx";
 
 // Wizard step 1: the same form the builder preview uses, over server-resolved lookups.
 // Lookup errors (agent offline, source unreachable) surface verbatim with a retry.
-export function StepConfigure({ modelId, model, lookups, entries, onChange, onNext, saving, conflicted }: {
+export function StepConfigure({ modelId, model, lookups, entries, onChange, onNext, saving, conflicted, extract }: {
   modelId: string;
   model: ModelDef;
   lookups: UseQueryResult<ResolvedLookups, Error>;
@@ -15,6 +16,7 @@ export function StepConfigure({ modelId, model, lookups, entries, onChange, onNe
   onNext: () => void;
   saving: boolean;
   conflicted: boolean;
+  extract?: ComponentProps<typeof ExtractPanel>["extract"];
 }) {
   if (lookups.isPending) return <BusyIndicator active delay={200} style={{ width: "100%", marginTop: "3rem" }} />;
   if (lookups.error)
@@ -26,7 +28,7 @@ export function StepConfigure({ modelId, model, lookups, entries, onChange, onNe
     );
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-      <ExtractPanel modelId={modelId} model={model} entries={entries} onChange={onChange} />
+      <ExtractPanel modelId={modelId} model={model} entries={entries} onChange={onChange} extract={extract} />
       <ConfiguratorForm model={model} lookups={lookups.data} entries={entries} onChange={onChange} />
       <Bar design="FloatingFooter" endContent={
         <Button design="Emphasized" disabled={conflicted || saving} onClick={onNext}

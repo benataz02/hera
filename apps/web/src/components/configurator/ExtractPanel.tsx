@@ -4,7 +4,7 @@ import {
   BusyIndicator, Button, FileUploader, List, ListItemCustom, MessageStrip, ObjectStatus, Panel, Text,
 } from "@ui5/webcomponents-react";
 import type { Entries, ModelDef, Val } from "@hera/config-engine";
-import { orpc } from "../../orpc.ts";
+import { client } from "../../orpc.ts";
 
 // Upload a customer drawing → server-side Gemini extraction → per-parameter suggestions.
 // Suggest-and-confirm: values enter `entries` only through an explicit Accept click; invalid
@@ -24,15 +24,22 @@ async function toBase64(f: File): Promise<string> {
 
 type Suggestion = { paramKey: string; value: Val; evidence: string; valid: boolean; reason?: string };
 
-export function ExtractPanel({ modelId, model, entries, onChange }: {
+export function ExtractPanel({ modelId, model, entries, onChange, extract }: {
   modelId: string;
   model: ModelDef;
   entries: Entries;
   onChange: (next: Entries) => void;
+  extract?: (input: { modelId: string; file: { name: string; mimeType: "application/pdf" | "image/png" | "image/jpeg"; dataBase64: string } }) => Promise<{ suggestions: Suggestion[] }>;
 }) {
   const [fileError, setFileError] = useState<string | null>(null);
   const [handled, setHandled] = useState<Set<string>>(new Set()); // accepted or dismissed paramKeys
-  const extract = useMutation(orpc.extraction.extract.mutationOptions({ onSuccess: () => setHandled(new Set()) }));
+  // Union-of-function-types as mutationFn confuses useMutation's TVariables inference (collapses
+  // to `never`) — pin to a concrete signature via NonNullable<typeof extract> before handing it off.
+  const doExtract: NonNullable<typeof extract> = extract ?? ((input) => client.extraction.extract(input));
+  const extractMut = useMutation({
+    mutationFn: doExtract,
+    onSuccess: () => setHandled(new Set()),
+  });
 
   const pick = async (file: File | null | undefined) => {
     setFileError(null);
@@ -40,7 +47,7 @@ export function ExtractPanel({ modelId, model, entries, onChange }: {
     const mimeType = MIME_BY_EXT[file.name.split(".").pop()?.toLowerCase() ?? ""];
     if (!mimeType) return setFileError("Only PDF, PNG or JPEG drawings are supported.");
     if (file.size > MAX_BYTES) return setFileError("The file exceeds the 15MB limit.");
-    extract.mutate({ modelId, file: { name: file.name, mimeType, dataBase64: await toBase64(file) } });
+    extractMut.mutate({ modelId, file: { name: file.name, mimeType, dataBase64: await toBase64(file) } });
   };
 
   const accept = (list: Suggestion[]) => {
@@ -54,7 +61,7 @@ export function ExtractPanel({ modelId, model, entries, onChange }: {
   };
   const dismiss = (key: string) => setHandled((h) => new Set([...h, key]));
 
-  const suggestions: Suggestion[] = extract.data?.suggestions ?? [];
+  const suggestions: Suggestion[] = extractMut.data?.suggestions ?? [];
   const open = suggestions.filter((s) => !handled.has(s.paramKey));
   const openValid = open.filter((s) => s.valid);
   const labelOf = (key: string) => model.parameters.find((p) => p.key === key)?.label ?? key;
@@ -63,24 +70,24 @@ export function ExtractPanel({ modelId, model, entries, onChange }: {
     <Panel headerText="Extract from drawing" fixed>
       <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
         <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-          <FileUploader hideInput accept=".pdf,.png,.jpg,.jpeg" disabled={extract.isPending}
+          <FileUploader hideInput accept=".pdf,.png,.jpg,.jpeg" disabled={extractMut.isPending}
             onChange={(e) => void pick(e.target.files?.[0])}>
             <Button icon="upload">Upload drawing</Button>
           </FileUploader>
-          {extract.isPending ? <BusyIndicator active delay={0} size="S" text="Reading drawing…" /> : null}
+          {extractMut.isPending ? <BusyIndicator active delay={0} size="S" text="Reading drawing…" /> : null}
           {openValid.length > 1 ? (
             <Button design="Emphasized" onClick={() => accept(openValid)}>Accept all valid ({openValid.length})</Button>
           ) : null}
         </div>
 
         {fileError ? <MessageStrip design="Negative" hideCloseButton>{fileError}</MessageStrip> : null}
-        {extract.error ? (
+        {extractMut.error ? (
           <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-            <MessageStrip design="Negative" hideCloseButton>{extract.error.message}</MessageStrip>
-            <Button style={{ alignSelf: "start" }} onClick={() => extract.mutate(extract.variables!)}>Retry</Button>
+            <MessageStrip design="Negative" hideCloseButton>{extractMut.error.message}</MessageStrip>
+            <Button style={{ alignSelf: "start" }} onClick={() => extractMut.mutate(extractMut.variables!)}>Retry</Button>
           </div>
         ) : null}
-        {extract.isSuccess && suggestions.length === 0 ? (
+        {extractMut.isSuccess && suggestions.length === 0 ? (
           <Text>Nothing could be extracted from this drawing.</Text>
         ) : null}
 
