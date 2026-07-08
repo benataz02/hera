@@ -1,6 +1,6 @@
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { db, configModel, member, organization, portalClient, user } from "@hera/db";
 import { adminProcedure, baseDomain, clientProcedure, sessionProcedure } from "../base.ts";
@@ -97,13 +97,18 @@ export const portalRouter = {
       });
 
     await db.transaction(async (tx) => {
+      // Guarded claim: only the first concurrent acceptInvite for this token wins.
+      // A loser's UPDATE affects 0 rows once the winner commits, so we never create
+      // an orphaned member row for a token that was already claimed.
+      const claimed = await tx
+        .update(portalClient)
+        .set({ userId: context.user.id, acceptedAt: new Date() })
+        .where(and(eq(portalClient.id, inv.id), isNull(portalClient.acceptedAt)))
+        .returning({ id: portalClient.id });
+      if (!claimed.length) throw new ORPCError("BAD_REQUEST", { message: "This invite link was already used." });
       await tx.insert(member).values({
         id: crypto.randomUUID(), organizationId: org.id, userId: context.user.id, role: "client", createdAt: new Date(),
       });
-      await tx
-        .update(portalClient)
-        .set({ userId: context.user.id, acceptedAt: new Date() })
-        .where(eq(portalClient.id, inv.id));
     });
     return { ok: true };
   }),

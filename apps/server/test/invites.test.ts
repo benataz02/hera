@@ -68,6 +68,27 @@ describe("spec test 4 — invites", () => {
     expect(await code(invite(slug, admin.cookie, insider.email))).toBe("BAD_REQUEST");
   });
 
+  test("concurrent accept of the same token: exactly one wins, the other is rejected cleanly", async () => {
+    const { tenantId, slug } = await makeTenant();
+    const admin = await makeUser("admin", tenantId);
+    const a = await makeUser();
+    const b = await makeUser();
+    const { token } = await invite(slug, admin.cookie, "race@acme.test");
+
+    const [ra, rb] = await Promise.allSettled([
+      call(router.portal.acceptInvite, { token }, { context: { headers: tenantHeaders(slug, a.cookie) } }),
+      call(router.portal.acceptInvite, { token }, { context: { headers: tenantHeaders(slug, b.cookie) } }),
+    ]);
+    const outcomes = [ra, rb].map((r) => r.status);
+    expect(outcomes.filter((s) => s === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((s) => s === "rejected")).toHaveLength(1);
+
+    // The loser must not be left as an orphaned member with no clientProcedure access.
+    const loserCookie = ra.status === "rejected" ? a.cookie : b.cookie;
+    expect(await code(call(router.portal.models.list, undefined,
+      { context: { headers: tenantHeaders(slug, loserCookie) } }))).toBe("FORBIDDEN");
+  });
+
   test("revoke of an active client removes portal access", async () => {
     const { tenantId, slug } = await makeTenant();
     const admin = await makeUser("admin", tenantId);
