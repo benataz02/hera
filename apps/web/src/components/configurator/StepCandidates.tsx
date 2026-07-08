@@ -36,7 +36,7 @@ export function StepCandidates({ model, runEntries, candidates, selection, onTog
       {capped ? (
         <MessageStrip design="Critical" hideCloseButton>
           Stopped at {candidates.length} candidates — go back and set more parameters
-          {widest ? ` (${widest.key} is widest with ${widest.size} options)` : ""}.
+          {widest ? ` (${model.parameters.find((p) => p.key === widest.key)?.label ?? widest.key} is widest with ${widest.size} options)` : ""}.
         </MessageStrip>
       ) : null}
 

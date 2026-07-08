@@ -10,7 +10,7 @@ import { client, orpc } from "../../orpc.ts";
 import { StepConfigure } from "../configurator/StepConfigure.tsx";
 import { StepBatches } from "../configurator/StepBatches.tsx";
 import { StepCandidates } from "../configurator/StepCandidates.tsx";
-import { candidateLabel, fmt, isSelected, openKeys, toggleSelection, type Sel } from "../configurator/runView.ts";
+import { candidateLabel, fmt, openKeys, toggleSelection, type Sel } from "../configurator/runView.ts";
 import { portalStatusUi, type PortalStatus } from "./portalUi.ts";
 import { PortalCandidateDetail } from "./PortalCandidateDetail.tsx";
 import { PortalRequestSummary } from "./PortalRequestSummary.tsx";
