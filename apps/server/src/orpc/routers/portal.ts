@@ -1,8 +1,9 @@
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
-import { db, configModel, member, organization, portalClient, user } from "@hera/db";
+import { db, configModel, configProject, configRun, member, organization, portalClient, user, type ProjectEvent } from "@hera/db";
+import { EntriesZ } from "@hera/config-engine";
 import { adminProcedure, baseDomain, clientProcedure, sessionProcedure } from "../base.ts";
 import { hashToken } from "../../crypto.ts";
 import { tenantSlugFromHost } from "../../tenant.ts";
@@ -66,6 +67,20 @@ export const portalClientsRouter = {
   }),
 };
 
+// Every portal read/write is fenced by tenant + the client's CardCode + source='portal'.
+const ownProject = (id: string, ctx: { tenantId: string; cardCode: string }) =>
+  and(
+    eq(configProject.id, id),
+    eq(configProject.tenantId, ctx.tenantId),
+    eq(configProject.source, "portal"),
+    sql`${configProject.customer}->>'cardCode' = ${ctx.cardCode}`,
+  );
+
+const EDITABLE = ["draft", "calculated"] as const;
+
+const event = (kind: ProjectEvent["kind"], note?: string): ProjectEvent =>
+  ({ at: new Date().toISOString(), kind, ...(note ? { note } : {}) });
+
 // --- Client side ---
 export const portalRouter = {
   // Session-only: the invitee has no membership yet. Tenant comes from the host subdomain.
@@ -122,5 +137,86 @@ export const portalRouter = {
         .where(and(eq(configModel.tenantId, context.tenantId), eq(configModel.portal, true)))
         .orderBy(configModel.name),
     ),
+  },
+
+  projects: {
+    list: clientProcedure.handler(({ context }) =>
+      db
+        .select({
+          id: configProject.id, name: configProject.name, status: configProject.status,
+          modelName: configModel.name, updatedAt: configProject.updatedAt,
+        })
+        .from(configProject)
+        .innerJoin(configModel, eq(configModel.id, configProject.modelId))
+        .where(and(
+          eq(configProject.tenantId, context.tenantId),
+          eq(configProject.source, "portal"),
+          sql`${configProject.customer}->>'cardCode' = ${context.cardCode}`,
+        ))
+        .orderBy(desc(configProject.updatedAt)),
+    ),
+
+    create: clientProcedure
+      .input(z.object({ modelId: z.uuid(), name: z.string().min(1) }))
+      .handler(async ({ input, context }) => {
+        const [m] = await db
+          .select({ id: configModel.id, definition: configModel.definition })
+          .from(configModel)
+          .where(and(
+            eq(configModel.id, input.modelId), eq(configModel.tenantId, context.tenantId),
+            eq(configModel.portal, true),
+          ))
+          .limit(1);
+        if (!m) throw new ORPCError("NOT_FOUND", { message: "This product is no longer available — contact your supplier." });
+        const [ins] = await db
+          .insert(configProject)
+          .values({
+            tenantId: context.tenantId, modelId: m.id, name: input.name,
+            source: "portal",
+            customer: { cardCode: context.cardCode, cardName: context.cardName }, // forced server-side
+            batches: m.definition.batchDefaults,
+            createdBy: context.userId,
+            events: [event("created")],
+          })
+          .returning({ id: configProject.id });
+        return { id: ins!.id };
+      }),
+
+    update: clientProcedure
+      .input(z.object({
+        id: z.uuid(),
+        name: z.string().min(1).optional(),
+        entries: EntriesZ.optional(),
+        batches: z.array(z.number().int().min(1)).optional(),
+      }))
+      .handler(async ({ input, context }) => {
+        const { id, ...rest } = input;
+        const fields: Partial<typeof configProject.$inferInsert> = { ...rest, updatedAt: new Date() };
+        if (input.entries !== undefined || input.batches !== undefined) fields.status = "draft";
+        const updated = await db
+          .update(configProject)
+          .set(fields)
+          .where(and(ownProject(id, context), inArray(configProject.status, [...EDITABLE])))
+          .returning({ id: configProject.id });
+        if (!updated.length) {
+          const [exists] = await db.select({ id: configProject.id }).from(configProject)
+            .where(ownProject(id, context)).limit(1);
+          if (exists) throw new ORPCError("BAD_REQUEST", { message: "A submitted request is locked — withdraw it to make changes." });
+          throw new ORPCError("NOT_FOUND");
+        }
+        return { ok: true };
+      }),
+
+    remove: clientProcedure.input(z.object({ id: z.uuid() })).handler(async ({ input, context }) => {
+      await db.transaction(async (tx) => {
+        const del = await tx
+          .delete(configProject)
+          .where(and(ownProject(input.id, context), inArray(configProject.status, [...EDITABLE])))
+          .returning({ id: configProject.id });
+        if (!del.length) throw new ORPCError("NOT_FOUND");
+        await tx.delete(configRun).where(and(eq(configRun.projectId, input.id), eq(configRun.tenantId, context.tenantId)));
+      });
+      return { ok: true };
+    }),
   },
 };

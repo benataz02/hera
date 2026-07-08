@@ -50,12 +50,21 @@ export const modelsRouter = {
   }),
 
   save: adminProcedure
-    .input(z.object({ id: z.uuid().optional(), definition: ModelDefZ }))
+    .input(z.object({
+      id: z.uuid().optional(),
+      definition: ModelDefZ,
+      portal: z.boolean().optional(),
+      portalDescription: z.string().nullable().optional(),
+    }))
     .handler(async ({ input, context }) => {
       const known = (await tenantTables(context.tenantId)).map((t) => t.name);
       const issues = checkModel(input.definition, known);
       if (issues.length) throw new ORPCError("BAD_REQUEST", { message: "Model has errors", data: { issues } });
-      const fields = { name: input.definition.name, definition: input.definition, updatedAt: new Date() };
+      const fields = {
+        name: input.definition.name, definition: input.definition, updatedAt: new Date(),
+        ...(input.portal !== undefined ? { portal: input.portal } : {}),
+        ...(input.portalDescription !== undefined ? { portalDescription: input.portalDescription } : {}),
+      };
       if (input.id) {
         const updated = await db
           .update(configModel)
