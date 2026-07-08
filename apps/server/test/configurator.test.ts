@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { and, eq } from "drizzle-orm";
-import { db, configModel, configProject, configRun, pool } from "@hera/db";
+import { db, configModel, configProject, configRun } from "@hera/db";
 import type { ModelDef } from "@hera/config-engine";
 import { applySelection, executeRun } from "../src/orpc/routers/configs.ts";
 import type { QueryFetcher } from "../src/lookups.ts";
@@ -40,7 +40,6 @@ describe.skipIf(!process.env.DATABASE_URL)("configurator run + select (integrati
     await db.delete(configRun).where(eq(configRun.tenantId, tenantId));
     await db.delete(configProject).where(eq(configProject.tenantId, tenantId));
     await db.delete(configModel).where(eq(configModel.tenantId, tenantId));
-    await pool.end();
   });
 
   test("run snapshots model+lookups+candidates and flips status; select recomputes overrides", async () => {
