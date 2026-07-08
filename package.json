@@ -29,6 +29,7 @@
     "seed:standard": "bun scripts/seed-standard.ts",
     "e2e": "bun scripts/e2e.ts",
     "test:engine": "bun test packages/config-engine",
+    "test:server": "bun test apps/server",
     "kill": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/kill-dev.ps1"
   }
 }
