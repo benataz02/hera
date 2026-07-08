@@ -6,7 +6,7 @@ import { AppShell } from "../components/AppShell.tsx";
 // The app shell for every signed-in page. The tenant is the subdomain; on the apex this
 // route is just the lobby dispatcher (it never renders the app there).
 export const Route = createFileRoute("/_authed")({
-  beforeLoad: async ({ context }) => {
+  beforeLoad: async ({ context, location }) => {
     const slug = currentSlug();
     const data = await context.queryClient.ensureQueryData({
       queryKey: ["session"],
@@ -29,6 +29,15 @@ export const Route = createFileRoute("/_authed")({
     // org-plugin endpoints (invite, active member) at this tenant. The server re-checks too.
     const res = await authClient.organization.setActive({ organizationSlug: slug });
     if (res.error) return hardRedirect(apexUrl("/select")); // not a member of this workspace
+
+    // Role decides which app this shell renders. UX only — the server procedures are the boundary.
+    const role = await context.queryClient.ensureQueryData({
+      queryKey: ["active-member-role"],
+      queryFn: async () => (await authClient.organization.getActiveMember()).data?.role ?? "member",
+    });
+    const path = location.pathname;
+    if (role === "client" && !path.startsWith("/portal")) throw redirect({ to: "/portal" });
+    if (role !== "client" && path.startsWith("/portal")) throw redirect({ to: "/" });
   },
   component: AppShell,
 });

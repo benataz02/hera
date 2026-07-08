@@ -39,13 +39,17 @@ export function AppShell() {
     queryFn: async () => (await authClient.organization.getActiveMember()).data?.role ?? "member",
   });
   const isAdmin = role.data === "admin" || role.data === "owner";
+  const isClient = role.data === "client";
 
-  const entities = useQuery(orpc.entities.getEnabled.queryOptions());
+  const entities = useQuery({ ...orpc.entities.getEnabled.queryOptions(), enabled: !!role.data && !isClient });
   const enabled = entities.data ?? [];
 
   // Open the agent's B1 Service Layer session once per app load so the first query/value-help
   // doesn't wait out the /Login round-trip. Best-effort: ignore failures (e.g. agent offline).
-  useEffect(() => void client.entities.login().catch(() => {}), []);
+  // Skipped for client (portal) sessions — they never touch entity data.
+  useEffect(() => {
+    if (role.data && !isClient) void client.entities.login().catch(() => {});
+  }, [role.data, isClient]);
 
   const onSelect: SideNavigationPropTypes["onSelectionChange"] = (e) => {
     const el = e.detail.item as HTMLElement;
@@ -119,8 +123,8 @@ export function AppShell() {
             primaryTitle="HERA"
             logo={<img alt="SAP Logo" src="https://ui5.github.io/webcomponents/images/sap-logo-svg.svg" />}
             onLogoClick={() => navigate({ to: "/" })}
-            searchField={<Search  placeholder="Search" showClearIcon />}
-            showSearchField
+            searchField={isClient ? undefined : <Search  placeholder="Search" showClearIcon />}
+            showSearchField={!isClient}
             hideSearchButton
             profile={<Avatar id="user-menu-opener" initials='BA' />}
             onProfileClick={() => setUserMenuOpen((open) => !open)}
@@ -177,38 +181,49 @@ export function AppShell() {
       }
       sideContent={
         <SideNavigation onSelectionChange={onSelect}>
-          <SideNavigationItem text="Home" icon="home" data-to="/" selected={pathname === "/"} />
-          {enabled.map((ent) => (
-            <SideNavigationItem
-              key={ent.name}
-              text={ent.name}
-              icon="list"
-              data-entity={ent.name}
-              selected={pathname === `/${ent.name}`}
-            />
-          ))}
-          <SideNavigationItem
-            text="Configurations"
-            icon="sales-quote"
-            data-to="/configs"
-            selected={pathname === "/configs" || pathname.startsWith("/configs/")}
-          />
-          {isAdmin ? (
+          {isClient ? (
             <>
-              <SideNavigationItem
-                text="Configurator models"
-                icon="tree"
-                data-to="/models"
-                selected={pathname === "/models" || pathname.startsWith("/models/")}
-              />
-              <SideNavigationItem
-                text="Settings"
-                icon="action-settings"
-                data-to="/settings"
-                selected={pathname === "/settings"}
-              />
+              <SideNavigationItem text="My requests" icon="sales-quote" data-to="/portal"
+                selected={pathname === "/portal" || (pathname.startsWith("/portal/") && pathname !== "/portal/new")} />
+              <SideNavigationItem text="New request" icon="add-document" data-to="/portal/new"
+                selected={pathname === "/portal/new"} />
             </>
-          ) : null}
+          ) : (
+            <>
+              <SideNavigationItem text="Home" icon="home" data-to="/" selected={pathname === "/"} />
+              {enabled.map((ent) => (
+                <SideNavigationItem
+                  key={ent.name}
+                  text={ent.name}
+                  icon="list"
+                  data-entity={ent.name}
+                  selected={pathname === `/${ent.name}`}
+                />
+              ))}
+              <SideNavigationItem
+                text="Configurations"
+                icon="sales-quote"
+                data-to="/configs"
+                selected={pathname === "/configs" || pathname.startsWith("/configs/")}
+              />
+              {isAdmin ? (
+                <>
+                  <SideNavigationItem
+                    text="Configurator models"
+                    icon="tree"
+                    data-to="/models"
+                    selected={pathname === "/models" || pathname.startsWith("/models/")}
+                  />
+                  <SideNavigationItem
+                    text="Settings"
+                    icon="action-settings"
+                    data-to="/settings"
+                    selected={pathname === "/settings"}
+                  />
+                </>
+              ) : null}
+            </>
+          )}
         </SideNavigation>
       }
     >
