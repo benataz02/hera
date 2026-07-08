@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { ModelDef, Outputs } from "@hera/config-engine";
+import type { ModelDef } from "@hera/config-engine";
 import {
   bestByBatch, candidateLabel, cleanOverrides, isEdited, isRemoved, isSelected, openKeys,
-  patchBom, resetLine, toggleSelection, withoutRemovals, type Candidate, type Sel,
+  patchBom, resetLine, toggleSelection, withoutRemovals, type Sel,
 } from "./runView.ts";
 
 const param = (key: string) => ({ key, label: key, type: "string" as const, ui: "select" as const });
@@ -11,11 +11,10 @@ const model: ModelDef = {
   structure: { sections: [] }, pricing: { priceExpr: "0", quoteItemCode: "X" }, batchDefaults: [1],
   parameters: [param("material"), param("size"), param("coating")],
 };
-const out = (unitPrice: number): Outputs =>
-  ({ bom: [], ops: [], materialPerUnit: 0, laborPerUnit: 0, unitCost: 0, unitPrice, batchTotal: unitPrice });
-const cands: Candidate[] = [
-  { assignment: { size: 1, material: "steel" }, perBatch: [{ batchQty: 10, outputs: out(5) }, { batchQty: 100, outputs: out(3) }] },
-  { assignment: { size: 1, material: "alu" }, perBatch: [{ batchQty: 10, outputs: out(4) }, { batchQty: 100, outputs: out(3.5) }] },
+const priced = (unitPrice: number, batchQty: number) => ({ batchQty, unitPrice });
+const cands = [
+  { assignment: { size: 1, material: "steel" }, perBatch: [priced(5, 10), priced(3, 100)] },
+  { assignment: { size: 1, material: "alu" }, perBatch: [priced(4, 10), priced(3.5, 100)] },
 ];
 
 describe("openKeys / candidateLabel", () => {

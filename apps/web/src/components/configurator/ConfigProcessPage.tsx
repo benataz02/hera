@@ -5,10 +5,11 @@ import {
 } from "@ui5/webcomponents-react";
 import { propagate, type Entries } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
-import { cleanOverrides, statusUi, toggleSelection, type Sel } from "./runView.ts";
+import { cleanOverrides, statusUi, toggleSelection, toPriced, type Sel } from "./runView.ts";
 import { StepConfigure } from "./StepConfigure.tsx";
 import { StepBatches } from "./StepBatches.tsx";
 import { StepCandidates } from "./StepCandidates.tsx";
+import { CandidateDetail } from "./CandidateDetail.tsx";
 import { StepReview } from "./StepReview.tsx";
 
 // The configuration process: 5 steps, gated left to right. Steps 1–2 work on live model +
@@ -113,11 +114,12 @@ export function ConfigProcessPage({ id }: { id: string }) {
         <WizardStep titleText="Candidates" icon="grid" data-idx="2" selected={step === 2} disabled={!runReady}>
           {runReady && latestRun ? (
             <StepCandidates model={latestRun.modelSnapshot} runEntries={latestRun.entries}
-              candidates={latestRun.candidates} selection={selection}
+              candidates={latestRun.candidates.map(toPriced)} selection={selection}
               onToggle={(i, b) => setSel(toggleSelection(selection, i, b))}
               onNext={() => goto(3)}
               capped={runMeta?.capped ?? latestRun.candidates.length >= 200}
-              widest={runMeta?.widest} />
+              widest={runMeta?.widest}
+              renderDetail={(i, label) => <CandidateDetail label={label} candidate={latestRun.candidates[i]!} />} />
           ) : null}
         </WizardStep>
         <WizardStep titleText="Review outputs" icon="activity-items" data-idx="3" selected={step === 3}

@@ -5,17 +5,28 @@ import type { Entries, ModelDef, OutputOverrides, Outputs } from "@hera/config-e
 export type Candidate = { assignment: Entries; perBatch: { batchQty: number; outputs: Outputs }[] };
 export type Sel = { candidateIdx: number; batchQty: number; overrides?: OutputOverrides };
 
+// Minimal shape the candidates matrix needs — the portal feeds it sanitized data,
+// the internal wizard maps full Candidates down with toPriced().
+export type PricedCandidate = { assignment: Entries; perBatch: { batchQty: number; unitPrice: number }[] };
+
+export const toPriced = (c: Candidate): PricedCandidate => ({
+  assignment: c.assignment,
+  perBatch: c.perBatch.map((b) => ({ batchQty: b.batchQty, unitPrice: b.outputs.unitPrice })),
+});
+
 export const fmt = (n: number): string => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
 export const statusUi = {
   draft: { state: "None", text: "Draft" },
   calculated: { state: "Information", text: "Calculated" },
   quoted: { state: "Positive", text: "Quoted" },
+  requested: { state: "Critical", text: "Requested" },
+  rejected: { state: "Negative", text: "Rejected" },
 } as const;
 
 // Params the run left open (assigned per candidate, not fixed in the run's entries),
 // in model parameter order so labels are stable across candidates.
-export function openKeys(model: ModelDef, runEntries: Entries, candidates: Candidate[]): string[] {
+export function openKeys(model: ModelDef, runEntries: Entries, candidates: { assignment: Entries }[]): string[] {
   const assigned = new Set<string>();
   for (const c of candidates) for (const k of Object.keys(c.assignment)) if (!(k in runEntries)) assigned.add(k);
   return model.parameters.map((p) => p.key).filter((k) => assigned.has(k));
@@ -25,12 +36,12 @@ export const candidateLabel = (keys: string[], assignment: Entries): string =>
   keys.length ? keys.map((k) => String(assignment[k] ?? "—")).join(" · ") : "Configuration";
 
 // Lowest unit price per batch column -> candidate index (first wins on ties).
-export function bestByBatch(candidates: Candidate[]): Record<number, number> {
+export function bestByBatch(candidates: PricedCandidate[]): Record<number, number> {
   const best: Record<number, { idx: number; price: number }> = {};
   candidates.forEach((c, idx) => {
     for (const b of c.perBatch) {
       const cur = best[b.batchQty];
-      if (!cur || b.outputs.unitPrice < cur.price) best[b.batchQty] = { idx, price: b.outputs.unitPrice };
+      if (!cur || b.unitPrice < cur.price) best[b.batchQty] = { idx, price: b.unitPrice };
     }
   });
   return Object.fromEntries(Object.entries(best).map(([q, v]) => [q, v.idx]));

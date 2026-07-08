@@ -1,24 +1,25 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Bar, Button, MessageStrip, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, Text,
   Title, ToggleButton,
 } from "@ui5/webcomponents-react";
 import type { Entries, ModelDef } from "@hera/config-engine";
-import { bestByBatch, candidateLabel, fmt, isSelected, openKeys, type Candidate, type Sel } from "./runView.ts";
-import { CandidateDetail } from "./CandidateDetail.tsx";
+import { bestByBatch, candidateLabel, fmt, isSelected, openKeys, type PricedCandidate, type Sel } from "./runView.ts";
 
 // Wizard step 3, the signature view: rows = candidates (labeled by their open-parameter
 // values), columns = batch quantities, every price cell IS the selection control. One
 // pressed cell = one future quotation line. Green marks the lowest price per column.
-export function StepCandidates({ model, runEntries, candidates, selection, onToggle, onNext, capped, widest }: {
+export function StepCandidates({ model, runEntries, candidates, selection, onToggle, onNext, capped, widest, renderDetail, nextLabel }: {
   model: ModelDef;
   runEntries: Entries;
-  candidates: Candidate[];
+  candidates: PricedCandidate[];
   selection: Sel[];
   onToggle: (candidateIdx: number, batchQty: number) => void;
   onNext: () => void;
   capped: boolean;
   widest?: { key: string; size: number };
+  renderDetail: (idx: number, label: string) => ReactNode;
+  nextLabel?: string;
 }) {
   const [detailIdx, setDetailIdx] = useState<number | null>(null);
   const keys = openKeys(model, runEntries, candidates);
@@ -62,7 +63,7 @@ export function StepCandidates({ model, runEntries, candidates, selection, onTog
                   design={best[b.batchQty] === i ? "Positive" : "Default"}
                   tooltip={best[b.batchQty] === i ? "Lowest price for this quantity" : undefined}
                   onClick={(e) => { e.stopPropagation(); onToggle(i, b.batchQty); }}>
-                  {fmt(b.outputs.unitPrice)}
+                  {fmt(b.unitPrice)}
                 </ToggleButton>
               </TableCell>
             ))}
@@ -70,16 +71,13 @@ export function StepCandidates({ model, runEntries, candidates, selection, onTog
         ))}
       </Table>
 
-      {detailIdx !== null && candidates[detailIdx] ? (
-        <CandidateDetail label={candidateLabel(keys, candidates[detailIdx].assignment)}
-          candidate={candidates[detailIdx]} />
-      ) : (
-        <Text style={{ opacity: 0.7 }}>Click a row to see its cost breakdown, price curve, BOM and operations.</Text>
-      )}
+      {detailIdx !== null && candidates[detailIdx]
+        ? renderDetail(detailIdx, candidateLabel(keys, candidates[detailIdx].assignment))
+        : <Text style={{ opacity: 0.7 }}>Click a row to see its details.</Text>}
 
       <Bar design="FloatingFooter" endContent={
         <Button design="Emphasized" disabled={selection.length === 0} onClick={onNext}>
-          Review selection ({selection.length})
+          {nextLabel ?? "Review selection"} ({selection.length})
         </Button>
       } />
     </div>
