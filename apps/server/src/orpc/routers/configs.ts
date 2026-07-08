@@ -20,7 +20,10 @@ export const needsAgent = (m: ModelDef): boolean =>
 
 export async function loadModel(tenantId: string, modelId: string) {
   const [m] = await db
-    .select({ id: configModel.id, name: configModel.name, definition: configModel.definition, updatedAt: configModel.updatedAt })
+    .select({
+      id: configModel.id, name: configModel.name, definition: configModel.definition,
+      updatedAt: configModel.updatedAt, portal: configModel.portal,
+    })
     .from(configModel)
     .where(and(eq(configModel.id, modelId), eq(configModel.tenantId, tenantId)))
     .limit(1);
@@ -41,6 +44,16 @@ export async function freshLookups(tenantId: string, model: ModelDef, fetchQuery
 // Redis/LRU only if the server ever scales past one Bun process.
 const CACHE_TTL_MS = 5 * 60_000;
 const lookupCache = new Map<string, { at: number; lookups: ResolvedLookups }>();
+
+export async function cachedLookups(tenantId: string, model: Awaited<ReturnType<typeof loadModel>>) {
+  const key = `${tenantId}:${model.id}:${model.updatedAt.getTime()}`;
+  const hit = lookupCache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.lookups;
+  if (needsAgent(model.definition)) await assertAgentReady(tenantId);
+  const lookups = await freshLookups(tenantId, model.definition, agentFetcher(tenantId));
+  lookupCache.set(key, { at: Date.now(), lookups });
+  return lookups;
+}
 
 export async function executeRun(tenantId: string, projectId: string, fetchQuery: QueryFetcher) {
   const [project] = await db
@@ -205,16 +218,8 @@ export const configsRouter = {
 
   // Resolved lookups for client-side live propagation (wizard step 1). Cached ~5 min;
   // key includes the model's updatedAt so a model save is picked up immediately.
-  lookups: userProcedure.input(z.object({ modelId: z.uuid() })).handler(async ({ input, context }) => {
-    const model = await loadModel(context.tenantId, input.modelId);
-    const key = `${context.tenantId}:${model.id}:${model.updatedAt.getTime()}`;
-    const hit = lookupCache.get(key);
-    if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.lookups;
-    if (needsAgent(model.definition)) await assertAgentReady(context.tenantId);
-    const lookups = await freshLookups(context.tenantId, model.definition, agentFetcher(context.tenantId));
-    lookupCache.set(key, { at: Date.now(), lookups });
-    return lookups;
-  }),
+  lookups: userProcedure.input(z.object({ modelId: z.uuid() })).handler(async ({ input, context }) =>
+    cachedLookups(context.tenantId, await loadModel(context.tenantId, input.modelId))),
 
   run: userProcedure.input(z.object({ projectId: z.uuid() })).handler(async ({ input, context }) => {
     const [project] = await db

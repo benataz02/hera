@@ -2,11 +2,18 @@ import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
-import { db, configModel, configProject, configRun, member, organization, portalClient, user, type ProjectEvent } from "@hera/db";
-import { EntriesZ } from "@hera/config-engine";
+import {
+  db, configModel, configProject, configRun, member, organization, portalClient, user,
+  type ProjectEvent, type RunCandidate,
+} from "@hera/db";
+import { EntriesZ, type Entries, type ModelDef } from "@hera/config-engine";
 import { adminProcedure, baseDomain, clientProcedure, sessionProcedure } from "../base.ts";
 import { hashToken } from "../../crypto.ts";
 import { tenantSlugFromHost } from "../../tenant.ts";
+import { cachedLookups, executeRun, freshLookups, loadModel, needsAgent } from "./configs.ts";
+import { assertAgentReady } from "./entities.ts";
+import { agentFetcher } from "./models.ts";
+import { ExtractFileZ, extractSuggestions } from "./extraction.ts";
 
 // The client portal API. Trust model: every clientProcedure handler is scoped by
 // tenantId + the client's bound CardCode + source='portal'; responses pass through
@@ -80,6 +87,41 @@ const EDITABLE = ["draft", "calculated"] as const;
 
 const event = (kind: ProjectEvent["kind"], note?: string): ProjectEvent =>
   ({ at: new Date().toISOString(), kind, ...(note ? { note } : {}) });
+
+const UNAVAILABLE = "This product is no longer available — contact your supplier.";
+
+// Explicit allow-list mapper: future Outputs fields can't leak by default.
+export type PortalCandidate = {
+  assignment: Entries;
+  perBatch: { batchQty: number; unitPrice: number; total: number }[];
+};
+const toPortalCandidate = (c: RunCandidate): PortalCandidate => ({
+  assignment: c.assignment,
+  perBatch: c.perBatch.map((b) => ({ batchQty: b.batchQty, unitPrice: b.outputs.unitPrice, total: b.outputs.batchTotal })),
+});
+
+// The form/propagate need parameters/structure/computed/constraints — never cost expressions.
+// Explicit allow-list (no `...d` spread): a future ModelDef field defaults to excluded, not leaked.
+const toPortalModelDef = (d: ModelDef): ModelDef => ({
+  name: d.name,
+  parameters: d.parameters,
+  structure: d.structure,
+  computed: d.computed,
+  constraints: d.constraints,
+  queryTables: d.queryTables,
+  batchDefaults: d.batchDefaults,
+  extraction: d.extraction,
+  bom: [],
+  routing: [],
+  pricing: { priceExpr: "0", quoteItemCode: "portal" },
+});
+
+/** Load a project through the CardCode fence, or NOT_FOUND. */
+async function loadOwnProject(id: string, ctx: { tenantId: string; cardCode: string }) {
+  const [p] = await db.select().from(configProject).where(ownProject(id, ctx)).limit(1);
+  if (!p) throw new ORPCError("NOT_FOUND");
+  return p;
+}
 
 // --- Client side ---
 export const portalRouter = {
@@ -156,6 +198,32 @@ export const portalRouter = {
         .orderBy(desc(configProject.updatedAt)),
     ),
 
+    get: clientProcedure.input(z.object({ id: z.uuid() })).handler(async ({ input, context }) => {
+      const p = await loadOwnProject(input.id, context);
+      const model = await loadModel(context.tenantId, p.modelId);
+      const [run] = await db
+        .select()
+        .from(configRun)
+        .where(and(eq(configRun.projectId, p.id), eq(configRun.tenantId, context.tenantId)))
+        .orderBy(desc(configRun.createdAt))
+        .limit(1);
+      return {
+        project: {
+          id: p.id, name: p.name, status: p.status, entries: p.entries, batches: p.batches,
+          rejectionNote: p.rejectionNote, events: p.events, modelId: p.modelId,
+        },
+        model: { id: model.id, name: model.name, definition: toPortalModelDef(model.definition), available: model.portal },
+        latestRun: run
+          ? {
+              id: run.id, entries: run.entries,
+              candidates: run.candidates.map(toPortalCandidate),
+              selection: run.selection?.map((s) => ({ candidateIdx: s.candidateIdx, batchQty: s.batchQty })) ?? null,
+              createdAt: run.createdAt,
+            }
+          : null,
+      };
+    }),
+
     create: clientProcedure
       .input(z.object({ modelId: z.uuid(), name: z.string().min(1) }))
       .handler(async ({ input, context }) => {
@@ -219,4 +287,35 @@ export const portalRouter = {
       return { ok: true };
     }),
   },
+
+  // Same engine path as configs.run; response is counts only — candidates come from projects.get, sanitized.
+  run: clientProcedure.input(z.object({ projectId: z.uuid() })).handler(async ({ input, context }) => {
+    const p = await loadOwnProject(input.projectId, context);
+    if (p.status !== "draft" && p.status !== "calculated")
+      throw new ORPCError("BAD_REQUEST", { message: "A submitted request is locked — withdraw it to make changes." });
+    const model = await loadModel(context.tenantId, p.modelId);
+    if (!model.portal) throw new ORPCError("BAD_REQUEST", { message: UNAVAILABLE });
+    if (needsAgent(model.definition)) await assertAgentReady(context.tenantId);
+    return executeRun(context.tenantId, p.id, agentFetcher(context.tenantId));
+  }),
+
+  // Resolved lookups for live propagation in the portal wizard (same cache as configs.lookups).
+  // ponytail: lookup tables ship whole for propagate(), same as internal; revisit if a tenant
+  //           ever puts secrets in a lookup table the model references.
+  lookups: clientProcedure.input(z.object({ modelId: z.uuid() })).handler(async ({ input, context }) => {
+    const model = await loadModel(context.tenantId, input.modelId);
+    if (!model.portal) throw new ORPCError("BAD_REQUEST", { message: UNAVAILABLE });
+    return cachedLookups(context.tenantId, model);
+  }),
+
+  // Drawing extraction for published models — one code path with the internal procedure.
+  extract: clientProcedure
+    .input(z.object({ modelId: z.uuid(), file: ExtractFileZ }))
+    .handler(async ({ input, context }) => {
+      const model = await loadModel(context.tenantId, input.modelId);
+      if (!model.portal) throw new ORPCError("BAD_REQUEST", { message: UNAVAILABLE });
+      if (needsAgent(model.definition)) await assertAgentReady(context.tenantId);
+      const lookups = await freshLookups(context.tenantId, model.definition, agentFetcher(context.tenantId));
+      return extractSuggestions(model, lookups, input.file);
+    }),
 };
