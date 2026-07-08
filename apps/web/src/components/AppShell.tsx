@@ -34,9 +34,11 @@ export function AppShell() {
   const [theme, setThemeState] = useState<string>(() => localStorage.getItem("theme") ?? getTheme());
 
   // Org role decides whether the Settings (entity config) item shows. The server gates it too.
+  // Roles are plain text (Better Auth's org plugin only types its own built-in "member"/"admin"/
+  // "owner" — "client" is this app's addition), so the query result is widened to `string`.
   const role = useQuery({
     queryKey: ["active-member-role"],
-    queryFn: async () => (await authClient.organization.getActiveMember()).data?.role ?? "member",
+    queryFn: async (): Promise<string> => (await authClient.organization.getActiveMember()).data?.role ?? "member",
   });
   const isAdmin = role.data === "admin" || role.data === "owner";
   const isClient = role.data === "client";

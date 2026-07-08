@@ -31,9 +31,11 @@ export const Route = createFileRoute("/_authed")({
     if (res.error) return hardRedirect(apexUrl("/select")); // not a member of this workspace
 
     // Role decides which app this shell renders. UX only — the server procedures are the boundary.
+    // Roles are plain text (Better Auth's org plugin only types its own built-in "member"/"admin"/
+    // "owner" — "client" is this app's addition), so the query result is widened to `string`.
     const role = await context.queryClient.ensureQueryData({
       queryKey: ["active-member-role"],
-      queryFn: async () => (await authClient.organization.getActiveMember()).data?.role ?? "member",
+      queryFn: async (): Promise<string> => (await authClient.organization.getActiveMember()).data?.role ?? "member",
     });
     const path = location.pathname;
     if (role === "client" && !path.startsWith("/portal")) throw redirect({ to: "/portal" });
