@@ -10,7 +10,7 @@ import { EntriesZ, type Entries, type ModelDef } from "@hera/config-engine";
 import { adminProcedure, baseDomain, clientProcedure, sessionProcedure } from "../base.ts";
 import { hashToken } from "../../crypto.ts";
 import { tenantSlugFromHost } from "../../tenant.ts";
-import { cachedLookups, executeRun, freshLookups, loadModel, needsAgent } from "./configs.ts";
+import { applySelection, cachedLookups, executeRun, freshLookups, loadModel, needsAgent, pushEvent } from "./configs.ts";
 import { assertAgentReady } from "./entities.ts";
 import { agentFetcher } from "./models.ts";
 import { ExtractFileZ, extractSuggestions } from "./extraction.ts";
@@ -287,6 +287,80 @@ export const portalRouter = {
       return { ok: true };
     }),
   },
+
+  // calculated → requested. Selection is validated against the latest run and stored on it;
+  // never ack a submit without the guarded UPDATE landing.
+  submit: clientProcedure
+    .input(z.object({
+      projectId: z.uuid(),
+      selection: z.array(z.object({ candidateIdx: z.number().int().min(0), batchQty: z.number().int().min(1) })).min(1),
+    }))
+    .handler(async ({ input, context }) => {
+      const p = await loadOwnProject(input.projectId, context);
+      const [run] = await db
+        .select()
+        .from(configRun)
+        .where(and(eq(configRun.projectId, p.id), eq(configRun.tenantId, context.tenantId)))
+        .orderBy(desc(configRun.createdAt))
+        .limit(1);
+      if (!run) throw new ORPCError("BAD_REQUEST", { message: "Calculate prices before submitting." });
+      for (const s of input.selection) {
+        const cand = run.candidates[s.candidateIdx];
+        if (!cand || !cand.perBatch.some((b) => b.batchQty === s.batchQty))
+          throw new ORPCError("BAD_REQUEST", { message: "Your selection no longer matches the calculated options — recalculate and pick again." });
+      }
+      await db.transaction(async (tx) => {
+        const updated = await tx
+          .update(configProject)
+          .set({ status: "requested", events: pushEvent("submitted"), updatedAt: new Date() })
+          .where(and(ownProject(p.id, context), eq(configProject.status, "calculated")))
+          .returning({ id: configProject.id });
+        if (!updated.length)
+          throw new ORPCError("BAD_REQUEST", { message: "This request changed since prices were calculated — recalculate and try again." });
+        await tx.update(configRun).set({ selection: input.selection }).where(eq(configRun.id, run.id));
+      });
+      return { ok: true };
+    }),
+
+  // requested → draft. Racing the internal quote: the status guard lets exactly one side win.
+  withdraw: clientProcedure.input(z.object({ projectId: z.uuid() })).handler(async ({ input, context }) => {
+    const updated = await db
+      .update(configProject)
+      .set({ status: "draft", events: pushEvent("withdrawn"), updatedAt: new Date() })
+      .where(and(ownProject(input.projectId, context), eq(configProject.status, "requested")))
+      .returning({ id: configProject.id });
+    if (!updated.length) throw new ORPCError("BAD_REQUEST", { message: "This request can no longer be withdrawn." });
+    return { ok: true };
+  }),
+
+  // rejected → draft (no event kind for reopen in the spec — the next submit tells the story).
+  reopen: clientProcedure.input(z.object({ projectId: z.uuid() })).handler(async ({ input, context }) => {
+    const updated = await db
+      .update(configProject)
+      .set({ status: "draft", updatedAt: new Date() })
+      .where(and(ownProject(input.projectId, context), eq(configProject.status, "rejected")))
+      .returning({ id: configProject.id });
+    if (!updated.length) throw new ORPCError("BAD_REQUEST", { message: "Only a rejected request can be reopened." });
+    return { ok: true };
+  }),
+
+  // Final line prices for a quoted project. No DocNum, no PDF, no cost breakdown.
+  quotedResult: clientProcedure.input(z.object({ projectId: z.uuid() })).handler(async ({ input, context }) => {
+    const p = await loadOwnProject(input.projectId, context);
+    if (p.status !== "quoted") throw new ORPCError("NOT_FOUND");
+    const [run] = await db
+      .select()
+      .from(configRun)
+      .where(and(eq(configRun.projectId, p.id), eq(configRun.tenantId, context.tenantId), sql`${configRun.selection} is not null`))
+      .orderBy(desc(configRun.createdAt))
+      .limit(1);
+    if (!run || !run.selection) throw new ORPCError("NOT_FOUND");
+    const lines = applySelection(run, run.selection).map((r) => ({
+      assignment: run.candidates[r.candidateIdx]!.assignment,
+      batchQty: r.batchQty, unitPrice: r.outputs.unitPrice, total: r.outputs.batchTotal,
+    }));
+    return { lines };
+  }),
 
   // Same engine path as configs.run; response is counts only — candidates come from projects.get, sanitized.
   run: clientProcedure.input(z.object({ projectId: z.uuid() })).handler(async ({ input, context }) => {

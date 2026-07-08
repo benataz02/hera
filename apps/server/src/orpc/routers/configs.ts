@@ -1,7 +1,7 @@
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
-import { and, desc, eq } from "drizzle-orm";
-import { db, configModel, configProject, configRun, type RunCandidate, type RunSelection } from "@hera/db";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { db, configModel, configProject, configRun, user, type ProjectEvent, type RunCandidate, type RunSelection } from "@hera/db";
 import {
   computeOutputs, DslError, enumerate, EntriesZ, OutputOverridesZ, propagate,
   type ModelDef, type Outputs, type ResolvedLookups,
@@ -125,6 +125,10 @@ export function applySelection(
   });
 }
 
+/** Append one event to config_project.events inside the same guarded UPDATE. */
+export const pushEvent = (kind: ProjectEvent["kind"], note?: string) =>
+  sql`${configProject.events} || ${JSON.stringify([{ at: new Date().toISOString(), kind, ...(note ? { note } : {}) }])}::jsonb`;
+
 const SelectionZ = z.object({
   candidateIdx: z.number().int().min(0),
   batchQty: z.number().int().min(1),
@@ -167,7 +171,8 @@ export const configsRouter = {
       .where(and(eq(configRun.projectId, project.id), eq(configRun.tenantId, context.tenantId)))
       .orderBy(desc(configRun.createdAt))
       .limit(1);
-    return { project, model, latestRun: latestRun ?? null };
+    const [creator] = await db.select({ email: user.email }).from(user).where(eq(user.id, project.createdBy)).limit(1);
+    return { project, model, latestRun: latestRun ?? null, createdByEmail: creator?.email ?? null };
   }),
 
   create: userProcedure
@@ -250,5 +255,21 @@ export const configsRouter = {
         .set({ selection: input.selection })
         .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, context.tenantId)));
       return { selections };
+    }),
+
+  // Internal reviewer sends a portal request back with a note. requested → rejected.
+  reject: userProcedure
+    .input(z.object({ id: z.uuid(), note: z.string().min(1) }))
+    .handler(async ({ input, context }) => {
+      const updated = await db
+        .update(configProject)
+        .set({ status: "rejected", rejectionNote: input.note, events: pushEvent("rejected", input.note), updatedAt: new Date() })
+        .where(and(
+          eq(configProject.id, input.id), eq(configProject.tenantId, context.tenantId),
+          eq(configProject.status, "requested"),
+        ))
+        .returning({ id: configProject.id });
+      if (!updated.length) throw new ORPCError("BAD_REQUEST", { message: "Only a requested configuration can be rejected" });
+      return { ok: true };
     }),
 };
