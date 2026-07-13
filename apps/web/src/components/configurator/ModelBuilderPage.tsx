@@ -39,12 +39,13 @@ export function ModelBuilderPage({ id }: { id: string }) {
   const allIssues: Issue[] = [...m.issues, ...m.serverIssues];
   const count = (t: TabKey) => allIssues.filter((i) => tabOf(i.path) === t).length;
 
-  if (m.loading || !m.draft) {
+  if (m.loading || !m.draft || !m.portalMeta) {
     return m.loadError
       ? <MessageStrip design="Negative" hideCloseButton style={{ margin: "1rem" }}>{m.loadError.message}</MessageStrip>
       : <BusyIndicator active delay={0} style={{ width: "100%", marginTop: "4rem" }} />;
   }
   const draft = m.draft;
+  const portalMeta = m.portalMeta;
 
   // Anchor-bar label carries the section's open issue count, e.g. "Rules (2)".
   const secTitle = (label: string, key: TabKey) => (count(key) ? `${label} (${count(key)})` : label);
@@ -93,7 +94,8 @@ export function ModelBuilderPage({ id }: { id: string }) {
             </ObjectPageSection>
             <ObjectPageSection id="tables" titleText="Tables"><TablesTab /></ObjectPageSection>
             <ObjectPageSection id="settings" titleText={secTitle("Settings", "settings")}>
-              <SettingsTab draft={draft} update={m.update} issues={allIssues} />
+              <SettingsTab draft={draft} update={m.update} issues={allIssues}
+                portalMeta={portalMeta} setPortalMeta={m.setPortalMeta} />
             </ObjectPageSection>
           </ObjectPage>
 

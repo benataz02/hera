@@ -25,10 +25,16 @@ export function useDraftModel(id: string) {
   const [draft, setDraft] = useState<ModelDef | null>(null);
   const [dirty, setDirty] = useState(false);
   const [serverIssues, setServerIssues] = useState<Issue[]>([]);
+  const [portalMeta, setPortalMetaState] = useState<{ portal: boolean; portalDescription: string } | null>(null);
 
   useEffect(() => {
     if (rec.data && draft === null) setDraft(rec.data.definition);
   }, [rec.data, draft]);
+
+  useEffect(() => {
+    if (rec.data && portalMeta === null)
+      setPortalMetaState({ portal: rec.data.portal, portalDescription: rec.data.portalDescription ?? "" });
+  }, [rec.data, portalMeta]);
 
   const tables = tablesQ.data ?? [];
   const issues = useMemo(
@@ -62,7 +68,15 @@ export function useDraftModel(id: string) {
     issues,
     serverIssues,
     dirty,
-    save: () => draft && saveMut.mutate({ id, definition: draft }),
+    portalMeta,
+    setPortalMeta: (p: { portal: boolean; portalDescription: string }) => {
+      setPortalMetaState(p);
+      setDirty(true);
+    },
+    save: () => draft && portalMeta && saveMut.mutate({
+      id, definition: draft,
+      portal: portalMeta.portal, portalDescription: portalMeta.portalDescription || null,
+    }),
     saving: saveMut.isPending,
     saveError: saveMut.error as Error | null,
     loading: rec.isPending,

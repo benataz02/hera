@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Bar, BusyIndicator, MessageStrip, ObjectStatus, Text, Title, Wizard, WizardStep,
+  Bar, Button, BusyIndicator, Dialog, Label, MessageStrip, ObjectStatus, Text, TextArea, Title, Wizard, WizardStep,
 } from "@ui5/webcomponents-react";
 import { propagate, type Entries } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
@@ -31,10 +31,15 @@ export function ConfigProcessPage({ id }: { id: string }) {
   const [batchesOverride, setBatches] = useState<number[] | null>(null);
   const [selOverride, setSel] = useState<Sel[] | null>(null);
   const [runMeta, setRunMeta] = useState<{ capped: boolean; widest?: { key: string; size: number } } | null>(null);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [note, setNote] = useState("");
 
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: orpc.configs.get.queryOptions({ input: { id } }).queryKey });
   const update = useMutation(orpc.configs.update.mutationOptions({ onSuccess: invalidate }));
+  const reject = useMutation(orpc.configs.reject.mutationOptions({
+    onSuccess: () => { setRejectOpen(false); invalidate(); },
+  }));
   const run = useMutation(
     orpc.configs.run.mutationOptions({
       onSuccess: (r) => {
@@ -50,7 +55,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
   if (q.isPending) return <BusyIndicator active delay={0} style={{ width: "100%", marginTop: "4rem" }} />;
   if (q.error)
     return <MessageStrip design="Negative" hideCloseButton style={{ margin: "1rem" }}>{q.error.message}</MessageStrip>;
-  const { project, model, latestRun } = q.data;
+  const { project, model, latestRun, createdByEmail } = q.data;
 
   const entries = entriesOverride ?? project.entries;
   const batches = batchesOverride ?? project.batches;
@@ -99,6 +104,15 @@ export function ConfigProcessPage({ id }: { id: string }) {
         }
         endContent={<ObjectStatus state={statusUi[project.status].state}>{statusUi[project.status].text}</ObjectStatus>}
       />
+      {project.status === "requested" ? (
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", margin: "0.5rem 1rem" }}>
+          <MessageStrip design="Critical" hideCloseButton style={{ flex: 1 }}>
+            Requested by {createdByEmail ?? "a portal user"} for {project.customer?.cardName ?? "—"} —
+            review the configuration, then create the quotation or reject with a note.
+          </MessageStrip>
+          <Button design="Negative" onClick={() => setRejectOpen(true)}>Reject</Button>
+        </div>
+      ) : null}
       <Wizard contentLayout="MultipleSteps" style={{ flex: 1, minHeight: 0 }}
         onStepChange={(e) => goto(Number((e.detail.step as HTMLElement).dataset.idx))}>
         <WizardStep titleText="Configure" icon="settings" data-idx="0" selected={step === 0}>
@@ -136,6 +150,26 @@ export function ConfigProcessPage({ id }: { id: string }) {
           <Text>Available after review — coming in phase 5.</Text>
         </WizardStep>
       </Wizard>
+
+      <Dialog open={rejectOpen} headerText="Reject request" onClose={() => setRejectOpen(false)}
+        footer={
+          <Bar design="Footer" endContent={
+            <>
+              <Button design="Negative" disabled={!note.trim() || reject.isPending}
+                onClick={() => reject.mutate({ id, note: note.trim() })}>
+                {reject.isPending ? "Rejecting…" : "Reject with note"}
+              </Button>
+              <Button onClick={() => setRejectOpen(false)}>Cancel</Button>
+            </>
+          } />
+        }
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.5rem 0" }}>
+          {reject.error ? <MessageStrip design="Negative" hideCloseButton>{reject.error.message}</MessageStrip> : null}
+          <Label for="reject-note" required>What should the client change?</Label>
+          <TextArea id="reject-note" rows={4} value={note} onInput={(e) => setNote(e.target.value)} />
+        </div>
+      </Dialog>
     </div>
   );
 }

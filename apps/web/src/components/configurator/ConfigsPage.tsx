@@ -3,8 +3,8 @@ import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar, Button, BusyIndicator, Dialog, DynamicPage, DynamicPageTitle, Input, Label, MessageStrip,
-  ObjectStatus, Option, Select, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow,
-  TableRowAction, Text, Title,
+  ObjectStatus, Option, Select, SegmentedButton, SegmentedButtonItem, Table, TableCell, TableHeaderCell,
+  TableHeaderRow, TableRow, TableRowAction, Text, Title,
 } from "@ui5/webcomponents-react";
 import { orpc } from "../../orpc.ts";
 import { statusUi } from "./runView.ts";
@@ -29,6 +29,15 @@ export function ConfigsPage() {
   );
   const remove = useMutation(orpc.configs.remove.mutationOptions({ onSuccess: invalidate }));
 
+  const [filter, setFilter] = useState<"all" | "requested" | "draft" | "quoted">("all");
+  const all = configs.data ?? [];
+  const requestedCount = all.filter((c) => c.status === "requested").length;
+  const bucket = (s: string) => (s === "requested" ? "requested" : s === "quoted" ? "quoted" : "draft");
+  const rank = (s: string) => (s === "requested" ? 0 : 1); // requested floats to the top
+  const shown = all
+    .filter((c) => filter === "all" || bucket(c.status) === filter)
+    .sort((a, b) => rank(a.status) - rank(b.status));
+
   if (configs.isPending) return <BusyIndicator active delay={0} style={{ width: "100%", marginTop: "4rem" }} />;
 
   return (
@@ -50,6 +59,14 @@ export function ConfigsPage() {
     >
       {configs.error ? <MessageStrip design="Negative" hideCloseButton>{configs.error.message}</MessageStrip> : null}
       {remove.error ? <MessageStrip design="Negative" hideCloseButton>{remove.error.message}</MessageStrip> : null}
+
+      <SegmentedButton onSelectionChange={(e) =>
+        setFilter(((e.detail.selectedItems[0] as HTMLElement).dataset.f ?? "all") as typeof filter)}>
+        <SegmentedButtonItem data-f="all" selected={filter === "all"}>All</SegmentedButtonItem>
+        <SegmentedButtonItem data-f="requested" selected={filter === "requested"}>Requested ({requestedCount})</SegmentedButtonItem>
+        <SegmentedButtonItem data-f="draft" selected={filter === "draft"}>Draft</SegmentedButtonItem>
+        <SegmentedButtonItem data-f="quoted" selected={filter === "quoted"}>Quoted</SegmentedButtonItem>
+      </SegmentedButton>
 
       <Table
         noDataText="No configurations yet — create one to start."
@@ -73,7 +90,7 @@ export function ConfigsPage() {
           </TableHeaderRow>
         }
       >
-        {(configs.data ?? []).map((c) => (
+        {shown.map((c) => (
           <TableRow key={c.id} rowKey={c.id} data-id={c.id} interactive
             actions={<TableRowAction icon="delete" text="Delete" />}>
             <TableCell><Text>{c.name}</Text></TableCell>

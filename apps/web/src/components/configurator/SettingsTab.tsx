@@ -1,13 +1,15 @@
 import { useState } from "react";
-import { Button, Form, FormGroup, FormItem, Input, Label, Option, Select, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, TableRowAction, Text, TextArea } from "@ui5/webcomponents-react";
+import { Button, Form, FormGroup, FormItem, Input, Label, Option, Select, Switch, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, TableRowAction, Text, TextArea } from "@ui5/webcomponents-react";
 import type { Issue, ModelDef } from "@hera/config-engine";
 import { ExprInput } from "./ExprInput.tsx";
 import { issueFor } from "./useDraftModel.ts";
 
-export function SettingsTab({ draft, update, issues }: {
+export function SettingsTab({ draft, update, issues, portalMeta, setPortalMeta }: {
   draft: ModelDef;
   update: (fn: (d: ModelDef) => ModelDef) => void;
   issues: Issue[];
+  portalMeta: { portal: boolean; portalDescription: string };
+  setPortalMeta: (p: { portal: boolean; portalDescription: string }) => void;
 }) {
   // Batches edited as CSV; parse on change, ignore junk. // ponytail: token editor if CSV annoys
   const [batchText, setBatchText] = useState(draft.batchDefaults.join(", "));
@@ -49,6 +51,16 @@ export function SettingsTab({ draft, update, issues }: {
             <Input value={draft.pricing.quoteItemCode}
               valueState={draft.pricing.quoteItemCode ? "None" : "Negative"}
               onInput={(e) => update((d) => ({ ...d, pricing: { ...d.pricing, quoteItemCode: e.target.value } }))} />
+          </FormItem>
+        </FormGroup>
+        <FormGroup headerText="Client portal">
+          <FormItem labelContent={<Label>Available in portal</Label>}>
+            <Switch checked={portalMeta.portal}
+              onChange={(e) => setPortalMeta({ ...portalMeta, portal: e.target.checked })} />
+          </FormItem>
+          <FormItem labelContent={<Label>Portal description</Label>}>
+            <Input value={portalMeta.portalDescription} placeholder="Shown on the client's catalog card"
+              onInput={(e) => setPortalMeta({ ...portalMeta, portalDescription: e.target.value })} />
           </FormItem>
         </FormGroup>
       </Form>
