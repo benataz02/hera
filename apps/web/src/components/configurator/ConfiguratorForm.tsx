@@ -1,9 +1,10 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
-  CheckBox, Form, FormGroup, FormItem, Input, Label, MultiComboBox, MultiComboBoxItem,
+  CheckBox, Form, FormGroup, FormItem, Icon, Input, Label, MultiComboBox, MultiComboBoxItem,
   ObjectStatus, Option, RadioButton, Select, StepInput, Text,
 } from "@ui5/webcomponents-react";
-import { propagate, type DomainOption, type Entries, type ModelDef, type ResolvedLookups, type Val } from "@hera/config-engine";
+import { propagate, refColumns, type DomainOption, type Entries, type ModelDef, type ResolvedLookups, type Val } from "@hera/config-engine";
+import { ValueHelpDialog } from "./ValueHelpDialog.tsx";
 
 // The one form both the builder preview and the wizard render. Fully controlled:
 // entries in, entries out; all engine work happens in propagate(). Renders sections
@@ -35,6 +36,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange }: {
   onChange: (next: Entries) => void;
 }) {
   const prop = useMemo(() => propagate(model, lookups, entries), [model, lookups, entries]);
+  const [vhKey, setVhKey] = useState<string | null>(null);
 
   const set = (key: string, v: Val | undefined) => {
     const next = { ...entries };
@@ -94,7 +96,37 @@ export function ConfiguratorForm({ model, lookups, entries, onChange }: {
       );
     }
 
-    if (dom.length) // select (and boolean-with-select)
+    if (p.domain?.kind === "options" && p.domain.ref.source === "query") {
+      const ref = p.domain.ref;
+      const t = lookups.tables[ref.table];
+      const label = dom.find((o) => o.value === v)?.label ?? (v === undefined || v === null ? "" : String(v));
+      return (
+        <>
+          <Input readonly value={label} placeholder="Select…"
+            icon={<Icon name="value-help" onClick={() => setVhKey(key)} />}
+            onClick={() => setVhKey(key)} />
+          {vhKey === key && t ? (
+            <ValueHelpDialog open headerText={p.label} table={t} valueCol={ref.valueCol}
+              columns={refColumns(ref, t.columns)}
+              hiddenValues={new Set(dom.filter((o) => o.eliminatedBy).map((o) => o.value))}
+              onSelect={(nv) => set(key, nv)} onClose={() => setVhKey(null)} />
+          ) : null}
+        </>
+      );
+    }
+
+    if (dom.length) { // select (and boolean-with-select)
+      const tref = p.domain?.kind === "options" && p.domain.ref.source === "table" ? p.domain.ref : undefined;
+      const tbl = tref ? lookups.tables[tref.table] : undefined;
+      const extraOf = (val: Val): string | undefined => {
+        if (!tref || !tbl) return undefined;
+        const vi2 = tbl.columns.indexOf(tref.valueCol);
+        const row = vi2 < 0 ? undefined : tbl.rows.find((r) => r[vi2] === val);
+        if (!row) return undefined;
+        const cols = refColumns(tref, tbl.columns);
+        const s = cols.map((c) => String(row[tbl.columns.indexOf(c)] ?? "")).filter(Boolean).join(" · ");
+        return s || undefined;
+      };
       return (
         <Select value={v === undefined ? "" : JSON.stringify(v)}
           onChange={(e) => {
@@ -105,7 +137,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange }: {
           {dom.map((o, i) => (
             <Option key={i} value={JSON.stringify(o.value)} data-j={JSON.stringify(o.value)}
               tooltip={o.eliminatedBy ? `Unavailable: ${o.eliminatedBy}` : undefined}
-              additionalText={o.eliminatedBy ? "unavailable" : undefined}
+              additionalText={o.eliminatedBy ? "unavailable" : extraOf(o.value)}
               // Option supports disabled at runtime (ListItemBase); the React typing omits it.
               {...(o.eliminatedBy ? ({ disabled: true } as Record<string, unknown>) : {})}>
               {o.label}
@@ -113,6 +145,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange }: {
           ))}
         </Select>
       );
+    }
 
     return (
       <Input type={p.type === "number" ? "Number" : "Text"} value={v === undefined || v === null ? "" : String(v)}
