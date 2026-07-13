@@ -48,6 +48,7 @@ export function safeRedirect(url: string | undefined): string | null {
   if (!url) return null;
   try {
     const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null; // no file:/ftp:/ws:/etc.
     const host = u.hostname.toLowerCase();
     if (host === BASE_DOMAIN || host.endsWith(`.${BASE_DOMAIN}`)) return url; // never an open redirect
   } catch {
