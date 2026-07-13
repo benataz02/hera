@@ -67,10 +67,12 @@ export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Iss
     for (const col of refColumns(ref, cols)) {
       const dk = derivedKey(p.key, col);
       if (baseKeys.has(dk)) issues.push({ path: "model", message: `derived value '${dk}' collides with an existing key` });
+      baseKeys.add(dk);
       derived.push(dk);
     }
   });
 
+  const derivedSet = new Set(derived);
   const base = new Set([...paramKeys, ...computedKeys, ...derived]);
   const withQty = new Set([...base, "qty"]);
   const pricingScope = new Set([...withQty, "unitCost"]);
@@ -159,7 +161,7 @@ export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Iss
   // structure references
   const placed = model.structure.sections.flatMap((s) => s.groups.flatMap((g) => g.params));
   for (const pk of placed) {
-    if (!base.has(pk) || compSet.has(pk))
+    if (!base.has(pk) || compSet.has(pk) || derivedSet.has(pk))
       issues.push({ path: "structure", message: `structure references unknown parameter '${pk}'` });
   }
 

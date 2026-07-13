@@ -119,4 +119,36 @@ describe("lookup ref validation", () => {
     m.queryTables = [{ name: "items", target: "b1", path: "/Items", columns: ["ItemCode", "ItemName"] }];
     expect(checkModel(m, [{ name: "prices", columns: ["code", "price"] }])).toEqual([]);
   });
+
+  it("flags two derived keys colliding with each other (not a pre-existing key)", () => {
+    const bad = structuredClone(model);
+    bad.parameters.push(
+      {
+        key: "a",
+        label: "A",
+        type: "string",
+        ui: "select",
+        domain: { kind: "options", ref: { source: "table", table: "t1", valueCol: "x", columns: ["b_c"] } as never },
+      },
+      {
+        key: "a_b",
+        label: "AB",
+        type: "string",
+        ui: "select",
+        domain: { kind: "options", ref: { source: "table", table: "t2", valueCol: "y", columns: ["c"] } as never },
+      },
+    );
+    const issues = checkModel(bad, [
+      { name: "t1", columns: ["x", "b_c"] },
+      { name: "t2", columns: ["y", "c"] },
+    ]);
+    expect(issues.some((i) => i.message.includes("a_b_c") && i.message.includes("collides"))).toBe(true);
+  });
+
+  it("flags a derived key placed in the structure like a real parameter", () => {
+    const bad = withRef({ source: "table", table: "prices", valueCol: "code" });
+    bad.structure.sections[0]!.groups[0]!.params.push("pick_price");
+    const issues = checkModel(bad, [{ name: "prices", columns: ["code", "price"] }]);
+    expect(issues.some((i) => i.path === "structure" && i.message.includes("pick_price"))).toBe(true);
+  });
 });
