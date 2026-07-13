@@ -186,7 +186,7 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
                 ))}
                 <Button icon="add" style={{ alignSelf: "start" }}
                   onClick={() => setQt({ columns: [...qt.columns, ""] })}>Add column</Button>
-                <QueryTestFetch qt={qt} />
+                <QueryTestFetch key={qIdx} qt={qt} />
               </>
             );
           })()}
