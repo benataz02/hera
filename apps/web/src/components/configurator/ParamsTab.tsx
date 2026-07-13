@@ -1,8 +1,8 @@
 import { useState } from "react";
 import {
   Bar, Button, Dialog, Icon, Input, Label, List, ListItemStandard, MessageStrip,
-  Option, Select, StepInput, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow,
-  TableRowAction, Text, Title,
+  MultiComboBox, MultiComboBoxItem, Option, Select, StepInput, Table, TableCell, TableHeaderCell,
+  TableHeaderRow, TableRow, TableRowAction, Text, Title,
 } from "@ui5/webcomponents-react";
 import type { Issue, LookupRef, ModelDef, Option as EngineOption, Param } from "@hera/config-engine";
 import { client } from "../../orpc.ts";
@@ -256,6 +256,7 @@ function ParamDialog({ draft, tables, initial, isNew, onOk, onCancel }: {
         } />
       }>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", padding: "0.5rem 0" }}>
+        <Title level="H6" style={{ gridColumn: "1 / -1" }}>Basics</Title>
         <div>
           <Label required>Key</Label>
           <Input value={p.key} disabled={!isNew} valueState={keyOk && !keyTaken ? "None" : "Negative"}
@@ -278,6 +279,10 @@ function ParamDialog({ draft, tables, initial, isNew, onOk, onCancel }: {
             {UI_KINDS.map((u) => <Option key={u} value={u} data-v={u}>{u}</Option>)}
           </Select>
         </div>
+        <div>
+          <Label>Unit</Label>
+          <Input value={p.unit ?? ""} onInput={(e) => set({ unit: e.target.value || undefined })} />
+        </div>
         {isNew ? (
           <div style={{ gridColumn: "1 / -1" }}>
             <Label>Place in</Label>
@@ -287,11 +292,12 @@ function ParamDialog({ draft, tables, initial, isNew, onOk, onCancel }: {
           </div>
         ) : null}
 
+        <Title level="H6" style={{ gridColumn: "1 / -1" }}>Value domain</Title>
         <div style={{ gridColumn: "1 / -1" }}>
-          <Label>Value domain</Label>
           <DomainEditor draft={draft} tables={tables} value={p.domain} onChange={(domain) => set({ domain })} />
         </div>
 
+        <Title level="H6" style={{ gridColumn: "1 / -1" }}>Behavior</Title>
         <div style={{ gridColumn: "1 / -1" }}>
           <Label>Default (expression)</Label>
           <ExprInput optional value={p.defaultExpr} model={draft} onChange={(v) => set({ defaultExpr: v })} />
@@ -304,10 +310,8 @@ function ParamDialog({ draft, tables, initial, isNew, onOk, onCancel }: {
           <Label>Required when</Label>
           <ExprInput optional value={p.requiredWhen} model={draft} onChange={(v) => set({ requiredWhen: v })} />
         </div>
-        <div>
-          <Label>Unit</Label>
-          <Input value={p.unit ?? ""} onInput={(e) => set({ unit: e.target.value || undefined })} />
-        </div>
+
+        <Title level="H6" style={{ gridColumn: "1 / -1" }}>Help</Title>
         <div>
           <Label>Help text</Label>
           <Input value={p.help ?? ""} onInput={(e) => set({ help: e.target.value || undefined })} />
@@ -328,7 +332,8 @@ function DomainEditor({ draft, tables, value, onChange }: {
   value: Param["domain"]; onChange: (d: Param["domain"]) => void;
 }) {
   const kind = value === undefined ? "none" : value.kind === "range" ? "range" : value.ref.source;
-  const tableNames = [...tables.map((t) => t.name), ...draft.queryTables.map((q) => q.name)];
+  const tenantNames = tables.map((t) => t.name);
+  const queryNames = draft.queryTables.map((q) => q.name);
   const columnsOf = (name: string) =>
     tables.find((t) => t.name === name)?.columns.map((c) => c.key) ??
     draft.queryTables.find((q) => q.name === name)?.columns ?? [];
@@ -337,8 +342,8 @@ function DomainEditor({ draft, tables, value, onChange }: {
     if (k === "none") onChange(undefined);
     else if (k === "range") onChange({ kind: "range", min: 0, max: 100, step: 1 });
     else if (k === "manual") onChange({ kind: "options", ref: { source: "manual", options: [] } });
-    else if (k === "table") onChange({ kind: "options", ref: { source: "table", table: tableNames[0] ?? "", valueCol: "" } });
-    else onChange({ kind: "options", ref: { source: "query", target: "b1", path: "", valueField: "" } });
+    else if (k === "table") onChange({ kind: "options", ref: { source: "table", table: tenantNames[0] ?? "", valueCol: "" } });
+    else onChange({ kind: "options", ref: { source: "query", table: queryNames[0] ?? "", valueCol: "" } });
   };
 
   return (
@@ -360,64 +365,64 @@ function DomainEditor({ draft, tables, value, onChange }: {
         <ManualOptions ref_={value.ref} onChange={(ref) => onChange({ kind: "options", ref })} />
       ) : null}
 
-      {value?.kind === "options" && value.ref.source === "table" ? (
-        <TableRefEditor ref_={value.ref} tableNames={tableNames} columnsOf={columnsOf}
+      {value?.kind === "options" && (value.ref.source === "table" || value.ref.source === "query") ? (
+        <SourceRefEditor ref_={value.ref}
+          names={value.ref.source === "table" ? tenantNames : queryNames}
+          columnsOf={columnsOf}
           onChange={(ref) => onChange({ kind: "options", ref })} />
       ) : null}
 
-      {value?.kind === "options" && value.ref.source === "query" ? (
-        <QueryRefEditor ref_={value.ref} onChange={(ref) => onChange({ kind: "options", ref })} />
+      {value?.kind === "options" ? <PreviewButton ref_={value.ref} queryTables={draft.queryTables} /> : null}
+      {value?.kind === "options" && (value.ref.source === "table" || value.ref.source === "query") ? (
+        <Text>Define tables and queries under the Tables tab; extra columns become <code>{"<param>_<column>"}</code> values usable in formulas.</Text>
       ) : null}
-
-      {value?.kind === "options" ? <PreviewButton ref_={value.ref} /> : null}
     </div>
   );
 }
 
-// Narrowed sub-editors: keeping the discriminated ref as a component prop preserves its type
-// inside the onChange closures (nested-closure narrowing loss otherwise widens value.ref).
-function TableRefEditor({ ref_, tableNames, columnsOf, onChange }: {
-  ref_: Extract<LookupRef, { source: "table" }>;
-  tableNames: string[];
+// One editor for both named sources: pick the source, the value/label columns, and which
+// extra columns to expose (default: all).
+function SourceRefEditor({ ref_, names, columnsOf, onChange }: {
+  ref_: Extract<LookupRef, { source: "table" | "query" }>;
+  names: string[];
   columnsOf: (name: string) => string[];
   onChange: (r: LookupRef) => void;
 }) {
+  const cols = columnsOf(ref_.table);
+  const displayed = ref_.columns ?? cols.filter((c) => c !== ref_.valueCol);
   return (
-    <div style={{ display: "flex", gap: "0.5rem" }}>
-      <Select value={ref_.table} onChange={(e) => onChange({ ...ref_, table: (e.detail.selectedOption as HTMLElement).dataset.v!, valueCol: "" })}>
-        {tableNames.map((n) => <Option key={n} value={n} data-v={n}>{n}</Option>)}
-      </Select>
-      <Select value={ref_.valueCol} onChange={(e) => onChange({ ...ref_, valueCol: (e.detail.selectedOption as HTMLElement).dataset.v! })}>
-        <Option value="" data-v="">value column…</Option>
-        {columnsOf(ref_.table).map((c) => <Option key={c} value={c} data-v={c}>{c}</Option>)}
-      </Select>
-      <Select value={ref_.labelCol ?? ""} onChange={(e) => {
-        const v = (e.detail.selectedOption as HTMLElement).dataset.v!;
-        onChange({ ...ref_, labelCol: v || undefined });
-      }}>
-        <Option value="" data-v="">label column (optional)…</Option>
-        {columnsOf(ref_.table).map((c) => <Option key={c} value={c} data-v={c}>{c}</Option>)}
-      </Select>
-    </div>
-  );
-}
-
-function QueryRefEditor({ ref_, onChange }: {
-  ref_: Extract<LookupRef, { source: "query" }>;
-  onChange: (r: LookupRef) => void;
-}) {
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "8rem 1fr", gap: "0.5rem" }}>
-      <Select value={ref_.target} onChange={(e) => onChange({ ...ref_, target: (e.detail.selectedOption as HTMLElement).dataset.v as "b1" | "beas" })}>
-        <Option value="b1" data-v="b1">B1</Option>
-        <Option value="beas" data-v="beas">Beas</Option>
-      </Select>
-      <Input placeholder="/Items?$select=ItemCode,ItemName" value={ref_.path}
-        onInput={(e) => onChange({ ...ref_, path: e.target.value })} />
-      <Input placeholder="value field, e.g. ItemCode" value={ref_.valueField}
-        onInput={(e) => onChange({ ...ref_, valueField: e.target.value })} />
-      <Input placeholder="label field (optional)" value={ref_.labelField ?? ""}
-        onInput={(e) => onChange({ ...ref_, labelField: e.target.value || undefined })} />
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+      <div style={{ display: "flex", gap: "0.5rem" }}>
+        <Select value={ref_.table} onChange={(e) =>
+          onChange({ ...ref_, table: (e.detail.selectedOption as HTMLElement).dataset.v!, valueCol: "", labelCol: undefined, columns: undefined })}>
+          {names.length === 0 ? <Option value="" data-v="">— none defined —</Option> : null}
+          {names.map((n) => <Option key={n} value={n} data-v={n}>{n}</Option>)}
+        </Select>
+        <Select value={ref_.valueCol} onChange={(e) => onChange({ ...ref_, valueCol: (e.detail.selectedOption as HTMLElement).dataset.v! })}>
+          <Option value="" data-v="">value column…</Option>
+          {cols.map((c) => <Option key={c} value={c} data-v={c}>{c}</Option>)}
+        </Select>
+        <Select value={ref_.labelCol ?? ""} onChange={(e) => {
+          const v = (e.detail.selectedOption as HTMLElement).dataset.v!;
+          onChange({ ...ref_, labelCol: v || undefined });
+        }}>
+          <Option value="" data-v="">label column (optional)…</Option>
+          {cols.map((c) => <Option key={c} value={c} data-v={c}>{c}</Option>)}
+        </Select>
+      </div>
+      <div>
+        <Label>Displayed / derived columns</Label>
+        <MultiComboBox
+          onSelectionChange={(e) => {
+            const sel = e.detail.items.map((i) => (i as HTMLElement).getAttribute("text")!);
+            const all = cols.filter((c) => c !== ref_.valueCol);
+            onChange({ ...ref_, columns: sel.length === all.length ? undefined : sel });
+          }}>
+          {cols.filter((c) => c !== ref_.valueCol).map((c) => (
+            <MultiComboBoxItem key={c} text={c} selected={displayed.includes(c)} />
+          ))}
+        </MultiComboBox>
+      </div>
     </div>
   );
 }
@@ -453,7 +458,7 @@ function ManualOptions({ ref_, onChange }: {
   );
 }
 
-function PreviewButton({ ref_ }: { ref_: LookupRef }) {
+function PreviewButton({ ref_, queryTables }: { ref_: LookupRef; queryTables: ModelDef["queryTables"] }) {
   const [state, setState] = useState<{ busy?: boolean; options?: EngineOption[]; error?: string }>({});
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
@@ -461,7 +466,7 @@ function PreviewButton({ ref_ }: { ref_: LookupRef }) {
         onClick={async () => {
           setState({ busy: true });
           try {
-            const r = await client.models.lookupPreview({ ref: ref_, limit: 20 });
+            const r = await client.models.lookupPreview({ ref: ref_, queryTables, limit: 20 });
             setState({ options: r.options });
           } catch (e) {
             setState({ error: e instanceof Error ? e.message : String(e) });
