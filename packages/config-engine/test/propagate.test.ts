@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ModelDef, ResolvedLookups } from "../src/model";
 import { bindings, domainOf, propagate } from "../src/propagate";
 import { lookups, model } from "./fixture";
 
@@ -108,3 +109,46 @@ describe("propagate", () => {
     expect(p.candidateEstimate).toBe(0);
   });
 });
+
+describe("derived lookup columns", () => {
+  const dModel: ModelDef = {
+    name: "derived",
+    parameters: [
+      {
+        key: "mat", label: "Material", type: "string", ui: "select",
+        domain: { kind: "options", ref: { source: "table", table: "mats", valueCol: "code" } },
+      },
+    ],
+    structure: { sections: [{ key: "s", title: "S", groups: [{ key: "g", title: "G", params: ["mat"] }] }] },
+    computed: [{ key: "dbl", expr: "mat_density * 2" }],
+    constraints: [], bom: [], routing: [], queryTables: [],
+    pricing: { priceExpr: "0", quoteItemCode: "X" },
+    batchDefaults: [1],
+  };
+  const dLookups: ResolvedLookups = {
+    domains: { mat: [{ value: "ST", label: "Steel" }, { value: "AL", label: "Alu" }] },
+    tables: { mats: { columns: ["code", "density", "name"], rows: [["ST", 7.9, "Steel"], ["AL", 2.7, "Alu"]] } },
+  };
+
+  test("exposes <param>_<col> for the selected row and feeds computed values", () => {
+    const b = bindings(dModel, dLookups, { mat: "ST" });
+    expect(b.values.mat_density).toBe(7.9);
+    expect(b.values.mat_name).toBe("Steel");
+    expect(b.values.dbl).toBe(15.8);
+  });
+
+  test("leaves derived keys absent while the param is unset or the row is missing", () => {
+    expect("mat_density" in bindings(dModel, dLookups, {}).values).toBe(false);
+    expect("mat_density" in bindings(dModel, dLookups, { mat: "NOPE" }).values).toBe(false);
+  });
+
+  test("honours an explicit columns subset", () => {
+    const m: ModelDef = structuredClone(dModel);
+    (m.parameters[0]!.domain as { kind: "options"; ref: { source: "table"; table: string; valueCol: string; columns?: string[] } }).ref.columns = ["density"];
+    m.computed = [];
+    const b = bindings(m, dLookups, { mat: "AL" });
+    expect(b.values.mat_density).toBe(2.7);
+    expect("mat_name" in b.values).toBe(false);
+  });
+});
+

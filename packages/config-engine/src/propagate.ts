@@ -1,5 +1,6 @@
 import { evaluate, parse } from "./dsl";
 import type { Entries, ModelDef, Option, ResolvedLookups, Val } from "./model";
+import { derivedKey, refColumns } from "./model";
 
 export type Bindings = {
   values: Record<string, Val>;
@@ -31,7 +32,7 @@ export function bindings(model: ModelDef, lookups: ResolvedLookups, entries: Ent
     }
   };
 
-  const maxIter = model.parameters.length + model.computed.length + 1;
+  const maxIter = model.parameters.length * 2 + model.computed.length + 2;
   for (let iter = 0; iter < maxIter; iter++) {
     let changed = false;
     for (const p of model.parameters) {
@@ -49,6 +50,25 @@ export function bindings(model: ModelDef, lookups: ResolvedLookups, entries: Ent
       if (v !== undefined && values[c.key] !== v) {
         values[c.key] = v;
         changed = true;
+      }
+    }
+    // derived lookup columns: <param>_<col> from the selected value's source row
+    for (const p of model.parameters) {
+      const ref = p.domain?.kind === "options" ? p.domain.ref : undefined;
+      if (!ref || ref.source === "manual" || !(p.key in values)) continue;
+      const t = lookups.tables[ref.table];
+      if (!t) continue;
+      const vi = t.columns.indexOf(ref.valueCol);
+      const row = vi < 0 ? undefined : t.rows.find((r) => r[vi] === values[p.key]);
+      if (!row) continue; // unset/stale value: derived keys stay absent (undecidable, like unbound)
+      for (const col of refColumns(ref, t.columns)) {
+        const ci = t.columns.indexOf(col);
+        const v = ci < 0 ? null : (row[ci] ?? null);
+        const dk = derivedKey(p.key, col);
+        if (values[dk] !== v) {
+          values[dk] = v;
+          changed = true;
+        }
       }
     }
     if (!changed) break;
