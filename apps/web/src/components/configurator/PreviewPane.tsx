@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { Bar, Button, BusyIndicator, MessageStrip, Text, Title } from "@ui5/webcomponents-react";
 import { DslError, type Entries, type Issue, type ModelDef } from "@hera/config-engine";
-import { ConfiguratorForm } from "./ConfiguratorForm.tsx";
+import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
 import { usePreviewLookups } from "./usePreviewLookups.ts";
 
 // Test-drives the draft with the real engine. While the draft has errors we keep rendering the
@@ -25,7 +25,15 @@ export function PreviewPane({ draft, issues }: { draft: ModelDef; issues: Issue[
     );
   else {
     try {
-      body = <ConfiguratorForm model={model} lookups={lookups.data} entries={entries} onChange={setEntries} />;
+      body = (
+        <>
+          <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 1rem 1rem" }}>
+            <ConfiguratorForm model={model} lookups={lookups.data} entries={entries} onChange={setEntries} />
+          </div>
+          <Bar design="Footer"
+            startContent={<ConsistencyStatus model={model} lookups={lookups.data} entries={entries} />} />
+        </>
+      );
     } catch (e) {
       body = (
         <MessageStrip design="Negative" hideCloseButton style={{ margin: "1rem" }}>

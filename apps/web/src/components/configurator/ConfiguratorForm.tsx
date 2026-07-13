@@ -1,21 +1,38 @@
 import { useMemo } from "react";
 import {
-  Bar, CheckBox, Form, FormGroup, FormItem, Input, Label, MessageStrip, MultiComboBox,
-  MultiComboBoxItem, ObjectPage, ObjectPageSection, ObjectStatus, Option, Panel, RadioButton,
-  Select, StepInput, Text,
+  CheckBox, Form, FormGroup, FormItem, Input, Label, MultiComboBox, MultiComboBoxItem,
+  ObjectStatus, Option, RadioButton, Select, StepInput, Text,
 } from "@ui5/webcomponents-react";
 import { propagate, type DomainOption, type Entries, type ModelDef, type ResolvedLookups, type Val } from "@hera/config-engine";
 
-// The one form both the builder preview and the phase-4 wizard render. Fully controlled:
-// entries in, entries out; all engine work happens in propagate().
+// The one form both the builder preview and the wizard render. Fully controlled:
+// entries in, entries out; all engine work happens in propagate(). Renders sections
+// only — scrolling, footers and the consistency line belong to the caller.
 
-export function ConfiguratorForm({ model, lookups, entries, onChange, layout = "flow" }: {
+/** The signature answer to "is this consistent and how big is it?" — one component so the
+ *  string stays identical in the wizard bar, the preview footer and the portal step.
+ *  ponytail: recomputes propagate() alongside the form's own call; memoized, fine at this scale. */
+export function ConsistencyStatus({ model, lookups, entries }: {
+  model: ModelDef;
+  lookups: ResolvedLookups;
+  entries: Entries;
+}) {
+  const prop = useMemo(() => propagate(model, lookups, entries), [model, lookups, entries]);
+  const conflict = prop.conflicts.length ? prop.conflicts.map((c) => c.message).join(" · ") : null;
+  return (
+    <ObjectStatus state={conflict ? "Negative" : "Positive"}>
+      {conflict ?? `✓ Consistent · ${prop.open.length} open · ~${prop.candidateEstimate} candidate${prop.candidateEstimate === 1 ? "" : "s"}`}
+    </ObjectStatus>
+  );
+}
+
+const FORM_PROPS = { labelSpan: "S12 M4", layout: "S1 M1 L1 XL1", headerLevel: "H5" } as const;
+
+export function ConfiguratorForm({ model, lookups, entries, onChange }: {
   model: ModelDef;
   lookups: ResolvedLookups;
   entries: Entries;
   onChange: (next: Entries) => void;
-  // "page" -> ObjectPage/ObjectPageSection (builder preview); "flow" -> Panels (wizard step).
-  layout?: "flow" | "page";
 }) {
   const prop = useMemo(() => propagate(model, lookups, entries), [model, lookups, entries]);
 
@@ -106,76 +123,39 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, layout = "
     );
   };
 
-  // Groups/params render identically in both layouts (FormGroup = model group, FormItem = param);
-  // only the section wrapper (Panel vs ObjectPageSection) and status placement differ.
-  const groups = (s: ModelDef["structure"]["sections"][number]) => (
-    <Form labelSpan="S12 M4" layout="S1 M1 L1 XL1">
-      {s.groups.map((g) => (
-        <FormGroup key={g.key} headerText={g.title}>
-          {g.params.filter((k) => prop.visible[k]).map((k) => {
-            const p = model.parameters.find((x) => x.key === k);
-            if (!p) return null;
-            return (
-              <FormItem key={k} labelContent={<Label>{p.label + (p.unit ? ` (${p.unit})` : "")}</Label>}>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", width: "100%" }}>
-                  {control(k)}
-                  {prop.defaulted.has(k) ? <ObjectStatus state="Information">auto</ObjectStatus> : null}
-                </div>
-              </FormItem>
-            );
-          })}
-        </FormGroup>
-      ))}
-    </Form>
-  );
-
-  const computed = model.computed.length ? (
-    <Form labelSpan="S12 M4" layout="S1 M1 L1 XL1">
-      <FormGroup>
-        {model.computed.map((c) => (
-          <FormItem key={c.key} labelContent={<Label>{c.key}</Label>}>
-            <Text>{String(prop.values[c.key] ?? "—")}</Text>
-          </FormItem>
-        ))}
-      </FormGroup>
-    </Form>
-  ) : null;
-
-  // The signature answer to "is this consistent and how big is it?"
-  const conflict = prop.conflicts.length ? prop.conflicts.map((c) => c.message).join(" · ") : null;
-  const consistent = `✓ Consistent · ${prop.open.length} open · ~${prop.candidateEstimate} candidate${prop.candidateEstimate === 1 ? "" : "s"}`;
-
-  if (layout === "page")
-    return (
-      <ObjectPage
-        style={{ height: "100%" }}
-        footerArea={
-          <Bar design="FloatingFooter"
-            startContent={<ObjectStatus state={conflict ? "Negative" : "Positive"}>{conflict ?? consistent}</ObjectStatus>} />
-        }
-      >
-        {[
-          ...model.structure.sections.map((s) => (
-            <ObjectPageSection key={s.key} id={s.key} titleText={s.title}>{groups(s)}</ObjectPageSection>
-          )),
-          ...(computed ? [<ObjectPageSection key="__computed" id="__computed" titleText="Computed">{computed}</ObjectPageSection>] : []),
-        ]}
-      </ObjectPage>
-    );
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "0.75rem", padding: "1rem" }}>
-        {model.structure.sections.map((s) => (
-          <Panel key={s.key} headerText={s.title}>{groups(s)}</Panel>
-        ))}
-        {computed ? <Panel headerText="Computed" collapsed>{computed}</Panel> : null}
-      </div>
-      {conflict ? (
-        <MessageStrip design="Negative" hideCloseButton style={{ margin: "0 1rem 0.5rem" }}>{conflict}</MessageStrip>
-      ) : (
-        <Bar design="Footer" startContent={<Text>{consistent}</Text>} />
-      )}
+    <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+      {model.structure.sections.map((s) => (
+        <Form key={s.key} headerText={s.title} {...FORM_PROPS}>
+          {s.groups.map((g) => (
+            <FormGroup key={g.key} headerText={g.title}>
+              {g.params.filter((k) => prop.visible[k]).map((k) => {
+                const p = model.parameters.find((x) => x.key === k);
+                if (!p) return null;
+                return (
+                  <FormItem key={k} labelContent={<Label>{p.label + (p.unit ? ` (${p.unit})` : "")}</Label>}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", width: "100%" }}>
+                      {control(k)}
+                      {prop.defaulted.has(k) ? <ObjectStatus state="Information">auto</ObjectStatus> : null}
+                    </div>
+                  </FormItem>
+                );
+              })}
+            </FormGroup>
+          ))}
+        </Form>
+      ))}
+      {model.computed.length ? (
+        <Form headerText="Computed" {...FORM_PROPS}>
+          <FormGroup>
+            {model.computed.map((c) => (
+              <FormItem key={c.key} labelContent={<Label>{c.key}</Label>}>
+                <Text>{String(prop.values[c.key] ?? "—")}</Text>
+              </FormItem>
+            ))}
+          </FormGroup>
+        </Form>
+      ) : null}
     </div>
   );
 }

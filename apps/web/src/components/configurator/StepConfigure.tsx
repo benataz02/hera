@@ -2,7 +2,7 @@ import type { ComponentProps } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { Bar, BusyIndicator, Button, MessageStrip } from "@ui5/webcomponents-react";
 import type { Entries, ModelDef, ResolvedLookups } from "@hera/config-engine";
-import { ConfiguratorForm } from "./ConfiguratorForm.tsx";
+import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
 import { ExtractPanel } from "./ExtractPanel.tsx";
 
 // Wizard step 1: the same form the builder preview uses, over server-resolved lookups.
@@ -30,12 +30,14 @@ export function StepConfigure({ modelId, model, lookups, entries, onChange, onNe
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
       <ExtractPanel modelId={modelId} model={model} entries={entries} onChange={onChange} extract={extract} />
       <ConfiguratorForm model={model} lookups={lookups.data} entries={entries} onChange={onChange} />
-      <Bar design="FloatingFooter" endContent={
-        <Button design="Emphasized" disabled={conflicted || saving} onClick={onNext}
-          tooltip={conflicted ? "Resolve the conflicts above first" : undefined}>
-          {saving ? "Saving…" : "Next: batches"}
-        </Button>
-      } />
+      <Bar design="FloatingFooter"
+        startContent={<ConsistencyStatus model={model} lookups={lookups.data} entries={entries} />}
+        endContent={
+          <Button design="Emphasized" disabled={conflicted || saving} onClick={onNext}
+            tooltip={conflicted ? "Resolve the conflicts above first" : undefined}>
+            {saving ? "Saving…" : "Next: batches"}
+          </Button>
+        } />
     </div>
   );
 }
