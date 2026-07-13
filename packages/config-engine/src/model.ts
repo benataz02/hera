@@ -16,13 +16,16 @@ export const LookupRefZ = z.discriminatedUnion("source", [
     table: z.string(),
     valueCol: z.string(),
     labelCol: z.string().optional(),
+    /** extra columns exposed as `<param>_<col>` and shown in pickers; absent = all except valueCol */
+    columns: z.array(z.string()).optional(),
   }),
   z.object({
     source: z.literal("query"),
-    target: z.enum(["b1", "beas"]),
-    path: z.string(),
-    valueField: z.string(),
-    labelField: z.string().optional(),
+    /** names a ModelDef.queryTables entry — the query itself is defined there */
+    table: z.string(),
+    valueCol: z.string(),
+    labelCol: z.string().optional(),
+    columns: z.array(z.string()).optional(),
   }),
 ]);
 export type LookupRef = z.infer<typeof LookupRefZ>;
@@ -118,3 +121,13 @@ export type ResolvedLookups = {
 };
 /** User-entered values only; absent key = open parameter. */
 export type Entries = Record<string, Val>;
+
+/** The source columns a ref exposes (display + derived values). */
+export function refColumns(ref: LookupRef, all: string[] | undefined): string[] {
+  if (ref.source === "manual") return [];
+  if (ref.columns) return ref.columns;
+  return (all ?? []).filter((c) => c !== ref.valueCol);
+}
+
+/** Derived value key for a param's source column, e.g. material_density. */
+export const derivedKey = (paramKey: string, col: string) => `${paramKey}_${col}`;
