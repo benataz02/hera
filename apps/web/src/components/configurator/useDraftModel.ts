@@ -38,7 +38,7 @@ export function useDraftModel(id: string) {
 
   const tables = tablesQ.data ?? [];
   const issues = useMemo(
-    () => (draft ? checkModel(draft, tables.map((t) => t.name)) : []),
+    () => (draft ? checkModel(draft, tables.map((t) => ({ name: t.name, columns: (t.columns as { key: string }[]).map((c) => c.key) }))) : []),
     [draft, tables],
   );
 

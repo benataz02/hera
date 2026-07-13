@@ -57,7 +57,7 @@ export const modelsRouter = {
       portalDescription: z.string().nullable().optional(),
     }))
     .handler(async ({ input, context }) => {
-      const known = (await tenantTables(context.tenantId)).map((t) => t.name);
+      const known = (await tenantTables(context.tenantId)).map((t) => ({ name: t.name, columns: t.columns.map((c) => c.key) }));
       const issues = checkModel(input.definition, known);
       if (issues.length) throw new ORPCError("BAD_REQUEST", { message: "Model has errors", data: { issues } });
       const fields = {

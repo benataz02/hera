@@ -1,7 +1,9 @@
 import { type Ast, DslError, parse } from "./dsl";
-import type { ModelDef } from "./model";
+import { derivedKey, type ModelDef, refColumns } from "./model";
 
 export type Issue = { path: string; message: string; from?: number; to?: number };
+
+export type KnownTable = { name: string; columns: string[] };
 
 export const FUNCS = new Set(["IF", "MIN", "MAX", "ROUND", "CEIL", "FLOOR", "ABS", "CONCAT", "HAS", "LOOKUP"]);
 
@@ -33,7 +35,7 @@ function collectRefs(n: Ast, out: Ref[]): void {
   }
 }
 
-export function checkModel(model: ModelDef, knownTables: string[] = []): Issue[] {
+export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Issue[] {
   const issues: Issue[] = [];
   const paramKeys = model.parameters.map((p) => p.key);
   const computedKeys = model.computed.map((c) => c.key);
@@ -44,7 +46,32 @@ export function checkModel(model: ModelDef, knownTables: string[] = []): Issue[]
     seen.add(k);
   }
 
-  const base = new Set([...paramKeys, ...computedKeys]);
+  // lookup refs: table/query names, columns, and the derived keys they add to scope
+  const tableCols = new Map<string, string[]>([
+    ...knownTables.map((t) => [t.name, t.columns] as const),
+    ...model.queryTables.map((t) => [t.name, t.columns] as const),
+  ]);
+  const derived: string[] = [];
+  const baseKeys = new Set([...paramKeys, ...computedKeys]);
+  model.parameters.forEach((p, i) => {
+    const ref = p.domain?.kind === "options" ? p.domain.ref : undefined;
+    if (!ref || ref.source === "manual") return;
+    const cols = tableCols.get(ref.table);
+    if (!cols) {
+      issues.push({ path: `parameters[${i}].domain`, message: `unknown table '${ref.table}'` });
+      return;
+    }
+    for (const c of [ref.valueCol, ...(ref.labelCol ? [ref.labelCol] : []), ...(ref.columns ?? [])]) {
+      if (!cols.includes(c)) issues.push({ path: `parameters[${i}].domain`, message: `table '${ref.table}' has no column '${c}'` });
+    }
+    for (const col of refColumns(ref, cols)) {
+      const dk = derivedKey(p.key, col);
+      if (baseKeys.has(dk)) issues.push({ path: "model", message: `derived value '${dk}' collides with an existing key` });
+      derived.push(dk);
+    }
+  });
+
+  const base = new Set([...paramKeys, ...computedKeys, ...derived]);
   const withQty = new Set([...base, "qty"]);
   const pricingScope = new Set([...withQty, "unitCost"]);
 
@@ -137,7 +164,7 @@ export function checkModel(model: ModelDef, knownTables: string[] = []): Issue[]
   }
 
   // LOOKUP table names when statically known (first arg is a string literal)
-  const tables = new Set([...knownTables, ...model.queryTables.map((t) => t.name)]);
+  const tables = new Set([...knownTables.map((t) => t.name), ...model.queryTables.map((t) => t.name)]);
   const checkLookups = (src: string | undefined, path: string) => {
     if (src === undefined) return;
     let ast: Ast;
