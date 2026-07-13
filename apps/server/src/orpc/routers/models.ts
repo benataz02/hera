@@ -5,7 +5,7 @@ import { db, configModel, configProject, configTable } from "@hera/db";
 import { checkModel, LookupRefZ, ModelDefZ, ValZ } from "@hera/config-engine";
 import { adminProcedure } from "../base.ts";
 import { assertAgentReady, runRequest } from "./entities.ts";
-import { optionsFromRef, resolveLookups, tablesFromTenant, type QueryFetcher, type TenantTable } from "../../lookups.ts";
+import { addQueryTables, optionsFromRef, resolveLookups, tablesFromTenant, type QueryFetcher, type TenantTable } from "../../lookups.ts";
 
 // Admin-only configurator model builder API. save is the gate: a model that passes
 // ModelDefZ + checkModel here can never produce a parse/unknown-ref error at runtime.
@@ -143,11 +143,17 @@ export const modelsRouter = {
   },
 
   // Builder "Preview" button: resolve any LookupRef against live sources, first N options.
+  // Query refs read from queryTables, so the (unsaved) draft's queryTables ride along.
   lookupPreview: adminProcedure
-    .input(z.object({ ref: LookupRefZ, limit: z.number().int().min(1).max(100).default(20) }))
+    .input(z.object({
+      ref: LookupRefZ,
+      queryTables: ModelDefZ.shape.queryTables.optional(),
+      limit: z.number().int().min(1).max(100).default(20),
+    }))
     .handler(async ({ input, context }) => {
       const tables = tablesFromTenant(await tenantTables(context.tenantId));
-      const options = await optionsFromRef(input.ref, tables, agentFetcher(context.tenantId));
+      await addQueryTables(tables, input.queryTables ?? [], agentFetcher(context.tenantId));
+      const options = optionsFromRef(input.ref, tables);
       return { options: options.slice(0, input.limit) };
     }),
 

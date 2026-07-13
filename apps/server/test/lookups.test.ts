@@ -1,6 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import type { ModelDef } from "@hera/config-engine";
-import { optionsFromRef, resolveLookups, tablesFromTenant, type QueryFetcher } from "../src/lookups.ts";
+import { describe, expect, test, it } from "bun:test";
+import type { ModelDef, ResolvedTable } from "@hera/config-engine";
+import { addQueryTables, optionsFromRef, resolveLookups, tablesFromTenant, type QueryFetcher } from "../src/lookups.ts";
 
 const noFetch: QueryFetcher = async () => {
   throw new Error("unexpected fetch");
@@ -21,11 +21,10 @@ const minimalModel = (over: Partial<ModelDef>): ModelDef => ({
 });
 
 describe("optionsFromRef", () => {
-  test("manual: label defaults to String(value)", async () => {
-    const opts = await optionsFromRef(
+  test("manual: label defaults to String(value)", () => {
+    const opts = optionsFromRef(
       { source: "manual", options: [{ value: 10 }, { value: "alu", label: "Aluminium" }] },
       {},
-      noFetch,
     );
     expect(opts).toEqual([
       { value: 10, label: "10" },
@@ -33,47 +32,35 @@ describe("optionsFromRef", () => {
     ]);
   });
 
-  test("table: projects valueCol/labelCol by name", async () => {
+  test("table: projects valueCol/labelCol by name", () => {
     const tables = tablesFromTenant([
       { name: "colors", columns: [{ key: "code" }, { key: "name" }], rows: [["R", "Red"], ["B", "Blue"]] },
     ]);
-    const opts = await optionsFromRef(
-      { source: "table", table: "colors", valueCol: "code", labelCol: "name" },
-      tables,
-      noFetch,
-    );
+    const opts = optionsFromRef({ source: "table", table: "colors", valueCol: "code", labelCol: "name" }, tables);
     expect(opts).toEqual([
       { value: "R", label: "Red" },
       { value: "B", label: "Blue" },
     ]);
   });
 
-  test("table: unknown table/column errors name the culprit", async () => {
-    await expect(optionsFromRef({ source: "table", table: "nope", valueCol: "x" }, {}, noFetch)).rejects.toThrow(
-      "nope",
-    );
+  test("table: unknown table/column errors name the culprit", () => {
+    expect(() => optionsFromRef({ source: "table", table: "nope", valueCol: "x" }, {})).toThrow("nope");
     const tables = tablesFromTenant([{ name: "t", columns: [{ key: "a" }], rows: [] }]);
-    await expect(optionsFromRef({ source: "table", table: "t", valueCol: "x" }, tables, noFetch)).rejects.toThrow("'x'");
+    expect(() => optionsFromRef({ source: "table", table: "t", valueCol: "x" }, tables)).toThrow("'x'");
   });
 
-  test("query: unwraps { value: [...] } and maps fields", async () => {
-    const fetcher: QueryFetcher = async (target, path) => {
-      expect(target).toBe("b1");
-      expect(path).toBe("/Items?$select=ItemCode,ItemName");
-      return { value: [{ ItemCode: "A1", ItemName: "Widget" }] };
-    };
-    const opts = await optionsFromRef(
-      { source: "query", target: "b1", path: "/Items?$select=ItemCode,ItemName", valueField: "ItemCode", labelField: "ItemName" },
-      {},
-      fetcher,
-    );
+  it("resolves query domains from a fetched queryTable", async () => {
+    const tables: Record<string, ResolvedTable> = {};
+    await addQueryTables(tables, [{ name: "items", target: "b1", path: "/Items?$select=ItemCode,ItemName", columns: ["ItemCode", "ItemName"] }],
+      async () => ({ value: [{ ItemCode: "A1", ItemName: "Widget" }] }));
+    const opts = optionsFromRef({ source: "query", table: "items", valueCol: "ItemCode", labelCol: "ItemName" }, tables);
     expect(opts).toEqual([{ value: "A1", label: "Widget" }]);
   });
 
-  test("query: non-array response errors with target + path", async () => {
+  it("throws on a non-array query payload", async () => {
     await expect(
-      optionsFromRef({ source: "query", target: "beas", path: "/bad", valueField: "x" }, {}, async () => ({ oops: 1 })),
-    ).rejects.toThrow("beas GET /bad");
+      addQueryTables({}, [{ name: "bad", target: "beas", path: "/bad", columns: ["x"] }], async () => ({ oops: 1 })),
+    ).rejects.toThrow("did not return a row array");
   });
 });
 
@@ -88,14 +75,18 @@ describe("resolveLookups", () => {
       parameters: [
         {
           key: "mat", label: "Material", type: "string", ui: "select",
-          domain: { kind: "options", ref: { source: "query", target: "b1", path: "/Items", valueField: "Code" } },
+          domain: { kind: "options", ref: { source: "query", table: "items", valueCol: "Code" } },
         },
         {
           key: "grade", label: "Grade", type: "string", ui: "select",
           domain: { kind: "options", ref: { source: "manual", options: [{ value: "std" }] } },
         },
       ],
-      queryTables: [{ name: "prices", target: "b1", path: "/Items", columns: ["Code", "Price"] }],
+      // Two queryTables sharing one path (target,path) → still just one GET (memoized in resolveLookups).
+      queryTables: [
+        { name: "items", target: "b1", path: "/Items", columns: ["Code"] },
+        { name: "prices", target: "b1", path: "/Items", columns: ["Code", "Price"] },
+      ],
     });
     const lookups = await resolveLookups(model, [], fetcher);
     expect(lookups.domains.mat).toEqual([
@@ -103,8 +94,9 @@ describe("resolveLookups", () => {
       { value: "M2", label: "M2" },
     ]);
     expect(lookups.domains.grade).toEqual([{ value: "std", label: "std" }]);
+    expect(lookups.tables.items).toEqual({ columns: ["Code"], rows: [["M1"], ["M2"]] });
     expect(lookups.tables.prices).toEqual({ columns: ["Code", "Price"], rows: [["M1", 5], ["M2", 7]] });
-    expect(calls).toBe(1); // same (target, path) fetched once
+    expect(calls).toBe(1); // same (target, path) fetched once across both queryTables
   });
 
   test("tenant config_tables land in tables and are usable as a domain source", async () => {

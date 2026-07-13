@@ -31,26 +31,22 @@ function project(t: ResolvedTable, name: string, valueCol: string, labelCol?: st
   return t.rows.map((r) => ({ value: r[vi] ?? null, label: String(r[li] ?? r[vi] ?? "") }));
 }
 
-export async function optionsFromRef(
-  ref: LookupRef,
+export function optionsFromRef(ref: LookupRef, tables: Record<string, ResolvedTable>): Option[] {
+  if (ref.source === "manual") return ref.options.map((o) => ({ value: o.value, label: o.label ?? String(o.value) }));
+  const t = tables[ref.table];
+  if (!t) throw new Error(`Unknown lookup table '${ref.table}'`);
+  return project(t, ref.table, ref.valueCol, ref.labelCol);
+}
+
+/** Fetch each queryTable and add it to `tables` (mutates in place). */
+export async function addQueryTables(
   tables: Record<string, ResolvedTable>,
+  queryTables: ModelDef["queryTables"],
   fetchQuery: QueryFetcher,
-): Promise<Option[]> {
-  switch (ref.source) {
-    case "manual":
-      return ref.options.map((o) => ({ value: o.value, label: o.label ?? String(o.value) }));
-    case "table": {
-      const t = tables[ref.table];
-      if (!t) throw new Error(`Unknown lookup table '${ref.table}'`);
-      return project(t, ref.table, ref.valueCol, ref.labelCol);
-    }
-    case "query": {
-      const rows = rowsOf(await fetchQuery(ref.target, ref.path), ref.target, ref.path);
-      return rows.map((r) => ({
-        value: asVal(r[ref.valueField]),
-        label: String(r[ref.labelField ?? ref.valueField] ?? ""),
-      }));
-    }
+): Promise<void> {
+  for (const qt of queryTables) {
+    const rows = rowsOf(await fetchQuery(qt.target, qt.path), qt.target, qt.path);
+    tables[qt.name] = { columns: qt.columns, rows: rows.map((r) => qt.columns.map((c) => asVal(r[c]))) };
   }
 }
 
@@ -59,7 +55,7 @@ export async function resolveLookups(
   tenantTables: TenantTable[],
   fetchQuery: QueryFetcher,
 ): Promise<ResolvedLookups> {
-  // Memoize per (target, path): a query domain and a queryTable often share one GET.
+  // Memoize per (target, path): two queryTables may share one GET.
   const fetched = new Map<string, Promise<unknown>>();
   const fetchOnce: QueryFetcher = (target, path) => {
     const k = `${target} ${path}`;
@@ -69,15 +65,12 @@ export async function resolveLookups(
   };
 
   const tables = tablesFromTenant(tenantTables);
-  for (const qt of model.queryTables) {
-    const rows = rowsOf(await fetchOnce(qt.target, qt.path), qt.target, qt.path);
-    tables[qt.name] = { columns: qt.columns, rows: rows.map((r) => qt.columns.map((c) => asVal(r[c]))) };
-  }
+  await addQueryTables(tables, model.queryTables, fetchOnce);
 
   const domains: ResolvedLookups["domains"] = {};
   for (const p of model.parameters) {
     if (p.domain?.kind !== "options") continue;
-    domains[p.key] = await optionsFromRef(p.domain.ref, tables, fetchOnce);
+    domains[p.key] = optionsFromRef(p.domain.ref, tables);
   }
   return { domains, tables };
 }

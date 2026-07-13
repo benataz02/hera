@@ -16,7 +16,7 @@ const model: ModelDef = {
     },
     {
       key: "grade", label: "Grade", type: "string", ui: "select",
-      domain: { kind: "options", ref: { source: "query", target: "b1", path: "/Items?$select=ItemCode", valueField: "ItemCode" } },
+      domain: { kind: "options", ref: { source: "query", table: "items", valueCol: "ItemCode" } },
     },
   ],
   structure: { sections: [{ key: "main", title: "Main", groups: [{ key: "g", title: "G", params: ["size", "grade"] }] }] },
@@ -24,7 +24,7 @@ const model: ModelDef = {
   constraints: [],
   bom: [{ id: "body", itemCode: '"BODY"', qty: 'size == "S" ? 1 : 2', price: "3", scrapPct: 0 }],
   routing: [{ id: "cut", resource: "SAW", setupMin: "10", runMinPerUnit: "1", ratePerHour: "60" }],
-  queryTables: [],
+  queryTables: [{ name: "items", target: "b1", path: "/Items?$select=ItemCode", columns: ["ItemCode"] }],
   pricing: { priceExpr: "unitCost * 2", quoteItemCode: "BOX" },
   batchDefaults: [10],
 };
