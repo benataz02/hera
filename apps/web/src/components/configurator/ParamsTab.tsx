@@ -81,7 +81,8 @@ export function ParamsTab({ draft, update, issues, tables }: {
           {modelIssues.map((i) => i.message).join(" · ")}
         </MessageStrip>
       ) : null}
-      <Bar design="Subheader"
+      <div style={{ display: "flex", flexDirection: "column" }}>
+      <Bar design="Subheader" style={{ borderBlockEnd: "none" }}
         startContent={<Title level="H5">Form structure</Title>}
         endContent={
           <>
@@ -182,6 +183,7 @@ export function ParamsTab({ draft, update, issues, tables }: {
           </TableRow>
         ))}
       </Table>
+      </div>
 
       {loose.length ? (
         <MessageStrip design="Critical" hideCloseButton>

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, it, test } from "bun:test";
 import type { ModelDef } from "@hera/config-engine";
 import { complete, matches, scopeSuggestions, trailingIdent } from "./exprHelpers.ts";
 
@@ -47,5 +47,16 @@ describe("exprHelpers", () => {
     const lookup = all.find((s) => s.text === "LOOKUP")!;
     expect(complete("material == mat", mat)).toBe("material == material");
     expect(complete("look", lookup)).toBe("LOOKUP(");
+  });
+
+  it("suggests derived lookup columns when statically known", () => {
+    const m = structuredClone(model); // the test file's existing ModelDef fixture; if none, build a minimal one as in propagate.test.ts
+    m.queryTables = [{ name: "items", target: "b1", path: "/Items", columns: ["Code", "Name"] }];
+    m.parameters.push({
+      key: "item", label: "Item", type: "string", ui: "select",
+      domain: { kind: "options", ref: { source: "query", table: "items", valueCol: "Code" } },
+    });
+    const texts = scopeSuggestions(m).map((s) => s.text);
+    expect(texts).toContain("item_Name");
   });
 });
