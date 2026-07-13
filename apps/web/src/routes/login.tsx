@@ -5,23 +5,35 @@ import { Input, Button, MessageStrip } from "@ui5/webcomponents-react";
 import { authClient } from "../auth-client.ts";
 import { AuthLayout } from "../components/AuthLayout.tsx";
 import { SocialButtons } from "../components/SocialButtons.tsx";
-import { apexUrl, hardRedirect, isApex } from "../lib/tenant.ts";
+import { apexUrl, hardRedirect, isApex, safeRedirect } from "../lib/tenant.ts";
 
 export const Route = createFileRoute("/login")({
-  // Auth lives on the apex only. Already signed in? Hand off to the apex dispatcher (`/`).
-  beforeLoad: async ({ context }) => {
-    if (!isApex()) return hardRedirect(apexUrl("/login"));
+  validateSearch: (s: Record<string, unknown>): { redirect?: string } => ({
+    redirect: typeof s.redirect === "string" ? s.redirect : undefined,
+  }),
+  // Auth lives on the apex only. Already signed in? Hand off to the apex dispatcher (`/`),
+  // or straight back to `redirect` (e.g. an invite accept link) when it's safe to do so.
+  beforeLoad: async ({ context, search }) => {
+    if (!isApex())
+      return hardRedirect(
+        apexUrl(`/login${search.redirect ? `?redirect=${encodeURIComponent(search.redirect)}` : ""}`),
+      );
     const data = await context.queryClient.ensureQueryData({
       queryKey: ["session"],
       queryFn: async () => (await authClient.getSession()).data ?? null,
     });
-    if (data?.session) throw redirect({ to: "/" });
+    if (data?.session) {
+      const to = safeRedirect(search.redirect);
+      if (to) return hardRedirect(to);
+      throw redirect({ to: "/" });
+    }
   },
   component: Login,
 });
 
 function Login() {
   const navigate = useNavigate();
+  const { redirect: redirectTo } = Route.useSearch();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
@@ -44,6 +56,8 @@ function Login() {
         queryFn: async () => (await authClient.getSession()).data ?? null,
         staleTime: 0, // bypass the 5-min default — we need a real fetch after sign-in
       });
+      const to = safeRedirect(redirectTo);
+      if (to) return void hardRedirect(to);
       navigate({ to: "/" });
     },
   });
@@ -73,7 +87,9 @@ function Login() {
       </Button>
       <div className="auth-or">or</div>
       <SocialButtons />
-      <p className="auth-alt">New to HERA? <Link to="/signup">Create an account</Link></p>
+      <p className="auth-alt">
+        New to HERA? <Link to="/signup" search={{ redirect: redirectTo }}>Create an account</Link>
+      </p>
     </AuthLayout>
   );
 }

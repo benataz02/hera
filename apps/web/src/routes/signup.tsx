@@ -5,22 +5,33 @@ import { Input, Button, MessageStrip } from "@ui5/webcomponents-react";
 import { authClient } from "../auth-client.ts";
 import { AuthLayout } from "../components/AuthLayout.tsx";
 import { SocialButtons } from "../components/SocialButtons.tsx";
-import { apexUrl, hardRedirect, isApex } from "../lib/tenant.ts";
+import { apexUrl, hardRedirect, isApex, safeRedirect } from "../lib/tenant.ts";
 
 export const Route = createFileRoute("/signup")({
-  beforeLoad: async ({ context }) => {
-    if (!isApex()) return hardRedirect(apexUrl("/signup"));
+  validateSearch: (s: Record<string, unknown>): { redirect?: string } => ({
+    redirect: typeof s.redirect === "string" ? s.redirect : undefined,
+  }),
+  beforeLoad: async ({ context, search }) => {
+    if (!isApex())
+      return hardRedirect(
+        apexUrl(`/signup${search.redirect ? `?redirect=${encodeURIComponent(search.redirect)}` : ""}`),
+      );
     const data = await context.queryClient.ensureQueryData({
       queryKey: ["session"],
       queryFn: async () => (await authClient.getSession()).data ?? null,
     });
-    if (data?.session) throw redirect({ to: "/" });
+    if (data?.session) {
+      const to = safeRedirect(search.redirect);
+      if (to) return hardRedirect(to);
+      throw redirect({ to: "/" });
+    }
   },
   component: Signup,
 });
 
 function Signup() {
   const navigate = useNavigate();
+  const { redirect: redirectTo } = Route.useSearch();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -43,8 +54,10 @@ function Signup() {
         queryFn: async () => (await authClient.getSession()).data ?? null,
         staleTime: 0,
       });
-      navigate({ to: "/onboarding" });
-    }, // brand-new user has no org yet
+      const to = safeRedirect(redirectTo);
+      if (to) return void hardRedirect(to);
+      navigate({ to: "/onboarding" }); // brand-new user has no org yet
+    },
   });
 
   const submit = () => name && email && password && signUp.mutate({ name, email, password });
@@ -76,7 +89,9 @@ function Signup() {
       </Button>
       <div className="auth-or">or</div>
       <SocialButtons callbackURL="/onboarding" />
-      <p className="auth-alt">Already have an account? <Link to="/login">Sign in</Link></p>
+      <p className="auth-alt">
+        Already have an account? <Link to="/login" search={{ redirect: redirectTo }}>Sign in</Link>
+      </p>
     </AuthLayout>
   );
 }

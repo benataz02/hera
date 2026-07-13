@@ -36,6 +36,26 @@ export function hardRedirect(url: string): Promise<never> {
   return new Promise<never>(() => {});
 }
 
+/**
+ * Guard against open redirects: only ever hand back a URL whose hostname is the apex
+ * (`BASE_DOMAIN`) or one of its tenant subdomains (`*.BASE_DOMAIN`). Anything else —
+ * unparsable, a relative path, a foreign host, `javascript:`, protocol-relative to
+ * elsewhere — comes back `null` so callers fall through to a safe default instead of
+ * following it. Deliberately requires an absolute URL (no base arg): `redirect=` is only
+ * ever produced by this app as a full `window.location.href` (see routes/accept.tsx).
+ */
+export function safeRedirect(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    if (host === BASE_DOMAIN || host.endsWith(`.${BASE_DOMAIN}`)) return url; // never an open redirect
+  } catch {
+    /* ignore — not a valid URL */
+  }
+  return null;
+}
+
 /** Clean a company name into a subdomain candidate (no random suffix — it's the permanent URL). */
 export const toSlug = (name: string) =>
   name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 30);
