@@ -1,20 +1,22 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Bar, Button, BusyIndicator, Dialog, Label, MessageStrip, ObjectStatus, Text, TextArea, Title, Wizard, WizardStep,
+  Bar, Button, BusyIndicator, Dialog, Form, FormGroup, FormItem, Label, MessageStrip,
+  ObjectStatus, Text, TextArea, Title, Wizard, WizardStep,
 } from "@ui5/webcomponents-react";
 import { propagate, type Entries } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
-import { cleanOverrides, statusUi, toggleSelection, toPriced, type Sel } from "./runView.ts";
-import { StepConfigure } from "./StepConfigure.tsx";
-import { StepBatches } from "./StepBatches.tsx";
-import { StepCandidates } from "./StepCandidates.tsx";
-import { CandidateDetail } from "./CandidateDetail.tsx";
-import { StepReview } from "./StepReview.tsx";
+import { cleanOverrides, statusUi, toggleSelection, type Sel } from "./runView.ts";
+import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
+import { ExtractPanel } from "./ExtractPanel.tsx";
+import { BatchEditor } from "./BatchEditor.tsx";
+import { StepCandidatesReview } from "./StepCandidatesReview.tsx";
+import "./ConfigProcessPage.css";
 
-// The configuration process: 5 steps, gated left to right. Steps 1–2 work on live model +
-// lookups; steps 3–4 render ONLY from the immutable run snapshot. Local state overlays
-// server state (override ?? server value) until a mutation persists it.
+// The configuration process: 3 steps, gated left to right. Step 1 (Configure) works on live
+// model + lookups and includes the batch quantities; step 2 (Candidates) renders ONLY from the
+// immutable run snapshot, with the editable outputs of every selected cell inline. Local state
+// overlays server state (override ?? server value) until a mutation persists it.
 export function ConfigProcessPage({ id }: { id: string }) {
   const qc = useQueryClient();
   const q = useQuery(orpc.configs.get.queryOptions({ input: { id } }));
@@ -46,7 +48,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
         setRunMeta({ capped: r.capped, widest: r.widest });
         setSel([]); // a new run invalidates any previous candidate picks
         invalidate();
-        setStep(2);
+        setStep(1);
       },
     }),
   );
@@ -61,18 +63,17 @@ export function ConfigProcessPage({ id }: { id: string }) {
   const batches = batchesOverride ?? project.batches;
   const selection = selOverride ?? latestRun?.selection ?? [];
   const runReady = !!latestRun && project.status !== "draft";
-  const step = stepOverride ?? (project.status === "draft" ? 0 : 2);
+  const step = stepOverride ?? (project.status === "draft" ? 0 : 1);
 
+  // ConsistencyStatus renders the message; prop here only gates Calculate/navigation.
   const prop = lookups.data ? propagate(model.definition, lookups.data, entries) : null;
   const conflicted = !!prop && prop.conflicts.length > 0;
   const entriesDirty = JSON.stringify(entries) !== JSON.stringify(project.entries);
   const batchesDirty = JSON.stringify(batches) !== JSON.stringify(project.batches);
+  const staleRun = !!latestRun && (project.status === "draft" || entriesDirty || batchesDirty);
 
-  const saveEntries = () => {
-    if (entriesDirty) update.mutate({ id, entries });
-  };
   const goto = (i: number) => {
-    if (step === 0 && i !== 0) saveEntries(); // leaving Configure persists (and re-drafts) the project
+    if (step === 0 && i !== 0 && (entriesDirty || batchesDirty)) update.mutate({ id, entries, batches });
     setStep(i);
   };
   const calculate = async () => {
@@ -93,17 +94,46 @@ export function ConfigProcessPage({ id }: { id: string }) {
     });
   };
 
+  const configureBody = lookups.isPending ? (
+    <BusyIndicator active delay={200} style={{ width: "100%", marginTop: "3rem" }} />
+  ) : lookups.error ? (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+      <MessageStrip design="Negative" hideCloseButton>{lookups.error.message}</MessageStrip>
+      <Button style={{ alignSelf: "start" }} onClick={() => lookups.refetch()}>Retry</Button>
+    </div>
+  ) : (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+      <ExtractPanel modelId={project.modelId} model={model.definition} entries={entries} onChange={setEntries} />
+      <ConfiguratorForm model={model.definition} lookups={lookups.data} entries={entries} onChange={setEntries} />
+      <Form headerText="Batch quantities" headerLevel="H5" labelSpan="S12 M4" layout="S1 M1 L1 XL1">
+        <FormGroup>
+          <FormItem labelContent={<Label>Quantities</Label>}>
+            <BatchEditor batches={batches} onChange={setBatches} />
+          </FormItem>
+        </FormGroup>
+      </Form>
+      {update.error || run.error ? (
+        <MessageStrip design="Negative" hideCloseButton>{update.error?.message ?? run.error?.message}</MessageStrip>
+      ) : null}
+      <Bar design="FloatingFooter" className="hera-step-bar"
+        startContent={
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+            <ConsistencyStatus model={model.definition} lookups={lookups.data} entries={entries} />
+            {staleRun ? <ObjectStatus state="Critical">inputs changed — calculate again</ObjectStatus> : null}
+          </div>
+        }
+        endContent={
+          <Button design="Emphasized"
+            disabled={conflicted || batches.length === 0 || update.isPending || run.isPending}
+            onClick={() => void calculate()}>
+            {update.isPending || run.isPending ? "Calculating…" : "Calculate"}
+          </Button>
+        } />
+    </div>
+  );
+
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-      <Bar design="Header"
-        startContent={
-          <>
-            <Title level="H4">{project.name}</Title>
-            <Text>{model.name}</Text>
-          </>
-        }
-        endContent={<ObjectStatus state={statusUi[project.status].state}>{statusUi[project.status].text}</ObjectStatus>}
-      />
       {project.status === "requested" ? (
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", margin: "0.5rem 1rem" }}>
           <MessageStrip design="Critical" hideCloseButton style={{ flex: 1 }}>
@@ -113,43 +143,35 @@ export function ConfigProcessPage({ id }: { id: string }) {
           <Button design="Negative" onClick={() => setRejectOpen(true)}>Reject</Button>
         </div>
       ) : null}
-      <Wizard contentLayout="MultipleSteps" style={{ flex: 1, minHeight: 0 }}
-        onStepChange={(e) => goto(Number((e.detail.step as HTMLElement).dataset.idx))}>
-        <WizardStep titleText="Configure" icon="settings" data-idx="0" selected={step === 0}>
-          <StepConfigure model={model.definition} modelId={project.modelId} lookups={lookups} entries={entries}
-            onChange={setEntries} onNext={() => goto(1)} saving={update.isPending} conflicted={conflicted} />
-        </WizardStep>
-        <WizardStep titleText="Batches" icon="multiselect-all" data-idx="1" selected={step === 1} disabled={conflicted}>
-          <StepBatches batches={batches} onChange={setBatches} onCalculate={() => void calculate()}
-            running={update.isPending || run.isPending}
-            error={update.error?.message ?? run.error?.message ?? null}
-            staleRun={!!latestRun && (project.status === "draft" || entriesDirty || batchesDirty)} />
-        </WizardStep>
-        <WizardStep titleText="Candidates" icon="grid" data-idx="2" selected={step === 2} disabled={!runReady}>
-          {runReady && latestRun ? (
-            <StepCandidates model={latestRun.modelSnapshot} runEntries={latestRun.entries}
-              candidates={latestRun.candidates.map(toPriced)} selection={selection}
-              onToggle={(i, b) => setSel(toggleSelection(selection, i, b))}
-              onNext={() => goto(3)}
-              capped={runMeta?.capped ?? latestRun.candidates.length >= 200}
-              widest={runMeta?.widest}
-              renderDetail={(i, label) => <CandidateDetail label={label} candidate={latestRun.candidates[i]!} />} />
-          ) : null}
-        </WizardStep>
-        <WizardStep titleText="Review outputs" icon="activity-items" data-idx="3" selected={step === 3}
-          disabled={!runReady || selection.length === 0}>
-          {runReady && latestRun ? (
-            <StepReview model={latestRun.modelSnapshot} lookups={latestRun.lookupSnapshot}
-              runEntries={latestRun.entries} candidates={latestRun.candidates}
-              selection={selection} onChange={setSel}
-              onSave={saveSelection} saving={select.isPending}
-              error={select.error?.message ?? null} saved={select.isSuccess} />
-          ) : null}
-        </WizardStep>
-        <WizardStep titleText="Create quote" icon="sales-quote" data-idx="4" disabled>
-          <Text>Available after review — coming in phase 5.</Text>
-        </WizardStep>
-      </Wizard>
+      <div className="hera-wizard-wrap">
+        <div className="hera-wizard-header">
+          <Title level="H5">{project.name}</Title>
+          <Text>{model.name}</Text>
+          <ObjectStatus state={statusUi[project.status].state}>{statusUi[project.status].text}</ObjectStatus>
+        </div>
+        <Wizard className="hera-wizard" contentLayout="SingleStep"
+          onStepChange={(e) => goto(Number((e.detail.step as HTMLElement).dataset.idx))}>
+          <WizardStep titleText="Configure" icon="settings" data-idx="0" selected={step === 0}>
+            {configureBody}
+          </WizardStep>
+          <WizardStep titleText="Candidates" icon="grid" data-idx="1" selected={step === 1} disabled={!runReady}>
+            {runReady && latestRun ? (
+              <StepCandidatesReview model={latestRun.modelSnapshot} lookups={latestRun.lookupSnapshot}
+                runEntries={latestRun.entries} candidates={latestRun.candidates}
+                selection={selection}
+                onToggle={(i, b) => setSel(toggleSelection(selection, i, b))}
+                onChange={setSel}
+                capped={runMeta?.capped ?? latestRun.candidates.length >= 200}
+                widest={runMeta?.widest}
+                onSave={saveSelection} saving={select.isPending}
+                error={select.error?.message ?? null} saved={select.isSuccess} />
+            ) : null}
+          </WizardStep>
+          <WizardStep titleText="Create quote" icon="sales-quote" data-idx="2" disabled>
+            <Text>Available after review — coming in phase 5.</Text>
+          </WizardStep>
+        </Wizard>
+      </div>
 
       <Dialog open={rejectOpen} headerText="Reject request" onClose={() => setRejectOpen(false)}
         footer={
