@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { Bar, BusyIndicator, Button, MessageStrip } from "@ui5/webcomponents-react";
+import { Bar, Button, MessageStrip } from "@ui5/webcomponents-react";
 import type { Entries, ModelDef, ResolvedLookups } from "@hera/config-engine";
 import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
 import { ExtractPanel } from "./ExtractPanel.tsx";
@@ -18,22 +18,21 @@ export function StepConfigure({ modelId, model, lookups, entries, onChange, onNe
   conflicted: boolean;
   extract?: ComponentProps<typeof ExtractPanel>["extract"];
 }) {
-  if (lookups.isPending) return <BusyIndicator active delay={200} style={{ width: "100%", marginTop: "3rem" }} />;
-  if (lookups.error)
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-        <MessageStrip design="Negative" hideCloseButton>{lookups.error.message}</MessageStrip>
-        <Button style={{ alignSelf: "start" }} onClick={() => lookups.refetch()}>Retry</Button>
-      </div>
-    );
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+      {lookups.error ? (
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <MessageStrip design="Negative" hideCloseButton style={{ flex: 1 }}>{lookups.error.message}</MessageStrip>
+          <Button onClick={() => lookups.refetch()}>Retry</Button>
+        </div>
+      ) : null}
       <ExtractPanel modelId={modelId} model={model} entries={entries} onChange={onChange} extract={extract} />
-      <ConfiguratorForm model={model} lookups={lookups.data} entries={entries} onChange={onChange} />
+      <ConfiguratorForm model={model} lookups={lookups.data} entries={entries} onChange={onChange}
+        loading={lookups.isFetching} />
       <Bar design="FloatingFooter"
         startContent={<ConsistencyStatus model={model} lookups={lookups.data} entries={entries} />}
         endContent={
-          <Button design="Emphasized" disabled={conflicted || saving} onClick={onNext}
+          <Button design="Emphasized" disabled={conflicted || saving || lookups.isPending} onClick={onNext}
             tooltip={conflicted ? "Resolve the conflicts above first" : undefined}>
             {saving ? "Saving…" : "Next: batches"}
           </Button>

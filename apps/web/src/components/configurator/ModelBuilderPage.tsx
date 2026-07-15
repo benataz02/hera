@@ -134,22 +134,18 @@ export function ModelBuilderPage({ id }: { id: string }) {
               Showing the last valid version — fix {m.issues.length} error{m.issues.length === 1 ? "" : "s"} to preview the current draft.
             </MessageStrip>
           ) : null}
-          {lookups.isPending ? (
-            <BusyIndicator active delay={200} style={{ width: "100%", marginTop: "3rem" }} />
-          ) : lookups.error || !lookups.data ? (
-            <div style={{ padding: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-              <MessageStrip design="Negative" hideCloseButton>{lookups.error?.message ?? "No lookups"}</MessageStrip>
-              <Button style={{ alignSelf: "start" }} onClick={() => lookups.refetch()}>Retry</Button>
+          {lookups.error ? (
+            <div style={{ padding: "0 1rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <MessageStrip design="Negative" hideCloseButton style={{ flex: 1 }}>{lookups.error.message}</MessageStrip>
+              <Button onClick={() => lookups.refetch()}>Retry</Button>
             </div>
-          ) : (
-            <>
-              <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 1rem 1rem" }}>
-                <ConfiguratorForm model={previewModel} lookups={lookups.data} entries={entries} onChange={setEntries} />
-              </div>
-              <Bar design="Footer"
-                startContent={<ConsistencyStatus model={previewModel} lookups={lookups.data} entries={entries} />} />
-            </>
-          )}
+          ) : null}
+          <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 1rem 1rem" }}>
+            <ConfiguratorForm model={previewModel} lookups={lookups.data} entries={entries} onChange={setEntries}
+              loading={lookups.isFetching} />
+          </div>
+          <Bar design="Footer"
+            startContent={<ConsistencyStatus model={previewModel} lookups={lookups.data} entries={entries} />} />
         </div>
       </SplitterElement>
     </SplitterLayout>

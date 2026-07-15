@@ -4,7 +4,12 @@ import { FUNCS, refColumns, derivedKey, type ModelDef } from "@hera/config-engin
 // value — the common typing flow. // ponytail: caret-aware mid-expression completion needs
 // shadow-DOM selectionStart poking; add if authors ask for it.
 
-export type Suggestion = { text: string; kind: "param" | "computed" | "var" | "function" | "derived" };
+export type Suggestion = {
+  text: string;
+  kind: "param" | "computed" | "var" | "function" | "derived";
+  /** human label shown as secondary text (params only) */
+  label?: string;
+};
 
 export function scopeSuggestions(model: ModelDef, extraVars: string[] = []): Suggestion[] {
   // ponytail: tenant-table columns aren't available here, so default-all tenant refs get no
@@ -16,7 +21,7 @@ export function scopeSuggestions(model: ModelDef, extraVars: string[] = []): Sug
     return refColumns(ref, colsOf(ref.table)).map((c) => ({ text: derivedKey(p.key, c), kind: "derived" as const }));
   });
   return [
-    ...model.parameters.map((p) => ({ text: p.key, kind: "param" as const })),
+    ...model.parameters.map((p) => ({ text: p.key, kind: "param" as const, label: p.label })),
     ...derived,
     ...model.computed.map((c) => ({ text: c.key, kind: "computed" as const })),
     ...extraVars.map((v) => ({ text: v, kind: "var" as const })),

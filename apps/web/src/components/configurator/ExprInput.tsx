@@ -1,5 +1,5 @@
 import { useMemo, type CSSProperties } from "react";
-import { Input, SuggestionItem } from "@ui5/webcomponents-react";
+import { Input, SuggestionItemCustom } from "@ui5/webcomponents-react";
 import { DslError, parse, type Issue, type ModelDef } from "@hera/config-engine";
 import { complete, matches, scopeSuggestions } from "./exprHelpers.ts";
 
@@ -76,7 +76,15 @@ export function ExprInput({
       data-expr-input
     >
       {sugg.map((s) => (
-        <SuggestionItem key={s.text} text={complete(text, s)} additionalText={s.kind} />
+        // text drives autocomplete/insertion (the full completed expression, preserving
+        // mid-expression completion); children render key + label only.
+        // ponytail: secondary blank for non-param kinds; functions still identify by the inserted "(".
+        <SuggestionItemCustom key={s.text} text={complete(text, s)}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", width: "100%" }}>
+            <span>{s.text}</span>
+            <span style={{ color: "var(--sapContent_LabelColor)" }}>{s.label ?? ""}</span>
+          </div>
+        </SuggestionItemCustom>
       ))}
     </Input>
   );

@@ -94,17 +94,17 @@ export function ConfigProcessPage({ id }: { id: string }) {
     });
   };
 
-  const configureBody = lookups.isPending ? (
-    <BusyIndicator active delay={200} style={{ width: "100%", marginTop: "3rem" }} />
-  ) : lookups.error ? (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-      <MessageStrip design="Negative" hideCloseButton>{lookups.error.message}</MessageStrip>
-      <Button style={{ alignSelf: "start" }} onClick={() => lookups.refetch()}>Retry</Button>
-    </div>
-  ) : (
+  const configureBody = (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+      {lookups.error ? (
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <MessageStrip design="Negative" hideCloseButton style={{ flex: 1 }}>{lookups.error.message}</MessageStrip>
+          <Button onClick={() => lookups.refetch()}>Retry</Button>
+        </div>
+      ) : null}
       <ExtractPanel modelId={project.modelId} model={model.definition} entries={entries} onChange={setEntries} />
-      <ConfiguratorForm model={model.definition} lookups={lookups.data} entries={entries} onChange={setEntries} />
+      <ConfiguratorForm model={model.definition} lookups={lookups.data} entries={entries} onChange={setEntries}
+        loading={lookups.isFetching} />
       <Form headerText="Batch quantities" headerLevel="H5" labelSpan="S12 M4" layout="S1 M1 L1 XL1">
         <FormGroup>
           <FormItem labelContent={<Label>Quantities</Label>}>
@@ -124,7 +124,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
         }
         endContent={
           <Button design="Emphasized"
-            disabled={conflicted || batches.length === 0 || update.isPending || run.isPending}
+            disabled={conflicted || lookups.isPending || batches.length === 0 || update.isPending || run.isPending}
             onClick={() => void calculate()}>
             {update.isPending || run.isPending ? "Calculating…" : "Calculate"}
           </Button>

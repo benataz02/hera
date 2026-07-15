@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
 import {
-  CheckBox, Form, FormGroup, FormItem, Icon, Input, Label, MultiComboBox, MultiComboBoxItem,
+  BusyIndicator, CheckBox, Form, FormGroup, FormItem, Icon, Input, Label, MultiComboBox, MultiComboBoxItem,
   ObjectStatus, Option, RadioButton, Select, StepInput, SuggestionItem, Text,
 } from "@ui5/webcomponents-react";
 import {
   propagate, refColumns, refKeyCols,
-  type DomainOption, type Entries, type LookupRef, type ModelDef, type ResolvedLookups, type ResolvedTable, type Val,
+  type DomainOption, type Entries, type LookupRef, type ModelDef, type Param, type ResolvedLookups, type ResolvedTable, type Val,
 } from "@hera/config-engine";
 import { ValueHelpDialog } from "./ValueHelpDialog.tsx";
+import { clientBaseLookups, resolveEntry } from "./formHelpers.ts";
 
 /** The ref's display columns for one option value, joined — shown next to the option. */
 function extraOf(ref: LookupRef, t: ResolvedTable | undefined, val: Val): string | undefined {
@@ -19,6 +20,54 @@ function extraOf(ref: LookupRef, t: ResolvedTable | undefined, val: Val): string
   return s || undefined;
 }
 
+// Value-help input for a query-sourced param. Local `typed` state lets you filter as you type
+// without committing; on blur/Enter an unknown value is rejected (reverts to the last valid one).
+function QueryValueInput({ p, refDef, dom, value, table, onCommit }: {
+  p: Param;
+  refDef: LookupRef;
+  dom: DomainOption[];
+  value: Val | undefined;
+  table: ResolvedTable | undefined;
+  onCommit: (v: Val | undefined) => void;
+}) {
+  const [typed, setTyped] = useState<string | null>(null);
+  const [vhOpen, setVhOpen] = useState(false);
+  const committedLabel =
+    dom.find((o) => o.value === value)?.label ?? (value === undefined || value === null ? "" : String(value));
+  const shown = typed ?? committedLabel;
+  const invalid = typed !== null && typed !== "" && resolveEntry(dom, typed).kind === "reject";
+
+  const commit = (raw: string) => {
+    const r = resolveEntry(dom, raw);
+    if (r.kind === "clear") onCommit(undefined);
+    else if (r.kind === "set") onCommit(r.value);
+    // reject: keep the last committed value
+    setTyped(null); // snap the field back to the committed label
+  };
+
+  return (
+    <>
+      <Input showSuggestions filter="Contains" value={shown} placeholder="Type or pick…" showClearIcon
+        valueState={invalid ? "Negative" : "None"}
+        valueStateMessage={<div>Pick a value from the list.</div>}
+        icon={<Icon name="value-help" style={{ cursor: "pointer" }} onClick={() => setVhOpen(true)} />}
+        onInput={(e) => setTyped(e.target.value ?? "")}
+        onChange={(e) => commit(e.target.value ?? "")}>
+        {dom.filter((o) => !o.eliminatedBy).map((o, i) => (
+          <SuggestionItem key={i} text={o.label}
+            additionalText={[String(o.value ?? ""), extraOf(refDef, table, o.value)].filter(Boolean).join(" · ")} />
+        ))}
+      </Input>
+      {vhOpen && table ? (
+        <ValueHelpDialog open headerText={p.label} table={table} valueCol={refKeyCols(refDef, table.columns).valueCol}
+          columns={refColumns(refDef, table.columns)}
+          hiddenValues={new Set(dom.filter((o) => o.eliminatedBy).map((o) => o.value))}
+          onSelect={(nv) => { onCommit(nv); setTyped(null); }} onClose={() => setVhOpen(false)} />
+      ) : null}
+    </>
+  );
+}
+
 // The one form both the builder preview and the wizard render. Fully controlled:
 // entries in, entries out; all engine work happens in propagate(). Renders sections
 // only — scrolling, footers and the consistency line belong to the caller.
@@ -28,10 +77,11 @@ function extraOf(ref: LookupRef, t: ResolvedTable | undefined, val: Val): string
  *  ponytail: recomputes propagate() alongside the form's own call; memoized, fine at this scale. */
 export function ConsistencyStatus({ model, lookups, entries }: {
   model: ModelDef;
-  lookups: ResolvedLookups;
+  lookups?: ResolvedLookups;
   entries: Entries;
 }) {
-  const prop = useMemo(() => propagate(model, lookups, entries), [model, lookups, entries]);
+  const lk = useMemo(() => lookups ?? clientBaseLookups(model), [lookups, model]);
+  const prop = useMemo(() => propagate(model, lk, entries), [model, lk, entries]);
   const conflict = prop.conflicts.length ? prop.conflicts.map((c) => c.message).join(" · ") : null;
   return (
     <ObjectStatus state={conflict ? "Negative" : "Positive"}>
@@ -42,14 +92,16 @@ export function ConsistencyStatus({ model, lookups, entries }: {
 
 const FORM_PROPS = { labelSpan: "S12 M4", layout: "S1 M1 L1 XL1", headerLevel: "H5" } as const;
 
-export function ConfiguratorForm({ model, lookups, entries, onChange }: {
+export function ConfiguratorForm({ model, lookups, entries, onChange, loading }: {
   model: ModelDef;
-  lookups: ResolvedLookups;
+  lookups?: ResolvedLookups;
   entries: Entries;
   onChange: (next: Entries) => void;
+  /** the single lookups fetch is still in flight — table/query fields show a spinner until it lands */
+  loading?: boolean;
 }) {
-  const prop = useMemo(() => propagate(model, lookups, entries), [model, lookups, entries]);
-  const [vhKey, setVhKey] = useState<string | null>(null);
+  const lk = useMemo(() => lookups ?? clientBaseLookups(model), [lookups, model]);
+  const prop = useMemo(() => propagate(model, lk, entries), [model, lk, entries]);
 
   const set = (key: string, v: Val | undefined) => {
     const next = { ...entries };
@@ -62,6 +114,12 @@ export function ConfiguratorForm({ model, lookups, entries, onChange }: {
     const p = model.parameters.find((x) => x.key === key)!;
     const dom: DomainOption[] = prop.domains[key] ?? [];
     const v = prop.values[key];
+
+    // Server-backed options (config table / query) arrive with the single lookups fetch; spin
+    // just this field until it lands. Manual/range/plain fields resolve client-side and stay usable.
+    const ref = p.domain?.kind === "options" ? p.domain.ref : undefined;
+    if (loading && (ref?.source === "table" || ref?.source === "query") && dom.length === 0)
+      return <BusyIndicator active delay={0} />;
 
     if (p.ui === "radio")
       return (
@@ -110,41 +168,17 @@ export function ConfiguratorForm({ model, lookups, entries, onChange }: {
     }
 
     if (p.domain?.kind === "options" && p.domain.ref.source === "query") {
-      const ref = p.domain.ref;
-      const t = lookups.tables[ref.table];
-      const label = dom.find((o) => o.value === v)?.label ?? (v === undefined || v === null ? "" : String(v));
+      // ponytail: every option is rendered as a suggestion child and filtered natively;
+      // cap or virtualize if a query ever returns thousands of rows.
       return (
-        <>
-          {/* ponytail: every option is rendered as a suggestion child and filtered natively;
-              cap or virtualize if a query ever returns thousands of rows. */}
-          <Input showSuggestions filter="Contains" value={label} placeholder="Type or pick…"
-            showClearIcon
-            icon={<Icon name="value-help" onClick={() => setVhKey(key)} />}
-            onInput={(e) => {
-              const raw = e.target.value ?? "";
-              if (raw === "") return set(key, undefined);
-              const l = raw.toLowerCase();
-              const hit = dom.find((o) => o.label.toLowerCase() === l) ?? dom.find((o) => String(o.value).toLowerCase() === l);
-              set(key, hit ? hit.value : raw); // unknown text stays put; constraints surface it
-            }}>
-            {dom.filter((o) => !o.eliminatedBy).map((o, i) => (
-              <SuggestionItem key={i} text={o.label}
-                additionalText={[String(o.value ?? ""), extraOf(ref, t, o.value)].filter(Boolean).join(" · ")} />
-            ))}
-          </Input>
-          {vhKey === key && t ? (
-            <ValueHelpDialog open headerText={p.label} table={t} valueCol={refKeyCols(ref, t.columns).valueCol}
-              columns={refColumns(ref, t.columns)}
-              hiddenValues={new Set(dom.filter((o) => o.eliminatedBy).map((o) => o.value))}
-              onSelect={(nv) => set(key, nv)} onClose={() => setVhKey(null)} />
-          ) : null}
-        </>
+        <QueryValueInput p={p} refDef={p.domain.ref} dom={dom} value={v}
+          table={lk.tables[p.domain.ref.table]} onCommit={(nv) => set(key, nv)} />
       );
     }
 
     if (dom.length) { // select (and boolean-with-select)
       const tref = p.domain?.kind === "options" && p.domain.ref.source === "table" ? p.domain.ref : undefined;
-      const tbl = tref ? lookups.tables[tref.table] : undefined;
+      const tbl = tref ? lk.tables[tref.table] : undefined;
       return (
         <Select value={v === undefined ? "" : JSON.stringify(v)}
           onChange={(e) => {

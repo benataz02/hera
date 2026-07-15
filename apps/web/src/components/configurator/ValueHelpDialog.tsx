@@ -4,6 +4,14 @@ import {
 } from "@ui5/webcomponents-react";
 import type { ResolvedTable, Val } from "@hera/config-engine";
 
+// Kill the dialog's default content padding so the table (and its sticky header) sit flush.
+if (typeof document !== "undefined" && !document.getElementById("hera-vh-style")) {
+  const el = document.createElement("style");
+  el.id = "hera-vh-style";
+  el.textContent = `.hera-vh-dialog::part(content){padding:0;}`;
+  document.head.appendChild(el);
+}
+
 // Fiori-style value help for query-sourced parameters: search across every displayed column,
 // click a row to pick it. ponytail: client-side filter over already-resolved rows; move the
 // search server-side if a query ever returns thousands of rows.
@@ -34,7 +42,8 @@ export function ValueHelpDialog({ open, headerText, table, valueCol, columns, hi
   }, [table, q, hiddenValues]);
 
   return (
-    <Dialog open={open} headerText={headerText} onClose={onClose} style={{ width: "min(52rem, 95vw)" }}
+    <Dialog open={open} headerText={headerText} onClose={onClose} className="hera-vh-dialog"
+      style={{ width: "min(52rem, 95vw)" }}
       footer={
         <Bar design="Footer" endContent={
           <>
@@ -43,9 +52,14 @@ export function ValueHelpDialog({ open, headerText, table, valueCol, columns, hi
           </>
         } />
       }>
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.25rem 0" }}>
-        <Input icon={<Icon name="search" />} placeholder="Search" value={q} showClearIcon
-          onInput={(e) => setQ(e.target.value ?? "")} style={{ width: "100%" }} />
+      <div style={{ display: "flex", flexDirection: "column" }}>
+        <div style={{ position: "sticky", top: 0, zIndex: 2, background: "var(--sapGroup_ContentBackground)", padding: "0.5rem" }}>
+          <Input icon={<Icon name="search" />} placeholder="Search" value={q} showClearIcon
+            onInput={(e) => setQ(e.target.value ?? "")} style={{ width: "100%" }} />
+        </div>
+        {/* Table scrolls in its own region so its sticky column header pins below the search
+            instead of fighting it for top:0. */}
+        <div style={{ overflowY: "auto", maxHeight: "60vh" }}>
         <Table noDataText="No matching rows."
           onRowClick={(e) => {
             const i = Number((e.detail.row as HTMLElement).dataset.idx);
@@ -68,6 +82,7 @@ export function ValueHelpDialog({ open, headerText, table, valueCol, columns, hi
             </TableRow>
           ))}
         </Table>
+        </div>
       </div>
     </Dialog>
   );

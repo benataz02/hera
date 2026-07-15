@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { ModelDef } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
 
@@ -25,5 +25,6 @@ export function usePreviewLookups(draft: ModelDef) {
     ...orpc.models.previewLookups.queryOptions({ input: { definition: lookupSkeleton(draft) } }),
     staleTime: 5 * 60_000, // matches the server-side configs.lookups cache window
     retry: false, // agent-offline should show its message, not spin
+    placeholderData: keepPreviousData, // editing a query source keeps loaded fields visible instead of blanking
   });
 }
