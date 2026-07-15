@@ -25,6 +25,7 @@
     "build:agent": "bun build --compile --target=bun-windows-x64 --outfile apps/agent/dist/hera-agent.exe apps/agent/src/index.ts",
     "seed:dev": "bun scripts/seed-dev.ts",
     "seed:agent": "bun scripts/seed-agent.ts",
+    "seed:portal-client": "bun --env-file=.env scripts/seed-portal-client.ts",
     "seed:config": "bun scripts/seed-config.ts",
     "seed:standard": "bun scripts/seed-standard.ts",
     "e2e": "bun scripts/e2e.ts",

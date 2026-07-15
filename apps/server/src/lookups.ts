@@ -1,3 +1,4 @@
+import { refKeyCols } from "@hera/config-engine";
 import type { LookupRef, ModelDef, Option, ResolvedLookups, ResolvedTable, Val } from "@hera/config-engine";
 
 // Resolve a model's external references (manual lists, tenant config_tables, agent-backed
@@ -35,7 +36,25 @@ export function optionsFromRef(ref: LookupRef, tables: Record<string, ResolvedTa
   if (ref.source === "manual") return ref.options.map((o) => ({ value: o.value, label: o.label ?? String(o.value) }));
   const t = tables[ref.table];
   if (!t) throw new Error(`Unknown lookup table '${ref.table}'`);
-  return project(t, ref.table, ref.valueCol, ref.labelCol);
+  const { valueCol, labelCol } = refKeyCols(ref, t.columns);
+  return project(t, ref.table, valueCol, labelCol);
+}
+
+// Response field names, in first-seen order — the query's columns by convention. Non-identifier
+// keys (@odata.etag &c.) are dropped: columns become `<param>_<col>` values in the DSL.
+const fieldsOf = (rows: Record<string, unknown>[]): string[] =>
+  [...new Set(rows.flatMap((r) => Object.keys(r)))].filter((k) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k));
+
+/** GET a query and shape it as a table; columns come from the response unless pinned. */
+export async function fetchQueryTable(
+  fetchQuery: QueryFetcher,
+  target: "b1" | "beas",
+  path: string,
+  columns?: string[],
+): Promise<ResolvedTable> {
+  const rows = rowsOf(await fetchQuery(target, path), target, path);
+  const cols = columns?.length ? columns : fieldsOf(rows);
+  return { columns: cols, rows: rows.map((r) => cols.map((c) => asVal(r[c]))) };
 }
 
 /** Fetch each queryTable and add it to `tables` (mutates in place). */
@@ -45,8 +64,7 @@ export async function addQueryTables(
   fetchQuery: QueryFetcher,
 ): Promise<void> {
   for (const qt of queryTables) {
-    const rows = rowsOf(await fetchQuery(qt.target, qt.path), qt.target, qt.path);
-    tables[qt.name] = { columns: qt.columns, rows: rows.map((r) => qt.columns.map((c) => asVal(r[c]))) };
+    tables[qt.name] = await fetchQueryTable(fetchQuery, qt.target, qt.path, qt.columns);
   }
 }
 

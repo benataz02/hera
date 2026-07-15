@@ -17,7 +17,6 @@ const base = {
   name: z.string().min(1),
   shared: z.boolean().default(false),
   isDefault: z.boolean().default(false),
-  applyAutomatically: z.boolean().default(true),
 };
 const SaveZ = z.discriminatedUnion("page", [
   z.object({ page: z.literal("list"), definition: ListVariantDefZ, ...base }),
@@ -38,7 +37,6 @@ export const variantsRouter = {
           shared: uiVariant.shared,
           isDefault: uiVariant.isDefault,
           isStandard: uiVariant.isStandard,
-          applyAutomatically: uiVariant.applyAutomatically,
           definition: uiVariant.definition,
           userId: uiVariant.userId,
           author: user.name,
@@ -74,7 +72,6 @@ export const variantsRouter = {
         definition: input.definition,
         shared: input.shared,
         isDefault: input.isDefault,
-        applyAutomatically: input.applyAutomatically,
         updatedAt: new Date(),
       };
       if (id) {
@@ -168,7 +165,6 @@ export async function ensureStandardVariants(tenantId: string, userId: string, e
       isStandard: true,
       shared: true,
       isDefault: true,
-      applyAutomatically: true,
       definition:
         page === "list"
           ? { select: [], filter: [], orderby: [], filterBar: [] }

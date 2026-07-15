@@ -1,10 +1,23 @@
 import { useMemo, useState } from "react";
 import {
   CheckBox, Form, FormGroup, FormItem, Icon, Input, Label, MultiComboBox, MultiComboBoxItem,
-  ObjectStatus, Option, RadioButton, Select, StepInput, Text,
+  ObjectStatus, Option, RadioButton, Select, StepInput, SuggestionItem, Text,
 } from "@ui5/webcomponents-react";
-import { propagate, refColumns, type DomainOption, type Entries, type ModelDef, type ResolvedLookups, type Val } from "@hera/config-engine";
+import {
+  propagate, refColumns, refKeyCols,
+  type DomainOption, type Entries, type LookupRef, type ModelDef, type ResolvedLookups, type ResolvedTable, type Val,
+} from "@hera/config-engine";
 import { ValueHelpDialog } from "./ValueHelpDialog.tsx";
+
+/** The ref's display columns for one option value, joined — shown next to the option. */
+function extraOf(ref: LookupRef, t: ResolvedTable | undefined, val: Val): string | undefined {
+  if (!t) return undefined;
+  const vi = t.columns.indexOf(refKeyCols(ref, t.columns).valueCol);
+  const row = vi < 0 ? undefined : t.rows.find((r) => r[vi] === val);
+  if (!row) return undefined;
+  const s = refColumns(ref, t.columns).map((c) => String(row[t.columns.indexOf(c)] ?? "")).filter(Boolean).join(" · ");
+  return s || undefined;
+}
 
 // The one form both the builder preview and the wizard render. Fully controlled:
 // entries in, entries out; all engine work happens in propagate(). Renders sections
@@ -102,11 +115,25 @@ export function ConfiguratorForm({ model, lookups, entries, onChange }: {
       const label = dom.find((o) => o.value === v)?.label ?? (v === undefined || v === null ? "" : String(v));
       return (
         <>
-          <Input readonly value={label} placeholder="Select…"
+          {/* ponytail: every option is rendered as a suggestion child and filtered natively;
+              cap or virtualize if a query ever returns thousands of rows. */}
+          <Input showSuggestions filter="Contains" value={label} placeholder="Type or pick…"
+            showClearIcon
             icon={<Icon name="value-help" onClick={() => setVhKey(key)} />}
-            onClick={() => setVhKey(key)} />
+            onInput={(e) => {
+              const raw = e.target.value ?? "";
+              if (raw === "") return set(key, undefined);
+              const l = raw.toLowerCase();
+              const hit = dom.find((o) => o.label.toLowerCase() === l) ?? dom.find((o) => String(o.value).toLowerCase() === l);
+              set(key, hit ? hit.value : raw); // unknown text stays put; constraints surface it
+            }}>
+            {dom.filter((o) => !o.eliminatedBy).map((o, i) => (
+              <SuggestionItem key={i} text={o.label}
+                additionalText={[String(o.value ?? ""), extraOf(ref, t, o.value)].filter(Boolean).join(" · ")} />
+            ))}
+          </Input>
           {vhKey === key && t ? (
-            <ValueHelpDialog open headerText={p.label} table={t} valueCol={ref.valueCol}
+            <ValueHelpDialog open headerText={p.label} table={t} valueCol={refKeyCols(ref, t.columns).valueCol}
               columns={refColumns(ref, t.columns)}
               hiddenValues={new Set(dom.filter((o) => o.eliminatedBy).map((o) => o.value))}
               onSelect={(nv) => set(key, nv)} onClose={() => setVhKey(null)} />
@@ -118,15 +145,6 @@ export function ConfiguratorForm({ model, lookups, entries, onChange }: {
     if (dom.length) { // select (and boolean-with-select)
       const tref = p.domain?.kind === "options" && p.domain.ref.source === "table" ? p.domain.ref : undefined;
       const tbl = tref ? lookups.tables[tref.table] : undefined;
-      const extraOf = (val: Val): string | undefined => {
-        if (!tref || !tbl) return undefined;
-        const vi2 = tbl.columns.indexOf(tref.valueCol);
-        const row = vi2 < 0 ? undefined : tbl.rows.find((r) => r[vi2] === val);
-        if (!row) return undefined;
-        const cols = refColumns(tref, tbl.columns);
-        const s = cols.map((c) => String(row[tbl.columns.indexOf(c)] ?? "")).filter(Boolean).join(" · ");
-        return s || undefined;
-      };
       return (
         <Select value={v === undefined ? "" : JSON.stringify(v)}
           onChange={(e) => {
@@ -137,7 +155,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange }: {
           {dom.map((o, i) => (
             <Option key={i} value={JSON.stringify(o.value)} data-j={JSON.stringify(o.value)}
               tooltip={o.eliminatedBy ? `Unavailable: ${o.eliminatedBy}` : undefined}
-              additionalText={o.eliminatedBy ? "unavailable" : extraOf(o.value)}
+              additionalText={o.eliminatedBy ? "unavailable" : tref ? extraOf(tref, tbl, o.value) : undefined}
               // Option supports disabled at runtime (ListItemBase); the React typing omits it.
               {...(o.eliminatedBy ? ({ disabled: true } as Record<string, unknown>) : {})}>
               {o.label}

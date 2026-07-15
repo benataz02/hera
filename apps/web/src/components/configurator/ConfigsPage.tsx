@@ -5,6 +5,8 @@ import {
   Bar, Button, BusyIndicator, Dialog, DynamicPage, DynamicPageTitle, Input, Label, MessageStrip,
   ObjectStatus, Option, Select, SegmentedButton, SegmentedButtonItem, Table, TableCell, TableHeaderCell,
   TableHeaderRow, TableRow, TableRowAction, Text, Title,
+  Toolbar,
+  ToolbarButton,
 } from "@ui5/webcomponents-react";
 import { orpc } from "../../orpc.ts";
 import { statusUi } from "./runView.ts";
@@ -46,13 +48,15 @@ export function ConfigsPage() {
         <DynamicPageTitle
           heading={<Title level="H3">Configurations</Title>}
           actionsBar={
-            <Bar design="Header" endContent={
-              <Button design="Emphasized" disabled={!models.data?.length}
+            <Toolbar design="Transparent">
+              <ToolbarButton 
+                design="Emphasized" 
+                disabled={!models.data?.length}
                 tooltip={models.data?.length ? undefined : "No configurator models yet — an admin creates those first."}
-                onClick={() => { setNewName(""); setModelId(models.data?.[0]?.id ?? ""); setNewOpen(true); }}>
-                New configuration
-              </Button>
-            } />
+                onClick={() => { setNewName(""); setModelId(models.data?.[0]?.id ?? ""); setNewOpen(true); }}
+                text="New configuration">
+              </ToolbarButton>
+            </Toolbar>
           }
         />
       }

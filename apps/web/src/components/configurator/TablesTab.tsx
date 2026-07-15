@@ -4,7 +4,7 @@ import {
   Bar, Button, BusyIndicator, Input, Label, List, ListItemStandard, MessageStrip, Option, Select,
   Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, TableRowAction, Text, Title,
 } from "@ui5/webcomponents-react";
-import type { ModelDef, Val, Option as EngineOption } from "@hera/config-engine";
+import type { ModelDef, Val } from "@hera/config-engine";
 import { client, orpc } from "../../orpc.ts";
 
 type Col = { key: string; label: string; type: "string" | "number" | "boolean" };
@@ -70,7 +70,7 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
             <Button icon="add" tooltip="New query" onClick={() => {
               update((d) => ({
                 ...d,
-                queryTables: [...d.queryTables, { name: `query${d.queryTables.length + 1}`, target: "b1", path: "", columns: ["Code"] }],
+                queryTables: [...d.queryTables, { name: `query${d.queryTables.length + 1}`, target: "b1", path: "", columns: [] }],
               }));
               setQIdx(model.queryTables.length);
               setDraft(null);
@@ -175,18 +175,12 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
                   <Input placeholder="/Items?$select=ItemCode,ItemName" value={qt.path}
                     onInput={(e) => setQt({ path: e.target.value })} />
                 </div>
-                <Title level="H6">Columns (response fields, first is the natural key)</Title>
-                {qt.columns.map((c, i) => (
-                  <div key={i} style={{ display: "flex", gap: "0.5rem" }}>
-                    <Input value={c} onInput={(e) =>
-                      setQt({ columns: qt.columns.map((x, j) => (j === i ? e.target.value : x)) })} />
-                    <Button icon="delete" design="Transparent" disabled={qt.columns.length === 1}
-                      onClick={() => setQt({ columns: qt.columns.filter((_, j) => j !== i) })} />
-                  </div>
-                ))}
-                <Button icon="add" style={{ alignSelf: "start" }}
-                  onClick={() => setQt({ columns: [...qt.columns, ""] })}>Add column</Button>
-                <QueryTestFetch key={qIdx} qt={qt} />
+                <Text>
+                  {qt.columns.length
+                    ? `Columns (from the response): ${qt.columns.join(", ")} — key = ${qt.columns[0]}${qt.columns[1] ? `, label = ${qt.columns[1]}` : ""}.`
+                    : "Run Test fetch to take the columns from the response."}
+                </Text>
+                <QueryTestFetch key={qIdx} qt={qt} onColumns={(columns) => setQt({ columns })} />
               </>
             );
           })()}
@@ -198,19 +192,21 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
   );
 }
 
-function QueryTestFetch({ qt }: { qt: ModelDef["queryTables"][number] }) {
-  const [state, setState] = useState<{ busy?: boolean; options?: EngineOption[]; error?: string }>({});
+// Test fetch *is* the column definition: the response's field names become the query's columns.
+function QueryTestFetch({ qt, onColumns }: {
+  qt: ModelDef["queryTables"][number];
+  onColumns: (columns: string[]) => void;
+}) {
+  const [state, setState] = useState<{ busy?: boolean; cols?: string[]; rows?: Cell[][]; error?: string }>({});
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-      <Button icon="show" style={{ alignSelf: "start" }} disabled={state.busy || !qt.path || !qt.columns[0]}
+      <Button icon="show" style={{ alignSelf: "start" }} disabled={state.busy || !qt.path}
         onClick={async () => {
           setState({ busy: true });
           try {
-            const r = await client.models.lookupPreview({
-              ref: { source: "query", table: qt.name, valueCol: qt.columns[0]!, labelCol: qt.columns[1] },
-              queryTables: [qt], limit: 10,
-            });
-            setState({ options: r.options });
+            const r = await client.models.queryPreview({ target: qt.target, path: qt.path });
+            onColumns(r.columns);
+            setState({ cols: r.columns, rows: r.rows as Cell[][] });
           } catch (e) {
             setState({ error: e instanceof Error ? e.message : String(e) });
           }
@@ -218,11 +214,16 @@ function QueryTestFetch({ qt }: { qt: ModelDef["queryTables"][number] }) {
         {state.busy ? "Loading…" : "Test fetch"}
       </Button>
       {state.error ? <MessageStrip design="Negative" hideCloseButton>{state.error}</MessageStrip> : null}
-      {state.options ? (
-        state.options.length ? (
-          <List>{state.options.map((o, i) => <ListItemStandard key={i} additionalText={String(o.value)}>{o.label}</ListItemStandard>)}</List>
-        ) : <Text>No rows returned.</Text>
-      ) : null}
+      {state.rows?.length ? (
+        <Table noDataText="No rows returned."
+          headerRow={<TableHeaderRow>{state.cols!.map((c) => <TableHeaderCell key={c}><span>{c}</span></TableHeaderCell>)}</TableHeaderRow>}>
+          {state.rows.map((row, ri) => (
+            <TableRow key={ri} rowKey={`q-${ri}`}>
+              {row.map((cell, ci) => <TableCell key={ci}><Text>{String(cell ?? "")}</Text></TableCell>)}
+            </TableRow>
+          ))}
+        </Table>
+      ) : state.rows ? <Text>No rows returned.</Text> : null}
     </div>
   );
 }

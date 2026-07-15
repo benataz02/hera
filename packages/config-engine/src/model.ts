@@ -23,7 +23,8 @@ export const LookupRefZ = z.discriminatedUnion("source", [
     source: z.literal("query"),
     /** names a ModelDef.queryTables entry — the query itself is defined there */
     table: z.string(),
-    valueCol: z.string(),
+    /** convention: absent = 1st declared column (see refKeyCols) */
+    valueCol: z.string().optional(),
     labelCol: z.string().optional(),
     columns: z.array(z.string()).optional(),
   }),
@@ -122,11 +123,20 @@ export type ResolvedLookups = {
 /** User-entered values only; absent key = open parameter. */
 export type Entries = Record<string, Val>;
 
+/** Effective key/label columns; query refs default by convention: 1st column = key, 2nd = label. */
+export function refKeyCols(ref: LookupRef, all: string[] | undefined): { valueCol: string; labelCol?: string } {
+  if (ref.source === "manual") return { valueCol: "" };
+  if (ref.source === "query")
+    return { valueCol: ref.valueCol || (all?.[0] ?? ""), labelCol: ref.labelCol ?? all?.[1] };
+  return { valueCol: ref.valueCol, labelCol: ref.labelCol };
+}
+
 /** The source columns a ref exposes (display + derived values). */
 export function refColumns(ref: LookupRef, all: string[] | undefined): string[] {
   if (ref.source === "manual") return [];
   if (ref.columns) return ref.columns;
-  return (all ?? []).filter((c) => c !== ref.valueCol);
+  const { valueCol } = refKeyCols(ref, all);
+  return (all ?? []).filter((c) => c !== valueCol);
 }
 
 /** Derived value key for a param's source column, e.g. material_density. */

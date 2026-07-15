@@ -50,7 +50,6 @@ export const uiVariant = pgTable(
     shared: boolean("shared").notNull().default(false), // public/global; admin-managed
     isDefault: boolean("is_default").notNull().default(false), // this user's default for (page, entity)
     isStandard: boolean("is_standard").notNull().default(false), // the preseeded, shared "Standard" row for (page, entity)
-    applyAutomatically: boolean("apply_automatically").notNull().default(true),
     definition: jsonb("definition").$type<VariantDef>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

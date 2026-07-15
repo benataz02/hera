@@ -44,11 +44,12 @@ export function useDraftModel(id: string) {
 
   const saveMut = useMutation(
     orpc.models.save.mutationOptions({
-      onSuccess: () => {
+      onSuccess: (row) => {
         setDirty(false);
         setServerIssues([]);
         qc.invalidateQueries({ queryKey: orpc.models.list.queryOptions().queryKey });
-        qc.invalidateQueries({ queryKey: orpc.models.get.queryOptions({ input: { id } }).queryKey });
+        // save RETURNs the saved row, so seed the cache with it instead of refetching models.get.
+        qc.setQueryData(orpc.models.get.queryOptions({ input: { id } }).queryKey, row);
       },
       onError: (e) => {
         // models.save rejects invalid definitions with BAD_REQUEST + data.issues (span Issues).

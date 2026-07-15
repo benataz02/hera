@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar, Button, BusyIndicator, Dialog, DynamicPage, DynamicPageTitle, Input, Label, MessageStrip,
   Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, TableRowAction, Text, Title,
+  Toolbar, ToolbarButton,
 } from "@ui5/webcomponents-react";
 import type { ModelDef } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
@@ -50,9 +51,9 @@ export function ModelsPage() {
         <DynamicPageTitle
           heading={<Title level="H3">Configurator models</Title>}
           actionsBar={
-            <Bar design="Header" endContent={
-              <Button design="Emphasized" onClick={() => { setNewName(""); setNewOpen(true); }}>New model</Button>
-            } />
+            <Toolbar design="Transparent">
+              <ToolbarButton design="Emphasized" onClick={() => { setNewName(""); setNewOpen(true); }} text="New model"/>
+            </Toolbar>
           }
         />
       }

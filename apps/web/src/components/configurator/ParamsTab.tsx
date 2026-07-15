@@ -4,6 +4,7 @@ import {
   MultiComboBox, MultiComboBoxItem, Option, Select, StepInput, Table, TableCell, TableHeaderCell,
   TableHeaderRow, TableRow, TableRowAction, Text, Title,
 } from "@ui5/webcomponents-react";
+import { refKeyCols } from "@hera/config-engine";
 import type { Issue, LookupRef, ModelDef, Option as EngineOption, Param } from "@hera/config-engine";
 import { client } from "../../orpc.ts";
 import { ExprInput } from "./ExprInput.tsx";
@@ -345,7 +346,7 @@ function DomainEditor({ draft, tables, value, onChange }: {
     else if (k === "range") onChange({ kind: "range", min: 0, max: 100, step: 1 });
     else if (k === "manual") onChange({ kind: "options", ref: { source: "manual", options: [] } });
     else if (k === "table") onChange({ kind: "options", ref: { source: "table", table: tenantNames[0] ?? "", valueCol: "" } });
-    else onChange({ kind: "options", ref: { source: "query", table: queryNames[0] ?? "", valueCol: "" } });
+    else onChange({ kind: "options", ref: { source: "query", table: queryNames[0] ?? "" } });
   };
 
   return (
@@ -382,8 +383,8 @@ function DomainEditor({ draft, tables, value, onChange }: {
   );
 }
 
-// One editor for both named sources: pick the source, the value/label columns, and which
-// extra columns to expose (default: all).
+// One editor for both named sources: pick the source and which extra columns to expose
+// (default: all). Query refs take their key/label columns by convention (refKeyCols).
 function SourceRefEditor({ ref_, names, columnsOf, onChange }: {
   ref_: Extract<LookupRef, { source: "table" | "query" }>;
   names: string[];
@@ -391,36 +392,45 @@ function SourceRefEditor({ ref_, names, columnsOf, onChange }: {
   onChange: (r: LookupRef) => void;
 }) {
   const cols = columnsOf(ref_.table);
-  const displayed = ref_.columns ?? cols.filter((c) => c !== ref_.valueCol);
+  const { valueCol } = refKeyCols(ref_, cols);
+  const extra = cols.filter((c) => c !== valueCol);
+  const displayed = ref_.columns ?? extra;
+  const setTable = (name: string) =>
+    onChange(ref_.source === "query" ? { source: "query", table: name } : { source: "table", table: name, valueCol: "" });
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
       <div style={{ display: "flex", gap: "0.5rem" }}>
-        <Select value={ref_.table} onChange={(e) =>
-          onChange({ ...ref_, table: (e.detail.selectedOption as HTMLElement).dataset.v!, valueCol: "", labelCol: undefined, columns: undefined })}>
+        <Select value={ref_.table} onChange={(e) => setTable((e.detail.selectedOption as HTMLElement).dataset.v!)}>
           {names.length === 0 ? <Option value="" data-v="">— none defined —</Option> : null}
           {names.map((n) => <Option key={n} value={n} data-v={n}>{n}</Option>)}
         </Select>
-        <Select value={ref_.valueCol} onChange={(e) => onChange({ ...ref_, valueCol: (e.detail.selectedOption as HTMLElement).dataset.v! })}>
-          <Option value="" data-v="">value column…</Option>
-          {cols.map((c) => <Option key={c} value={c} data-v={c}>{c}</Option>)}
-        </Select>
-        <Select value={ref_.labelCol ?? ""} onChange={(e) => {
-          const v = (e.detail.selectedOption as HTMLElement).dataset.v!;
-          onChange({ ...ref_, labelCol: v || undefined });
-        }}>
-          <Option value="" data-v="">label column (optional)…</Option>
-          {cols.map((c) => <Option key={c} value={c} data-v={c}>{c}</Option>)}
-        </Select>
+        {ref_.source === "table" ? (
+          <>
+            <Select value={ref_.valueCol} onChange={(e) => onChange({ ...ref_, valueCol: (e.detail.selectedOption as HTMLElement).dataset.v! })}>
+              <Option value="" data-v="">value column…</Option>
+              {cols.map((c) => <Option key={c} value={c} data-v={c}>{c}</Option>)}
+            </Select>
+            <Select value={ref_.labelCol ?? ""} onChange={(e) => {
+              const v = (e.detail.selectedOption as HTMLElement).dataset.v!;
+              onChange({ ...ref_, labelCol: v || undefined });
+            }}>
+              <Option value="" data-v="">label column (optional)…</Option>
+              {cols.map((c) => <Option key={c} value={c} data-v={c}>{c}</Option>)}
+            </Select>
+          </>
+        ) : (
+          <Text style={{ alignSelf: "center" }}>Key = 1st query column{cols[1] ? `, label = 2nd (${cols[0]} / ${cols[1]})` : ""}.</Text>
+        )}
       </div>
       <div>
         <Label>Displayed / derived columns</Label>
         <MultiComboBox
           onSelectionChange={(e) => {
             const sel = e.detail.items.map((i) => (i as HTMLElement).getAttribute("text")!);
-            const all = cols.filter((c) => c !== ref_.valueCol);
-            onChange({ ...ref_, columns: sel.length === all.length ? undefined : sel });
+            onChange({ ...ref_, columns: sel.length === extra.length ? undefined : sel });
           }}>
-          {cols.filter((c) => c !== ref_.valueCol).map((c) => (
+          {extra.map((c) => (
             <MultiComboBoxItem key={c} text={c} selected={displayed.includes(c)} />
           ))}
         </MultiComboBox>
@@ -445,7 +455,7 @@ function ManualOptions({ ref_, onChange }: {
       }),
     });
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+    <>
       {ref_.options.map((o, i) => (
         <div key={i} style={{ display: "flex", gap: "0.5rem" }}>
           <Input placeholder="value" value={String(o.value ?? "")} onInput={(e) => setOpt(i, { value: e.target.value })} />
@@ -456,7 +466,7 @@ function ManualOptions({ ref_, onChange }: {
       ))}
       <Button icon="add" style={{ alignSelf: "start" }}
         onClick={() => onChange({ ...ref_, options: [...ref_.options, { value: "" }] })}>Add option</Button>
-    </div>
+    </>
   );
 }
 

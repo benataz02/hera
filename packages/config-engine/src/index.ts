@@ -1,4 +1,4 @@
-export { ModelDefZ, LookupRefZ, ParamZ, ConstraintZ, BomLineZ, OperationZ, ValZ, EntriesZ, refColumns, derivedKey } from "./model";
+export { ModelDefZ, LookupRefZ, ParamZ, ConstraintZ, BomLineZ, OperationZ, ValZ, EntriesZ, refColumns, refKeyCols, derivedKey } from "./model";
 export type { Constraint, Entries, LookupRef, ModelDef, Option, Param, ResolvedLookups, ResolvedTable, Val } from "./model";
 export { DslError, evaluate, parse } from "./dsl";
 export type { Ast, Scope } from "./dsl";

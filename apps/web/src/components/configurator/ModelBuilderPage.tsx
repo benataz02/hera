@@ -1,20 +1,19 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
-  Button, BusyIndicator, MessageStrip,
+  Bar, Button, BusyIndicator, MessageStrip,
   ObjectPage, ObjectPageSection, ObjectPageTitle, ObjectStatus,
   SplitterElement, SplitterLayout, Title, ToggleButton,
   Toolbar,
 } from "@ui5/webcomponents-react";
-import type { Issue, ModelDef } from "@hera/config-engine";
+import type { Entries, Issue, ModelDef } from "@hera/config-engine";
 import { tabOf, useDraftModel, type TabKey } from "./useDraftModel.ts";
 import { SettingsTab } from "./SettingsTab.tsx";
 import { ParamsTab } from "./ParamsTab.tsx";
 import { RulesTab } from "./RulesTab.tsx";
 import { BomTab, RoutingTab } from "./LinesTabs.tsx";
 import { TablesTab } from "./TablesTab.tsx";
-import { PreviewPane } from "./PreviewPane.tsx";
+import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
 import { usePreviewLookups } from "./usePreviewLookups.ts";
-import "./ModelBuilderPage.css";
 
 // Tab components mount their own editors now; the preview pane test-drives the draft.
 
@@ -25,17 +24,32 @@ const EMPTY_MODEL: ModelDef = {
   bom: [], routing: [], queryTables: [], pricing: { priceExpr: "0", quoteItemCode: "X" }, batchDefaults: [1],
 };
 
+// Slide the preview pane open/closed by animating its flex-basis (see the SplitterLayout below).
+const PANE_ANIM = "flex-basis 0.28s cubic-bezier(0.2, 0, 0, 1)";
+
 export function ModelBuilderPage({ id }: { id: string }) {
   const m = useDraftModel(id);
   const [tab, setTab] = useState<TabKey>("params");
+  
   const [previewOpen, setPreviewOpen] = useState(true);
-  // previewRender lags previewOpen: it stays true through the slide-out so the exit animation plays,
-  // then onAnimationEnd unmounts the pane (and lets the editor reclaim full width).
-  const [previewRender, setPreviewRender] = useState(true);
-  const togglePreview = () =>
-    previewOpen ? setPreviewOpen(false) : (setPreviewRender(true), setPreviewOpen(true));
-  // Shared with PreviewPane by query key (same skeleton) — RulesTab combo-table cells use its domains.
-  const lookups = usePreviewLookups(m.draft ?? EMPTY_MODEL);
+  // Animate flex-basis only during a button toggle, never while dragging the splitter (drag mutates the
+  // size directly, and a transition there would feel laggy). Cleared on the slide's transitionend.
+  const [animating, setAnimating] = useState(false);
+  
+  const togglePreview = () => {
+    setAnimating(true);
+    setPreviewOpen((v) => !v);
+  };
+
+  // The preview test-drives the draft with the real engine. While the draft has errors we keep
+  // rendering the last valid one so a single bad keystroke doesn't blank the form.
+  const [entries, setEntries] = useState<Entries>({});
+  const lastGood = useRef<ModelDef>(EMPTY_MODEL);
+  if (m.draft && m.issues.length === 0) lastGood.current = m.draft;
+  const previewModel = m.draft && m.issues.length === 0 ? m.draft : lastGood.current;
+
+  // Same lookups feed the preview form and RulesTab's combo-table cells.
+  const lookups = usePreviewLookups(previewModel);
   const allIssues: Issue[] = [...m.issues, ...m.serverIssues];
   const count = (t: TabKey) => allIssues.filter((i) => tabOf(i.path) === t).length;
 
@@ -51,10 +65,18 @@ export function ModelBuilderPage({ id }: { id: string }) {
   const secTitle = (label: string, key: TabKey) => (count(key) ? `${label} (${count(key)})` : label);
 
   return (
-    // Signature layout: editor left, live test-drive right. Preview toggles off to give the editor
-    // full width; toggling on slides it back in (SplitterElement can't animate, so we render/unrender).
-    <SplitterLayout style={{ height: "100%", width: "100%" }}>
-      <SplitterElement size={previewRender ? "58%" : "100%"} minSize={480}>
+    // SplitterElement.size maps to flex-basis (grow:0), so we drive width from explicit sizes and keep
+    // BOTH panes mounted — animating flex-basis slides the preview open/closed instead of snapping.
+    // Collapsed = 0% width, no min-size, resizer hidden (preview not resizable) so no stray splitter bar.
+    <SplitterLayout 
+      style={{ height: "100%", width: "100%" }}
+      onTransitionEnd={(e) => { if (e.propertyName === "flex-basis") setAnimating(false); }}
+    >
+      <SplitterElement 
+        size={previewOpen ? "58%" : "100%"} 
+        minSize={480}
+        style={{ transition: animating ? PANE_ANIM : undefined }}
+      >
 
           {m.saveError && m.serverIssues.length === 0 ? (
             <MessageStrip design="Negative" hideCloseButton>{m.saveError.message}</MessageStrip>
@@ -100,19 +122,36 @@ export function ModelBuilderPage({ id }: { id: string }) {
           </ObjectPage>
 
       </SplitterElement>
-      {previewRender ? (
-        <SplitterElement minSize={320}>
-          <div
-            className={previewOpen ? "preview-pane-slide-in" : "preview-pane-slide-out"}
-            // Own animation only (onAnimationEnd bubbles from UI5 children); unmount after slide-out.
-            onAnimationEnd={(e) => {
-              if (e.target === e.currentTarget && !previewOpen) setPreviewRender(false);
-            }}
-          >
-            <PreviewPane draft={draft} issues={m.issues} />
-          </div>
-        </SplitterElement>
-      ) : null}
+      <SplitterElement 
+        size={previewOpen ? "42%" : "0%"} 
+        minSize={previewOpen ? 320 : 0}
+        resizable={previewOpen}
+        style={{ transition: animating ? PANE_ANIM : undefined }}
+      >
+        <div style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", minHeight: 0, opacity: previewOpen ? 1 : 0, transition: "opacity 0.28s ease" }}>
+          {m.issues.length > 0 ? (
+            <MessageStrip design="Critical" hideCloseButton>
+              Showing the last valid version — fix {m.issues.length} error{m.issues.length === 1 ? "" : "s"} to preview the current draft.
+            </MessageStrip>
+          ) : null}
+          {lookups.isPending ? (
+            <BusyIndicator active delay={200} style={{ width: "100%", marginTop: "3rem" }} />
+          ) : lookups.error || !lookups.data ? (
+            <div style={{ padding: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+              <MessageStrip design="Negative" hideCloseButton>{lookups.error?.message ?? "No lookups"}</MessageStrip>
+              <Button style={{ alignSelf: "start" }} onClick={() => lookups.refetch()}>Retry</Button>
+            </div>
+          ) : (
+            <>
+              <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 1rem 1rem" }}>
+                <ConfiguratorForm model={previewModel} lookups={lookups.data} entries={entries} onChange={setEntries} />
+              </div>
+              <Bar design="Footer"
+                startContent={<ConsistencyStatus model={previewModel} lookups={lookups.data} entries={entries} />} />
+            </>
+          )}
+        </div>
+      </SplitterElement>
     </SplitterLayout>
   );
 }

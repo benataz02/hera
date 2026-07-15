@@ -113,8 +113,8 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
   useEffect(() => {
     if (!schema || variantsLoading || initedFor.current === entity) return;
     initedFor.current = entity;
-    const personal = variants.find((v) => v.isDefault && !v.shared && truthy(v.applyAutomatically));
-    const def = personal ?? variants.find((v) => v.isDefault && truthy(v.applyAutomatically));
+    const personal = variants.find((v) => v.isDefault && !v.shared);
+    const def = personal ?? variants.find((v) => v.isDefault);
     setSelectedName(def?.name ?? "");
     setLayout(def ? (def.definition as ObjectVariantDef) : null);
   }, [schema, variantsLoading, entity, variants]);
@@ -188,18 +188,19 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
     <VariantManagement
       dirtyState={layoutDirty}
       hideShare={!isAdmin}
+      hideApplyAutomatically
       onSelect={(e) => applyVariant(String(e.detail.selectedVariant.children))}
       onSaveAs={(e) => {
         const d = e.detail;
         const name = String(d.children);
         saveVariant.mutate(
-          { page: "object", entity, name, definition: layout, shared: truthy(d.global), isDefault: truthy(d.isDefault), applyAutomatically: truthy(d.applyAutomatically) },
+          { page: "object", entity, name, definition: layout, shared: truthy(d.global), isDefault: truthy(d.isDefault) },
           { onSuccess: () => setSelectedName(name) },
         );
       }}
       onSave={() => {
         const row = variants.find((v) => v.name === selectedName);
-        if (row) saveVariant.mutate({ id: row.id, page: "object", entity, name: row.name, definition: layout, shared: row.shared, isDefault: row.isDefault, applyAutomatically: truthy(row.applyAutomatically) });
+        if (row) saveVariant.mutate({ id: row.id, page: "object", entity, name: row.name, definition: layout, shared: row.shared, isDefault: row.isDefault });
       }}
       onSaveManageViews={(e) => {
         for (const del of e.detail.deletedVariants) {
@@ -209,12 +210,12 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
         for (const up of e.detail.updatedVariants) {
           const prevName = up.prevVariant?.children ? String(up.prevVariant.children) : String(up.children);
           const r = variants.find((v) => v.name === prevName);
-          if (r && !r.isStandard) saveVariant.mutate({ id: r.id, page: "object", entity, name: String(up.children), definition: r.definition as ObjectVariantDef, shared: truthy(up.global), isDefault: truthy(up.isDefault), applyAutomatically: truthy(up.applyAutomatically) });
+          if (r && !r.isStandard) saveVariant.mutate({ id: r.id, page: "object", entity, name: String(up.children), definition: r.definition as ObjectVariantDef, shared: truthy(up.global), isDefault: truthy(up.isDefault) });
         }
       }}
     >
       {variants.map((v) => (
-        <VariantItem key={v.id} selected={selectedName === v.name} isDefault={v.isDefault} global={v.shared} author={v.author} applyAutomatically={truthy(v.applyAutomatically)} readOnly={!v.canManage || v.isStandard} hideDelete={!v.canManage || v.isStandard}>
+        <VariantItem key={v.id} selected={selectedName === v.name} isDefault={v.isDefault} global={v.shared} author={v.author} readOnly={!v.canManage || v.isStandard} hideDelete={!v.canManage || v.isStandard}>
           {v.name}
         </VariantItem>
       ))}

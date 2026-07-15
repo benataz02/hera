@@ -5,7 +5,7 @@ import { db, configModel, configProject, configTable } from "@hera/db";
 import { checkModel, LookupRefZ, ModelDefZ, ValZ } from "@hera/config-engine";
 import { adminProcedure } from "../base.ts";
 import { assertAgentReady, runRequest } from "./entities.ts";
-import { addQueryTables, optionsFromRef, resolveLookups, tablesFromTenant, type QueryFetcher, type TenantTable } from "../../lookups.ts";
+import { addQueryTables, fetchQueryTable, optionsFromRef, resolveLookups, tablesFromTenant, type QueryFetcher, type TenantTable } from "../../lookups.ts";
 
 // Admin-only configurator model builder API. save is the gate: a model that passes
 // ModelDefZ + checkModel here can never produce a parse/unknown-ref error at runtime.
@@ -65,20 +65,22 @@ export const modelsRouter = {
         ...(input.portal !== undefined ? { portal: input.portal } : {}),
         ...(input.portalDescription !== undefined ? { portalDescription: input.portalDescription } : {}),
       };
+      // RETURNING the whole row (not just the id) so the client can seed its models.get cache
+      // from the save response instead of refetching.
       if (input.id) {
-        const updated = await db
+        const [updated] = await db
           .update(configModel)
           .set(fields)
           .where(and(eq(configModel.id, input.id), eq(configModel.tenantId, context.tenantId)))
-          .returning({ id: configModel.id });
-        if (!updated.length) throw new ORPCError("NOT_FOUND");
-        return { id: input.id };
+          .returning();
+        if (!updated) throw new ORPCError("NOT_FOUND");
+        return updated;
       }
       const [ins] = await db
         .insert(configModel)
         .values({ tenantId: context.tenantId, ...fields })
-        .returning({ id: configModel.id });
-      return { id: ins!.id };
+        .returning();
+      return ins!;
     }),
 
   remove: adminProcedure.input(z.object({ id: z.uuid() })).handler(async ({ input, context }) => {
@@ -155,6 +157,19 @@ export const modelsRouter = {
       await addQueryTables(tables, input.queryTables ?? [], agentFetcher(context.tenantId));
       const options = optionsFromRef(input.ref, tables);
       return { options: options.slice(0, input.limit) };
+    }),
+
+  // Query editor "Test fetch": run the GET and report the response field names — a queryTable's
+  // columns are whatever the response returns, never hand-typed.
+  queryPreview: adminProcedure
+    .input(z.object({
+      target: z.enum(["b1", "beas"]),
+      path: z.string().min(1),
+      limit: z.number().int().min(1).max(50).default(10),
+    }))
+    .handler(async ({ input, context }) => {
+      const t = await fetchQueryTable(agentFetcher(context.tenantId), input.target, input.path);
+      return { columns: t.columns, rows: t.rows.slice(0, input.limit) };
     }),
 
   // Live preview for the (possibly unsaved) builder draft: same resolver as configs.lookups/run,

@@ -1,5 +1,5 @@
 import { type Ast, DslError, parse } from "./dsl";
-import { derivedKey, type ModelDef, refColumns } from "./model";
+import { derivedKey, type ModelDef, refColumns, refKeyCols } from "./model";
 
 export type Issue = { path: string; message: string; from?: number; to?: number };
 
@@ -61,7 +61,9 @@ export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Iss
       issues.push({ path: `parameters[${i}].domain`, message: `unknown table '${ref.table}'` });
       return;
     }
-    for (const c of [ref.valueCol, ...(ref.labelCol ? [ref.labelCol] : []), ...(ref.columns ?? [])]) {
+    const { valueCol, labelCol } = refKeyCols(ref, cols);
+    if (!valueCol) issues.push({ path: `parameters[${i}].domain`, message: `table '${ref.table}' declares no columns` });
+    for (const c of [...(valueCol ? [valueCol] : []), ...(labelCol ? [labelCol] : []), ...(ref.columns ?? [])]) {
       if (!cols.includes(c)) issues.push({ path: `parameters[${i}].domain`, message: `table '${ref.table}' has no column '${c}'` });
     }
     for (const col of refColumns(ref, cols)) {

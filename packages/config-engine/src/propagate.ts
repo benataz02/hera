@@ -1,6 +1,6 @@
 import { evaluate, parse } from "./dsl";
 import type { Entries, ModelDef, Option, ResolvedLookups, Val } from "./model";
-import { derivedKey, refColumns } from "./model";
+import { derivedKey, refColumns, refKeyCols } from "./model";
 
 export type Bindings = {
   values: Record<string, Val>;
@@ -58,7 +58,7 @@ export function bindings(model: ModelDef, lookups: ResolvedLookups, entries: Ent
       if (!ref || ref.source === "manual" || !(p.key in values)) continue;
       const t = lookups.tables[ref.table];
       if (!t) continue;
-      const vi = t.columns.indexOf(ref.valueCol);
+      const vi = t.columns.indexOf(refKeyCols(ref, t.columns).valueCol);
       const row = vi < 0 ? undefined : t.rows.find((r) => r[vi] === values[p.key]);
       if (!row) continue; // unset/stale value: derived keys stay absent (undecidable, like unbound)
       for (const col of refColumns(ref, t.columns)) {

@@ -46,8 +46,8 @@ export function EntityListPage({ entity }: { entity: string }) {
   useEffect(() => {
     if (!schema || variantsLoading || initedFor.current === entity) return;
     initedFor.current = entity;
-    const personal = variants.find((v) => v.isDefault && !v.shared && truthy(v.applyAutomatically));
-    const def = personal ?? variants.find((v) => v.isDefault && truthy(v.applyAutomatically));
+    const personal = variants.find((v) => v.isDefault && !v.shared);
+    const def = personal ?? variants.find((v) => v.isDefault);
     setSelectedName(def?.name ?? "");
     setLiveSpec(def ? (def.definition as ListVariantDef) : null);
   }, [schema, variantsLoading, entity, variants]);
@@ -161,18 +161,19 @@ export function EntityListPage({ entity }: { entity: string }) {
     <VariantManagement
       dirtyState={dirty}
       hideShare={!isAdmin}
+      hideApplyAutomatically
       onSelect={(e) => applyVariant(String(e.detail.selectedVariant.children))}
       onSaveAs={(e) => {
         const d = e.detail;
         const name = String(d.children);
         save.mutate(
-          { page: "list", entity, name, definition: liveSpec, shared: truthy(d.global), isDefault: truthy(d.isDefault), applyAutomatically: truthy(d.applyAutomatically) },
+          { page: "list", entity, name, definition: liveSpec, shared: truthy(d.global), isDefault: truthy(d.isDefault) },
           { onSuccess: () => setSelectedName(name) },
         );
       }}
       onSave={() => {
         const row = variants.find((v) => v.name === selectedName);
-        if (row) save.mutate({ id: row.id, page: "list", entity, name: row.name, definition: liveSpec, shared: row.shared, isDefault: row.isDefault, applyAutomatically: truthy(row.applyAutomatically) });
+        if (row) save.mutate({ id: row.id, page: "list", entity, name: row.name, definition: liveSpec, shared: row.shared, isDefault: row.isDefault });
       }}
       onSaveManageViews={(e) => {
         for (const del of e.detail.deletedVariants) {
@@ -183,7 +184,7 @@ export function EntityListPage({ entity }: { entity: string }) {
           const prevName = up.prevVariant?.children ? String(up.prevVariant.children) : String(up.children);
           const r = variants.find((v) => v.name === prevName);
           // Belt-and-suspenders: readOnly already blocks this in the dialog, but never rename Standard.
-          if (r && !r.isStandard) save.mutate({ id: r.id, page: "list", entity, name: String(up.children), definition: r.definition as ListVariantDef, shared: truthy(up.global), isDefault: truthy(up.isDefault), applyAutomatically: truthy(up.applyAutomatically) });
+          if (r && !r.isStandard) save.mutate({ id: r.id, page: "list", entity, name: String(up.children), definition: r.definition as ListVariantDef, shared: truthy(up.global), isDefault: truthy(up.isDefault) });
         }
       }}
     >
@@ -194,7 +195,6 @@ export function EntityListPage({ entity }: { entity: string }) {
           isDefault={v.isDefault}
           global={v.shared}
           author={v.author}
-          applyAutomatically={truthy(v.applyAutomatically)}
           readOnly={!v.canManage || v.isStandard}
           hideDelete={!v.canManage || v.isStandard}
         >

@@ -57,6 +57,24 @@ describe("optionsFromRef", () => {
     expect(opts).toEqual([{ value: "A1", label: "Widget" }]);
   });
 
+  it("query without pinned columns: fields come from the response, key/label by convention", async () => {
+    const tables: Record<string, ResolvedTable> = {};
+    await addQueryTables(tables, [{ name: "items", target: "b1", path: "/Items", columns: [] }], async () => ({
+      value: [
+        { "@odata.etag": "W/1", ItemCode: "A1", ItemName: "Widget" }, // non-identifier keys dropped
+        { ItemCode: "B2", ItemName: "Gadget", OnHand: 3 }, // late field still discovered
+      ],
+    }));
+    expect(tables.items).toEqual({
+      columns: ["ItemCode", "ItemName", "OnHand"],
+      rows: [["A1", "Widget", null], ["B2", "Gadget", 3]],
+    });
+    expect(optionsFromRef({ source: "query", table: "items" }, tables)).toEqual([
+      { value: "A1", label: "Widget" },
+      { value: "B2", label: "Gadget" },
+    ]);
+  });
+
   it("throws on a non-array query payload", async () => {
     await expect(
       addQueryTables({}, [{ name: "bad", target: "beas", path: "/bad", columns: ["x"] }], async () => ({ oops: 1 })),
