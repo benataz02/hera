@@ -2,15 +2,17 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar, Button, BusyIndicator, Dialog, Form, FormGroup, FormItem, Label, MessageStrip,
-  ObjectStatus, Text, TextArea, Title, Wizard, WizardStep,
+  ObjectStatus, SplitterElement, SplitterLayout, Text, TextArea, Title, ToggleButton, Wizard, WizardStep,
 } from "@ui5/webcomponents-react";
 import { propagate, type Entries } from "@hera/config-engine";
+import type { Val } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
 import { cleanOverrides, statusUi, toggleSelection, type Sel } from "./runView.ts";
 import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
 import { ExtractPanel } from "./ExtractPanel.tsx";
 import { BatchEditor } from "./BatchEditor.tsx";
 import { StepCandidatesReview } from "./StepCandidatesReview.tsx";
+import { HistoryPane } from "./HistoryPane.tsx";
 import "./ConfigProcessPage.css";
 
 // The configuration process: 3 steps, gated left to right. Step 1 (Configure) works on live
@@ -35,6 +37,9 @@ export function ConfigProcessPage({ id }: { id: string }) {
   const [runMeta, setRunMeta] = useState<{ capped: boolean; widest?: { key: string; size: number } } | null>(null);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [note, setNote] = useState("");
+  // Slide the help pane like the builder preview: open by default only when the model asks for it.
+  const [paneOverride, setPaneOverride] = useState<boolean | null>(null);
+  const [animating, setAnimating] = useState(false);
 
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: orpc.configs.get.queryOptions({ input: { id } }).queryKey });
@@ -64,6 +69,17 @@ export function ConfigProcessPage({ id }: { id: string }) {
   const selection = selOverride ?? latestRun?.selection ?? [];
   const runReady = !!latestRun && project.status !== "draft";
   const step = stepOverride ?? (project.status === "draft" ? 0 : 1);
+
+  const paneOpen = paneOverride ?? !!model.definition.history;
+  const PANE_ANIM = "flex-basis 0.28s cubic-bezier(0.2, 0, 0, 1)";
+  const copyValues = (values: Record<string, Val>) => {
+    const next = { ...entries };
+    for (const [k, v] of Object.entries(values)) {
+      const cur = next[k];
+      if ((cur === undefined || cur === null || cur === "") && v !== null && v !== undefined) next[k] = v;
+    }
+    setEntries(next); // fills only empty params; ConfiguratorForm's propagate() takes it from here
+  };
 
   // ConsistencyStatus renders the message; prop here only gates Calculate/navigation.
   const prop = lookups.data ? propagate(model.definition, lookups.data, entries) : null;
@@ -133,6 +149,10 @@ export function ConfigProcessPage({ id }: { id: string }) {
   );
 
   return (
+    <SplitterLayout style={{ height: "100%", width: "100%" }}
+      onTransitionEnd={(e) => { if (e.propertyName === "flex-basis") setAnimating(false); }}>
+    <SplitterElement size={paneOpen ? "62%" : "100%"} minSize={480}
+      style={{ transition: animating ? PANE_ANIM : undefined }}>
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       {project.status === "requested" ? (
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", margin: "0.5rem 1rem" }}>
@@ -148,6 +168,10 @@ export function ConfigProcessPage({ id }: { id: string }) {
           <Title level="H5">{project.name}</Title>
           <Text>{model.name}</Text>
           <ObjectStatus state={statusUi[project.status].state}>{statusUi[project.status].text}</ObjectStatus>
+          <ToggleButton icon="history" pressed={paneOpen} style={{ marginLeft: "auto" }}
+            onClick={() => { setAnimating(true); setPaneOverride(!paneOpen); }}>
+            History
+          </ToggleButton>
         </div>
         <Wizard className="hera-wizard" contentLayout="SingleStep"
           onStepChange={(e) => goto(Number((e.detail.step as HTMLElement).dataset.idx))}>
@@ -193,5 +217,14 @@ export function ConfigProcessPage({ id }: { id: string }) {
         </div>
       </Dialog>
     </div>
+    </SplitterElement>
+    <SplitterElement size={paneOpen ? "38%" : "0%"} minSize={paneOpen ? 320 : 0} resizable={paneOpen}
+      style={{ transition: animating ? PANE_ANIM : undefined }}>
+      <div style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", minHeight: 0,
+        overflowY: "auto", padding: "0 0.5rem", opacity: paneOpen ? 1 : 0, transition: "opacity 0.28s ease" }}>
+        <HistoryPane projectId={id} model={model.definition} entries={entries} onCopy={copyValues} />
+      </div>
+    </SplitterElement>
+    </SplitterLayout>
   );
 }
