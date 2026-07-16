@@ -88,6 +88,14 @@ export const OperationZ = z.object({
   ratePerHour: z.string(), // expr, cost per hour
 });
 
+export const HistoryMappingZ = z.object({
+  param: KeyZ,
+  column: z.string().min(1),
+  match: z.enum(["exact", "closeness", "contains"]),
+  weight: z.number().positive().default(1),
+});
+export type HistoryMapping = z.infer<typeof HistoryMappingZ>;
+
 export const ModelDefZ = z.object({
   name: z.string(),
   parameters: z.array(ParamZ),
@@ -107,6 +115,16 @@ export const ModelDefZ = z.object({
   queryTables: z.array(
     z.object({ name: z.string(), target: z.enum(["b1", "beas"]), path: z.string(), columns: z.array(z.string()) }),
   ),
+  history: z
+    .object({
+      itemCodeParam: KeyZ.optional(),
+      query: z
+        .object({ target: z.enum(["b1", "beas"]), path: z.string(), columns: z.array(z.string()) })
+        .optional(),
+      mappings: z.array(HistoryMappingZ),
+      display: z.array(z.string()),
+    })
+    .optional(),
   pricing: z.object({ priceExpr: z.string(), quoteItemCode: z.string().min(1) }),
   batchDefaults: z.array(z.number().int().positive()),
   extraction: z.object({ context: z.string().optional() }).optional(),

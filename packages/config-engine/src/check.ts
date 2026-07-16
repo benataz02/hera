@@ -197,5 +197,28 @@ export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Iss
   model.bom.forEach((l, i) => checkLookups(l.price, `bom[${i}].price`));
   model.routing.forEach((o, i) => checkLookups(o.ratePerHour, `routing[${i}].ratePerHour`));
 
+  // history: mapped params exist, closeness only on numbers, columns ⊆ query.columns
+  if (model.history) {
+    const h = model.history;
+    const paramOf = (k: string) => model.parameters.find((p) => p.key === k);
+    if (h.itemCodeParam && !paramOf(h.itemCodeParam))
+      issues.push({ path: "history.itemCodeParam", message: `unknown parameter '${h.itemCodeParam}'` });
+    if (h.mappings.length && !h.query)
+      issues.push({ path: "history.query", message: "similarity mappings need a history query" });
+    const qCols = h.query?.columns ?? [];
+    h.mappings.forEach((m, i) => {
+      const p = paramOf(m.param);
+      if (!p) issues.push({ path: `history.mappings[${i}]`, message: `unknown parameter '${m.param}'` });
+      else if (m.match === "closeness" && p.type !== "number")
+        issues.push({ path: `history.mappings[${i}]`, message: `closeness needs a number parameter ('${m.param}' is ${p.type})` });
+      if (qCols.length && !qCols.includes(m.column))
+        issues.push({ path: `history.mappings[${i}]`, message: `query has no column '${m.column}'` });
+    });
+    h.display.forEach((c, i) => {
+      if (qCols.length && !qCols.includes(c))
+        issues.push({ path: `history.display[${i}]`, message: `query has no column '${c}'` });
+    });
+  }
+
   return issues;
 }

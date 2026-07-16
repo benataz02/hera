@@ -78,6 +78,46 @@ describe("checkModel", () => {
     bad.computed[0]!.expr = "NOPE(1)";
     expect(checkModel(bad, PRICES).some((i) => i.message.includes("NOPE"))).toBe(true);
   });
+
+  test("history: valid config is clean", () => {
+    const m = structuredClone(model);
+    m.history = {
+      itemCodeParam: "material",
+      query: { target: "b1", path: "/x", columns: ["mat", "sec", "price"] },
+      mappings: [
+        { param: "material", column: "mat", match: "exact", weight: 2 },
+        { param: "section", column: "sec", match: "closeness", weight: 1 },
+      ],
+      display: ["price"],
+    };
+    expect(checkModel(m, PRICES)).toEqual([]);
+  });
+
+  test("history: unknown param, closeness on non-number, unknown columns", () => {
+    const m = structuredClone(model);
+    m.history = {
+      itemCodeParam: "nope",
+      query: { target: "b1", path: "/x", columns: ["mat"] },
+      mappings: [
+        { param: "ghost", column: "mat", match: "exact", weight: 1 },
+        { param: "material", column: "mat", match: "closeness", weight: 1 },
+        { param: "section", column: "missing", match: "exact", weight: 1 },
+      ],
+      display: ["also_missing"],
+    };
+    const issues = checkModel(m, PRICES);
+    expect(issues.some((i) => i.path === "history.itemCodeParam")).toBe(true);
+    expect(issues.some((i) => i.path === "history.mappings[0]" && i.message.includes("ghost"))).toBe(true);
+    expect(issues.some((i) => i.path === "history.mappings[1]" && i.message.includes("closeness"))).toBe(true);
+    expect(issues.some((i) => i.path === "history.mappings[2]" && i.message.includes("missing"))).toBe(true);
+    expect(issues.some((i) => i.path === "history.display[0]")).toBe(true);
+  });
+
+  test("history: mappings without a query flagged", () => {
+    const m = structuredClone(model);
+    m.history = { mappings: [{ param: "material", column: "mat", match: "exact", weight: 1 }], display: [] };
+    expect(checkModel(m, PRICES).some((i) => i.path === "history.query")).toBe(true);
+  });
 });
 
 describe("lookup ref validation", () => {
