@@ -222,7 +222,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
       style={{ transition: animating ? PANE_ANIM : undefined }}>
       <div style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", minHeight: 0,
         overflowY: "auto", padding: "0 0.5rem", opacity: paneOpen ? 1 : 0, transition: "opacity 0.28s ease" }}>
-        <HistoryPane projectId={id} model={model.definition} entries={entries} onCopy={copyValues} />
+        <HistoryPane projectId={id} model={model.definition} entries={entries} onCopy={copyValues} paneOpen={paneOpen} />
       </div>
     </SplitterElement>
     </SplitterLayout>

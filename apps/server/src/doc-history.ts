@@ -23,7 +23,7 @@ export function docHistoryPath(
   if (opts.itemCode) clauses.push(`DocumentLines/any(d: d/ItemCode eq '${esc(opts.itemCode)}')`);
   if (!clauses.length) throw new Error("docHistoryPath needs an itemCode or a cardCode");
   return (
-    `/${entity}?$select=DocEntry,DocNum,DocDate,CardCode,CardName` +
+    `/${entity}?$select=DocNum,DocDate,CardCode,CardName` +
     `&$expand=DocumentLines($select=ItemCode,ItemDescription,Quantity,UnitPrice)` +
     `&$filter=${encodeURIComponent(clauses.join(" or "))}` +
     `&$orderby=${encodeURIComponent("DocDate desc")}&$top=${opts.top ?? 10}`

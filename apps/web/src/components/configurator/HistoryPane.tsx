@@ -8,11 +8,12 @@ import type { Entries, ModelDef, Val } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
 
 // The process page's right-hand help pane: live B1 doc history + similar past configurations.
-export function HistoryPane({ projectId, model, entries, onCopy }: {
+export function HistoryPane({ projectId, model, entries, onCopy, paneOpen }: {
   projectId: string;
   model: ModelDef;
   entries: Entries;
   onCopy: (values: Record<string, Val>) => void;
+  paneOpen: boolean;
 }) {
   const h = model.history;
   const rawItem = h?.itemCodeParam ? entries[h.itemCodeParam] : undefined;
@@ -20,7 +21,7 @@ export function HistoryPane({ projectId, model, entries, onCopy }: {
   return (
     <TabContainer style={{ height: "100%" }}>
       <Tab text="Customer & item history" icon="history" selected>
-        <DocHistory projectId={projectId} itemCode={itemCode} />
+        <DocHistory projectId={projectId} itemCode={itemCode} paneOpen={paneOpen} />
       </Tab>
       <Tab text="Similar configurations" icon="detail-view">
         <Similar projectId={projectId} model={model} entries={entries} onCopy={onCopy} />
@@ -35,9 +36,11 @@ const matchTag = {
   customer: { design: "Neutral", text: "customer" },
 } as const;
 
-function DocHistory({ projectId, itemCode }: { projectId: string; itemCode?: string }) {
+function DocHistory({ projectId, itemCode, paneOpen }: { projectId: string; itemCode?: string; paneOpen: boolean }) {
   const q = useQuery({
     ...orpc.configs.docHistory.queryOptions({ input: { id: projectId, itemCode } }),
+    enabled: paneOpen, // pane is always mounted (for the slide animation) but hidden when closed —
+    // don't fire live B1 agent traffic for a pane nobody is looking at.
     staleTime: 5 * 60_000,
     retry: false, // agent-offline should show its message, not spin
   });
@@ -108,7 +111,7 @@ function Similar({ projectId, model, entries, onCopy }: {
   const debounced = useDebounced(entries, 500);
   const anyFilled = !!h?.mappings.some((m) => {
     const v = debounced[m.param];
-    return v !== undefined && v !== null && v !== "";
+    return v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && v.length === 0);
   });
   const q = useQuery({
     ...orpc.configs.similar.queryOptions({ input: { id: projectId, entries: debounced } }),
