@@ -12,6 +12,7 @@ import { ParamsTab } from "./ParamsTab.tsx";
 import { RulesTab } from "./RulesTab.tsx";
 import { BomTab, RoutingTab } from "./LinesTabs.tsx";
 import { TablesTab } from "./TablesTab.tsx";
+import { HistoryTab } from "./HistoryTab.tsx";
 import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
 import { usePreviewLookups } from "./usePreviewLookups.ts";
 
@@ -115,6 +116,9 @@ export function ModelBuilderPage({ id }: { id: string }) {
               <RoutingTab draft={draft} update={m.update} issues={allIssues} />
             </ObjectPageSection>
             <ObjectPageSection id="tables" titleText="Tables"><TablesTab draft={draft} update={m.update} /></ObjectPageSection>
+            <ObjectPageSection id="history" titleText={secTitle("History", "history")}>
+              <HistoryTab draft={draft} update={m.update} issues={allIssues} modelId={id} dirty={m.dirty} />
+            </ObjectPageSection>
             <ObjectPageSection id="settings" titleText={secTitle("Settings", "settings")}>
               <SettingsTab draft={draft} update={m.update} issues={allIssues}
                 portalMeta={portalMeta} setPortalMeta={m.setPortalMeta} />

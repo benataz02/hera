@@ -193,7 +193,7 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
 }
 
 // Test fetch *is* the column definition: the response's field names become the query's columns.
-function QueryTestFetch({ qt, onColumns }: {
+export function QueryTestFetch({ qt, onColumns }: {
   qt: ModelDef["queryTables"][number];
   onColumns: (columns: string[]) => void;
 }) {

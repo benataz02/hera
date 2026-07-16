@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { checkModel, type Issue, type ModelDef } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
 
-export type TabKey = "params" | "rules" | "bom" | "routing" | "tables" | "settings";
+export type TabKey = "params" | "rules" | "bom" | "routing" | "tables" | "history" | "settings";
 
 export const issueFor = (issues: Issue[], path: string) => issues.find((i) => i.path === path);
 
@@ -13,6 +13,7 @@ export function tabOf(path: string): TabKey {
   if (path.startsWith("constraints")) return "rules";
   if (path.startsWith("bom")) return "bom";
   if (path.startsWith("routing")) return "routing";
+  if (path.startsWith("history")) return "history";
   return "settings"; // pricing.*
 }
 
