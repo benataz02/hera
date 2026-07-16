@@ -1,11 +1,12 @@
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
-import { db, configModel, configProject, configTable } from "@hera/db";
+import { and, count, eq, max } from "drizzle-orm";
+import { db, configHistory, configModel, configProject, configTable } from "@hera/db";
 import { checkModel, LookupRefZ, ModelDefZ, ValZ } from "@hera/config-engine";
 import { adminProcedure } from "../base.ts";
 import { assertAgentReady, runRequest } from "./entities.ts";
 import { addQueryTables, fetchQueryTable, optionsFromRef, resolveLookups, tablesFromTenant, type QueryFetcher, type TenantTable } from "../../lookups.ts";
+import { syncModelHistory } from "../../history-sync.ts";
 
 // Admin-only configurator model builder API. save is the gate: a model that passes
 // ModelDefZ + checkModel here can never produce a parse/unknown-ref error at runtime.
@@ -171,6 +172,28 @@ export const modelsRouter = {
       const t = await fetchQueryTable(agentFetcher(context.tenantId), input.target, input.path);
       return { columns: t.columns, rows: t.rows.slice(0, input.limit) };
     }),
+
+  // "Sync now": run the model's history query through the agent and wholesale-replace config_history.
+  syncHistory: adminProcedure.input(z.object({ id: z.uuid() })).handler(async ({ input, context }) => {
+    const [m] = await db
+      .select({ id: configModel.id, definition: configModel.definition })
+      .from(configModel)
+      .where(and(eq(configModel.id, input.id), eq(configModel.tenantId, context.tenantId)))
+      .limit(1);
+    if (!m) throw new ORPCError("NOT_FOUND");
+    if (!m.definition.history?.query?.path)
+      throw new ORPCError("BAD_REQUEST", { message: "Save a history query first" });
+    await assertAgentReady(context.tenantId);
+    return syncModelHistory(context.tenantId, m.id, m.definition, agentFetcher(context.tenantId));
+  }),
+
+  historyInfo: adminProcedure.input(z.object({ id: z.uuid() })).handler(async ({ input, context }) => {
+    const [r] = await db
+      .select({ count: count(), lastSyncedAt: max(configHistory.syncedAt) })
+      .from(configHistory)
+      .where(and(eq(configHistory.tenantId, context.tenantId), eq(configHistory.modelId, input.id)));
+    return { count: r?.count ?? 0, lastSyncedAt: r?.lastSyncedAt ?? null };
+  }),
 
   // Live preview for the (possibly unsaved) builder draft: same resolver as configs.lookups/run,
   // keyed by the posted definition instead of a saved model id. Client sends a stripped-down

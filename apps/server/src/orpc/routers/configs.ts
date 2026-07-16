@@ -4,13 +4,15 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db, configModel, configProject, configRun, user, type ProjectEvent, type RunCandidate, type RunSelection } from "@hera/db";
 import {
   computeOutputs, DslError, enumerate, EntriesZ, OutputOverridesZ, propagate,
-  type ModelDef, type Outputs, type ResolvedLookups,
+  type ModelDef, type Outputs, type ResolvedLookups, type Val,
 } from "@hera/config-engine";
 import { userProcedure } from "../base.ts";
 import { assertAgentReady, runRequest } from "./entities.ts";
 import { agentFetcher, tenantTables } from "./models.ts";
 import { resolveLookups, type QueryFetcher } from "../../lookups.ts";
 import { docHistoryPath, flattenDocs, sortDocRows } from "../../doc-history.ts";
+import { loadHistoryRows } from "../../history-sync.ts";
+import { scoreRows } from "../../similarity.ts";
 
 // The configuration process API: any member drives a project (draft -> calculated via run).
 // Trust model: browser propagates for preview; THESE handlers compute the numbers that get
@@ -252,6 +254,37 @@ export const configsRouter = {
           ...flattenDocs("order", orders, { itemCode, cardCode }),
           ...flattenDocs("quotation", quotations, { itemCode, cardCode }),
         ]),
+      };
+    }),
+
+  // Similarity help: rank cached historic rows against the live (unsaved) entries. `values` are
+  // the row's mapped param values, coerced to each param's type — what the Copy button applies.
+  similar: userProcedure
+    .input(z.object({ id: z.uuid(), entries: EntriesZ }))
+    .handler(async ({ input, context }) => {
+      const [project] = await db
+        .select({ modelId: configProject.modelId })
+        .from(configProject)
+        .where(and(eq(configProject.id, input.id), eq(configProject.tenantId, context.tenantId)))
+        .limit(1);
+      if (!project) throw new ORPCError("NOT_FOUND");
+      const model = await loadModel(context.tenantId, project.modelId);
+      const h = model.definition.history;
+      if (!h?.mappings.length) return { results: [] };
+      const rows = await loadHistoryRows(context.tenantId, model.id);
+      const typeOf = new Map(model.definition.parameters.map((p) => [p.key, p.type]));
+      const coerce = (param: string, v: Val): Val =>
+        v === null ? null
+        : typeOf.get(param) === "number" ? (Number.isFinite(Number(v)) ? Number(v) : null)
+        : typeOf.get(param) === "boolean" ? (typeof v === "boolean" ? v : String(v).toLowerCase() === "true")
+        : String(v);
+      return {
+        results: scoreRows(h, input.entries, rows).map((s) => ({
+          score: s.score,
+          matches: s.matches,
+          display: Object.fromEntries(h.display.map((c) => [c, s.row[c] ?? null])),
+          values: Object.fromEntries(h.mappings.map((m) => [m.param, coerce(m.param, s.row[m.column] ?? null)])),
+        })),
       };
     }),
 

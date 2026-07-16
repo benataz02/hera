@@ -3,9 +3,12 @@ import { serveStatic } from "hono/bun";
 import { RPCHandler } from "@orpc/server/fetch";
 import { auth } from "./auth.ts";
 import { router } from "./orpc/router.ts";
+import { startHistorySync } from "./history-sync.ts";
 
 const app = new Hono();
 const rpc = new RPCHandler(router);
+
+startHistorySync();
 
 // Layer 1 identity — Better Auth owns /api/auth/*.
 app.all("/api/auth/*", (c) => auth.handler(c.req.raw));
