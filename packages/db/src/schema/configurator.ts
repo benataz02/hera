@@ -92,3 +92,18 @@ export const configRun = pgTable(
   },
   (t) => [index("config_run_tenant_project_idx").on(t.tenantId, t.projectId)],
 );
+
+// Historic configuration rows pulled from the model's history query; wholesale-replaced per sync.
+// ponytail: jsonb row per record, ~tens of thousands of rows per model; real columns/pgvector if
+// a tenant outgrows in-process scoring.
+export const configHistory = pgTable(
+  "config_history",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: text("tenant_id").notNull(),
+    modelId: uuid("model_id").notNull(),
+    row: jsonb("row").$type<Record<string, Val>>().notNull(),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("config_history_tenant_model_idx").on(t.tenantId, t.modelId)],
+);
