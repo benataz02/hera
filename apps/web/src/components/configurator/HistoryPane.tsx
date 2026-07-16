@@ -1,6 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import {
-  BusyIndicator, Button, MessageStrip, Tab, TabContainer, Table, TableCell, TableHeaderCell,
+  BusyIndicator, Button, Card, CardHeader, MessageStrip, Tab, TabContainer, Table, TableCell, TableHeaderCell,
   TableHeaderRow, TableRow, Tag, Text, Toolbar, ToolbarButton, ToolbarSpacer,
 } from "@ui5/webcomponents-react";
 import type { Entries, ModelDef, Val } from "@hera/config-engine";
@@ -86,7 +87,65 @@ function DocHistory({ projectId, itemCode }: { projectId: string; itemCode?: str
   );
 }
 
-// Filled in by the "similar configurations" task.
-function Similar(_props: { projectId: string; model: ModelDef; entries: Entries; onCopy: (v: Record<string, Val>) => void }) {
-  return <Text>Coming next.</Text>;
+function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+
+const chipDesign = (score: number) => (score >= 0.99 ? "Positive" : score > 0 ? "Critical" : "Neutral");
+
+function Similar({ projectId, model, entries, onCopy }: {
+  projectId: string;
+  model: ModelDef;
+  entries: Entries;
+  onCopy: (v: Record<string, Val>) => void;
+}) {
+  const h = model.history;
+  const debounced = useDebounced(entries, 500);
+  const anyFilled = !!h?.mappings.some((m) => {
+    const v = debounced[m.param];
+    return v !== undefined && v !== null && v !== "";
+  });
+  const q = useQuery({
+    ...orpc.configs.similar.queryOptions({ input: { id: projectId, entries: debounced } }),
+    enabled: anyFilled,
+    placeholderData: keepPreviousData, // re-rank without flashing while typing
+    staleTime: 30_000,
+  });
+  const labelOf = (key: string) => model.parameters.find((p) => p.key === key)?.label ?? key;
+
+  if (!h?.mappings.length)
+    return <Text>No similarity mappings configured for this model (model builder → History).</Text>;
+  if (!anyFilled) return <Text>Fill a mapped parameter to find similar past configurations.</Text>;
+  if (q.isPending) return <BusyIndicator active delay={0} style={{ width: "100%", marginTop: "2rem" }} />;
+  if (q.error) return <MessageStrip design="Information" hideCloseButton>{q.error.message}</MessageStrip>;
+  if (!q.data.results.length)
+    return <Text>No historic rows yet — an admin can press "Sync now" in the model's History tab.</Text>;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", opacity: q.isFetching ? 0.6 : 1 }}>
+      {q.data.results.map((r, i) => (
+        <Card key={i}
+          header={
+            <CardHeader
+              titleText={`${Math.round(r.score * 100)}% match`}
+              subtitleText={Object.entries(r.display).map(([k, v]) => `${k}: ${String(v ?? "—")}`).join(" · ")}
+              action={<Button design="Emphasized" icon="copy" onClick={() => onCopy(r.values)}>Use values</Button>}
+            />
+          }>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", padding: "0 1rem 1rem" }}>
+            {r.matches.map((m) => (
+              <Tag key={m.param} design={chipDesign(m.score)} hideStateIcon>
+                {labelOf(m.param)}: {String(m.value ?? "—")}
+              </Tag>
+            ))}
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
 }
