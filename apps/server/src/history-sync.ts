@@ -52,19 +52,23 @@ const SYNC_INTERVAL_MS = 60 * 60_000;
 // server ever runs multi-instance or a tenant's sync gets slow enough to matter.
 export function startHistorySync(): void {
   const tick = async () => {
-    const models = await db
-      .select({ id: configModel.id, tenantId: configModel.tenantId, definition: configModel.definition })
-      .from(configModel)
-      .where(sql`${configModel.definition} -> 'history' -> 'query' is not null`);
-    for (const m of models) {
-      try {
-        await assertAgentReady(m.tenantId);
-        const { count } = await syncModelHistory(m.tenantId, m.id, m.definition, (target, path) =>
-          runRequest(m.tenantId, "query", { target, path }));
-        console.log(`[history-sync] ${m.tenantId}/${m.id}: ${count} rows`);
-      } catch (e) {
-        console.error(`[history-sync] ${m.tenantId}/${m.id} failed: ${e instanceof Error ? e.message : e}`);
+    try {
+      const models = await db
+        .select({ id: configModel.id, tenantId: configModel.tenantId, definition: configModel.definition })
+        .from(configModel)
+        .where(sql`${configModel.definition} -> 'history' -> 'query' is not null`);
+      for (const m of models) {
+        try {
+          await assertAgentReady(m.tenantId);
+          const { count } = await syncModelHistory(m.tenantId, m.id, m.definition, (target, path) =>
+            runRequest(m.tenantId, "query", { target, path }));
+          console.log(`[history-sync] ${m.tenantId}/${m.id}: ${count} rows`);
+        } catch (e) {
+          console.error(`[history-sync] ${m.tenantId}/${m.id} failed: ${e instanceof Error ? e.message : e}`);
+        }
       }
+    } catch (e) {
+      console.error(`[history-sync] tick failed: ${e instanceof Error ? e.message : e}`);
     }
   };
   setInterval(() => void tick(), SYNC_INTERVAL_MS);
