@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import {
   BusyIndicator, CheckBox, Form, FormGroup, FormItem, Icon, Input, Label, MultiComboBox, MultiComboBoxItem,
   ObjectStatus, Option, RadioButton, Select, StepInput, SuggestionItem,
@@ -9,6 +9,7 @@ import {
 } from "@hera/config-engine";
 import { ValueHelpDialog } from "./ValueHelpDialog.tsx";
 import { clientBaseLookups, resolveEntry } from "./formHelpers.ts";
+import "./ConfiguratorForm.css";
 
 /** The ref's display columns for one option value, joined — shown next to the option. */
 function extraOf(ref: LookupRef, t: ResolvedTable | undefined, val: Val): string | undefined {
@@ -90,7 +91,21 @@ export function ConsistencyStatus({ model, lookups, entries }: {
   );
 }
 
-const FORM_PROPS = { labelSpan: "S12 M4", layout: "S1 M2 L2 XL2", headerLevel: "H5" } as const;
+// UI5 right-aligns FormItem labels (`justify-self:end`), so their left edges are ragged and the
+// FormGroup heading can't line up with them. These two vars are UI5's own left-aligned recipe —
+// it applies exactly this when a label spans the full row — lifted to every breakpoint. The .25rem
+// inline padding is what lands the label on the heading's edge: .ui5-form-layout pads .75rem and
+// .ui5-form-group-heading pads another .25rem, so both sit at 1rem (as does the Form header).
+// Vertical stays at FormItem's default .125rem; the .85rem gap to the control is a hard rule.
+const FORM_PROPS = {
+  labelSpan: "S12 M4",
+  layout: "S1 M2 L2 XL2",
+  headerLevel: "H5",
+  style: {
+    "--ui5-form-item-label-justify": "start",
+    "--ui5-form-item-label-padding": "0.125rem 0.25rem",
+  } as CSSProperties,
+} as const;
 
 export function ConfiguratorForm({ model, lookups, entries, onChange, loading }: {
   model: ModelDef;
@@ -219,7 +234,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading }:
                 if (!p) return null;
                 return (
                   <FormItem key={k} labelContent={<Label>{p.label + (p.unit ? ` (${p.unit})` : "")}</Label>}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", width: "100%" }}>
+                    <div className="cfg-field">
                       {control(k)}
                       {prop.defaulted.has(k) ? <ObjectStatus state="Information">auto</ObjectStatus> : null}
                     </div>

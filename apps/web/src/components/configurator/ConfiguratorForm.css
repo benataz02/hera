@@ -1,0 +1,15 @@
+/* FormItem stretches its slotted child (`::slotted(*){width:100%}`), but that only reaches this
+   wrapper — the control inside would keep ui5-input's default `:host{width:13.125rem}`.
+   flex-basis:0 outranks that host width; min-width:0 lets it shrink instead of being clipped by
+   .ui5-form-item-content's overflow:hidden. Restores what UI5 does for an unwrapped field. */
+.cfg-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.cfg-field > :first-child {
+  flex: 1;
+  min-width: 0;
+}
