@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   BusyIndicator, CheckBox, Form, FormGroup, FormItem, Icon, Input, Label, MultiComboBox, MultiComboBoxItem,
-  ObjectStatus, Option, RadioButton, Select, StepInput, SuggestionItem, Text,
+  ObjectStatus, Option, RadioButton, Select, StepInput, SuggestionItem,
 } from "@ui5/webcomponents-react";
 import {
   propagate, refColumns, refKeyCols,
@@ -32,30 +32,30 @@ function QueryValueInput({ p, refDef, dom, value, table, onCommit }: {
 }) {
   const [typed, setTyped] = useState<string | null>(null);
   const [vhOpen, setVhOpen] = useState(false);
-  const committedLabel =
-    dom.find((o) => o.value === value)?.label ?? (value === undefined || value === null ? "" : String(value));
-  const shown = typed ?? committedLabel;
-  const invalid = typed !== null && typed !== "" && resolveEntry(dom, typed).kind === "reject";
+  const key = value === undefined || value === null ? "" : String(value);
+  const shown = typed ?? key;
+  // filter="None" on the Input; we filter here so both key and label are searchable.
+  const q = (typed ?? "").trim().toLowerCase();
+  const items = dom.filter(
+    (o) => !o.eliminatedBy && (!q || String(o.value ?? "").toLowerCase().includes(q) || o.label.toLowerCase().includes(q)),
+  );
 
   const commit = (raw: string) => {
     const r = resolveEntry(dom, raw);
     if (r.kind === "clear") onCommit(undefined);
     else if (r.kind === "set") onCommit(r.value);
     // reject: keep the last committed value
-    setTyped(null); // snap the field back to the committed label
+    setTyped(null); // snap the field back to the committed key
   };
 
   return (
     <>
-      <Input showSuggestions filter="Contains" value={shown} placeholder="Type or pick…" showClearIcon
-        valueState={invalid ? "Negative" : "None"}
-        valueStateMessage={<div>Pick a value from the list.</div>}
+      <Input showSuggestions filter="None" value={shown} placeholder="Type or pick…" showClearIcon
         icon={<Icon name="value-help" style={{ cursor: "pointer" }} onClick={() => setVhOpen(true)} />}
         onInput={(e) => setTyped(e.target.value ?? "")}
         onChange={(e) => commit(e.target.value ?? "")}>
-        {dom.filter((o) => !o.eliminatedBy).map((o, i) => (
-          <SuggestionItem key={i} text={o.label}
-            additionalText={[String(o.value ?? ""), extraOf(refDef, table, o.value)].filter(Boolean).join(" · ")} />
+        {items.map((o, i) => (
+          <SuggestionItem key={i} text={String(o.value ?? "")} additionalText={o.label} />
         ))}
       </Input>
       {vhOpen && table ? (
@@ -90,7 +90,7 @@ export function ConsistencyStatus({ model, lookups, entries }: {
   );
 }
 
-const FORM_PROPS = { labelSpan: "S12 M4", layout: "S1 M1 L1 XL1", headerLevel: "H5" } as const;
+const FORM_PROPS = { labelSpan: "S12 M4", layout: "S1 M2 L2 XL2", headerLevel: "H5" } as const;
 
 export function ConfiguratorForm({ model, lookups, entries, onChange, loading }: {
   model: ModelDef;
@@ -230,17 +230,6 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading }:
           ))}
         </Form>
       ))}
-      {model.computed.length ? (
-        <Form headerText="Computed" {...FORM_PROPS}>
-          <FormGroup>
-            {model.computed.map((c) => (
-              <FormItem key={c.key} labelContent={<Label>{c.key}</Label>}>
-                <Text>{String(prop.values[c.key] ?? "—")}</Text>
-              </FormItem>
-            ))}
-          </FormGroup>
-        </Form>
-      ) : null}
     </div>
   );
 }

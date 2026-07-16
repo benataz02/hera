@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Bar, Button, Dialog, Icon, Input, Label, List, ListItemStandard, MessageStrip,
+  Bar, Button, Dialog, Input, Label, List, ListItemStandard, MessageStrip,
   MultiComboBox, MultiComboBoxItem, Option, Select, StepInput, Table, TableCell, TableHeaderCell,
   TableHeaderRow, TableRow, TableRowAction, Text, Title,
 } from "@ui5/webcomponents-react";
@@ -9,7 +9,7 @@ import type { Issue, LookupRef, ModelDef, Option as EngineOption, Param } from "
 import { client } from "../../orpc.ts";
 import { ExprInput } from "./ExprInput.tsx";
 import { issueFor } from "./useDraftModel.ts";
-import { applyMove, canDrop, parseRowKey, placeParam, removeFromStructure, rowKeyOf, unplacedParams, type Placement } from "./structureOps.ts";
+import { applyMove, canDrop, parseRowKey, placeParam, removeFromStructure, rowKeyOf, unplacedParams, type Placement, type RowRef } from "./structureOps.ts";
 
 type Tables = { name: string; columns: { key: string }[] }[];
 type Update = (fn: (d: ModelDef) => ModelDef) => void;
@@ -18,36 +18,44 @@ const UI_KINDS = ["input", "select", "radio", "checkbox", "multicombo", "step"] 
 
 const emptyParam = (): Param => ({ key: "", label: "", type: "string", ui: "select" });
 
+// Dashed hairline above the first formula row — the "soft visual link" tying the global
+// formulas (rendered at param level) to the structure above them.
+const SEP = { borderBlockStart: "1px dashed var(--sapList_BorderColor)", paddingBlockStart: "0.25rem" } as const;
+
 export function ParamsTab({ draft, update, issues, tables }: {
   draft: ModelDef; update: Update; issues: Issue[]; tables: Tables;
 }) {
-  const [editing, setEditing] = useState<{ param: Param; isNew: boolean } | null>(null);
+  const [editing, setEditing] = useState<{ param: Param; isNew: boolean; place?: { s: number; g: number } } | null>(null);
   const [titleEdit, setTitleEdit] = useState<string | null>(null);
   // Keyed by stable section/group key (not row index) so collapse survives drag-reordering.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggle = (id: string) =>
     setCollapsed((c) => { const n = new Set(c); n.delete(id) || n.add(id); return n; });
 
-  type Row = { key: string; depth: number; label: string; detail: string; ref: ReturnType<typeof parseRowKey>; collapseId?: string };
+  type StructRow = { kind: "struct"; key: string; depth: number; label: string; detail: string; ref: RowRef; collapseId?: string };
+  type Row = StructRow | { kind: "formula"; key: string; idx: number };
   const rows: Row[] = [];
   draft.structure.sections.forEach((s, si) => {
     const sId = `S:${s.key}`;
-    rows.push({ key: `s:${si}`, depth: 0, label: s.title, detail: `section · ${s.key}`, ref: { kind: "section", s: si }, collapseId: sId });
+    rows.push({ kind: "struct", key: `s:${si}`, depth: 0, label: s.title, detail: `section · ${s.key}`, ref: { kind: "section", s: si }, collapseId: sId });
     if (collapsed.has(sId)) return;
     s.groups.forEach((g, gi) => {
       const gId = `G:${s.key}/${g.key}`;
-      rows.push({ key: `g:${si}.${gi}`, depth: 1, label: g.title, detail: `group · ${g.key}`, ref: { kind: "group", s: si, g: gi }, collapseId: gId });
+      rows.push({ kind: "struct", key: `g:${si}.${gi}`, depth: 1, label: g.title, detail: `group · ${g.key}`, ref: { kind: "group", s: si, g: gi }, collapseId: gId });
       if (collapsed.has(gId)) return;
       g.params.forEach((pk) => {
         const p = draft.parameters.find((x) => x.key === pk);
         rows.push({
-          key: `p:${pk}`, depth: 2, label: p?.label || pk,
+          kind: "struct", key: `p:${pk}`, depth: 2, label: p?.label || pk,
           detail: p ? `${p.type} · ${p.ui}${p.domain ? (p.domain.kind === "range" ? " · range" : ` · ${p.domain.ref.source}`) : ""}` : "missing definition",
           ref: { kind: "param", key: pk },
         });
       });
     });
   });
+  // Formulas are global (ModelDef.computed) — appended at param level, soft-linked, not a section.
+  draft.computed.forEach((_, i) => rows.push({ kind: "formula", key: `c:${i}`, idx: i }));
+
   const loose = unplacedParams(draft);
   // Model-level issues have no row of their own (duplicate key, computed cycle, bad structure ref).
   const modelIssues = issues.filter((i) => i.path === "model" || i.path === "computed" || i.path === "structure");
@@ -62,7 +70,7 @@ export function ParamsTab({ draft, update, issues, tables }: {
       return out;
     });
 
-  const deleteRow = (ref: ReturnType<typeof parseRowKey>) =>
+  const deleteRow = (ref: RowRef) =>
     update((d) => {
       let out = removeFromStructure(d, ref);
       if (ref.kind === "param") out = { ...out, parameters: out.parameters.filter((p) => p.key !== ref.key) };
@@ -74,6 +82,42 @@ export function ParamsTab({ draft, update, issues, tables }: {
     while (taken.includes(k)) k = `${base}${n++}`;
     return k;
   };
+  const addSection = () => update((d) => ({
+    ...d,
+    structure: { sections: [...d.structure.sections, { key: addKey("section", d.structure.sections.map((s) => s.key)), title: "New section", groups: [] }] },
+  }));
+  const addGroup = (s: number) => update((d) => ({
+    ...d,
+    structure: {
+      sections: d.structure.sections.map((sec, i) => i !== s ? sec : {
+        ...sec, groups: [...sec.groups, { key: addKey("group", sec.groups.map((g) => g.key)), title: "New group", params: [] }],
+      }),
+    },
+  }));
+  const addFormula = () => update((d) => ({
+    ...d,
+    computed: [...d.computed, { key: addKey("value", [...d.parameters.map((p) => p.key), ...d.computed.map((c) => c.key)]), expr: "0" }],
+  }));
+  // The group a param sits in, so its "add" action drops a sibling into the same group.
+  const groupOfParam = (key: string) => {
+    for (let s = 0; s < draft.structure.sections.length; s++)
+      for (let g = 0; g < draft.structure.sections[s]!.groups.length; g++)
+        if (draft.structure.sections[s]!.groups[g]!.params.includes(key)) return { s, g };
+    return undefined;
+  };
+  // "add" row action: section → group, group/param → parameter (dialog targeted to the group).
+  const addUnder = (ref: RowRef) => {
+    if (ref.kind === "section") addGroup(ref.s);
+    else if (ref.kind === "group") setEditing({ param: emptyParam(), isNew: true, place: { s: ref.s, g: ref.g } });
+    else setEditing({ param: emptyParam(), isNew: true, place: groupOfParam(ref.key) });
+  };
+
+  const rowActions = (add: string) => (
+    <>
+      <TableRowAction icon="add" text={add} data-act="add" />
+      <TableRowAction icon="delete" text="Delete" data-act="delete" />
+    </>
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", padding: "1rem" }}>
@@ -87,40 +131,43 @@ export function ParamsTab({ draft, update, issues, tables }: {
         startContent={<Title level="H5">Form structure</Title>}
         endContent={
           <>
-            <Button icon="add" onClick={() => update((d) => ({
-              ...d,
-              structure: { sections: [...d.structure.sections, { key: addKey("section", d.structure.sections.map((s) => s.key)), title: "New section", groups: [] }] },
-            }))}>Add section</Button>
-            <Button icon="add" disabled={!draft.structure.sections.length} onClick={() => update((d) => ({
-              ...d,
-              structure: {
-                sections: d.structure.sections.map((s, i, arr) => i !== arr.length - 1 ? s : {
-                  ...s, groups: [...s.groups, { key: addKey("group", s.groups.map((g) => g.key)), title: "New group", params: [] }],
-                }),
-              },
-            }))}>Add group</Button>
-            <Button icon="add" design="Emphasized" disabled={!draft.structure.sections.some((s) => s.groups.length)}
-              onClick={() => setEditing({ param: emptyParam(), isNew: true })}>Add parameter</Button>
+            <Button icon="add" onClick={addSection}>Add section</Button>
+            <Button icon="add" onClick={addFormula}>Add formula</Button>
           </>
         }
       />
 
       <Table
         noDataText="Add a section to start structuring the form."
-        rowActionCount={1}
+        rowActionCount={2}
         onMoveOver={(e) => {
           const src = (e.detail.source.element as HTMLElement | null)?.getAttribute("row-key");
           const dst = (e.detail.destination.element as HTMLElement | null)?.getAttribute("row-key");
           const placement = e.detail.destination.placement as Placement;
+          // ponytail: formula rows (c:) share this table but aren't structure nodes — never a drag src/dst.
+          if (src?.startsWith("c:") || dst?.startsWith("c:")) return;
           if (src && dst && canDrop(draft, src, dst, placement)) e.preventDefault();
         }}
         onMove={(e) => {
           const src = (e.detail.source.element as HTMLElement | null)?.getAttribute("row-key");
           const dst = (e.detail.destination.element as HTMLElement | null)?.getAttribute("row-key");
           const placement = e.detail.destination.placement as Placement;
+          if (src?.startsWith("c:") || dst?.startsWith("c:")) return;
           if (src && dst) update((d) => applyMove(d, src, dst, placement));
         }}
-        onRowActionClick={(e) => deleteRow(parseRowKey(((e.detail.row as unknown) as HTMLElement).getAttribute("row-key")!))}
+        onRowActionClick={(e) => {
+          const rowKey = ((e.detail.row as unknown) as HTMLElement).getAttribute("row-key")!;
+          const act = ((e.detail.action as unknown) as HTMLElement).dataset.act;
+          if (rowKey.startsWith("c:")) {
+            const i = Number(rowKey.slice(2));
+            if (act === "delete") update((d) => ({ ...d, computed: d.computed.filter((_, j) => j !== i) }));
+            else addFormula();
+            return;
+          }
+          const ref = parseRowKey(rowKey);
+          if (act === "delete") deleteRow(ref);
+          else addUnder(ref);
+        }}
         onRowClick={(e) => {
           const ref = parseRowKey(((e.detail.row as unknown) as HTMLElement).getAttribute("row-key")!);
           if (ref.kind === "param") {
@@ -137,52 +184,64 @@ export function ParamsTab({ draft, update, issues, tables }: {
           </TableHeaderRow>
         }
       >
-        {rows.map((r) => (
-          <TableRow key={r.key} rowKey={r.key} movable interactive
-            actions={<TableRowAction icon="delete" text="Delete" />}>
-            <TableCell>
-                <span style={{ width: "1rem", display: "inline-flex", justifyContent: "center", flex: "0 0 auto" }}>
+        {rows.map((r) =>
+          r.kind === "formula" ? (
+            <TableRow key={r.key} rowKey={r.key} actions={rowActions("Add formula")}>
+              <TableCell>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", paddingInlineStart: "3rem", ...(r.idx === 0 ? SEP : {}) }}>
+                  <span style={{ color: "var(--sapContent_LabelColor)", fontStyle: "italic", flex: "0 0 auto" }}>ƒ</span>
+                  <Input style={{ width: "100%" }} value={draft.computed[r.idx]!.key}
+                    onInput={(e) => update((d) => ({ ...d, computed: d.computed.map((x, j) => (j === r.idx ? { ...x, key: e.target.value } : x)) }))} />
+                </div>
+              </TableCell>
+              <TableCell>
+                <div style={r.idx === 0 ? SEP : undefined}>
+                  <ExprInput value={draft.computed[r.idx]!.expr} model={draft} fieldId={`expr-computed[${r.idx}].expr`}
+                    issue={issueFor(issues, `computed[${r.idx}].expr`)}
+                    onChange={(v) => update((d) => ({ ...d, computed: d.computed.map((x, j) => (j === r.idx ? { ...x, expr: v ?? "" } : x)) }))} />
+                </div>
+              </TableCell>
+            </TableRow>
+          ) : (
+            <TableRow key={r.key} rowKey={r.key} movable interactive
+              actions={rowActions(r.ref.kind === "section" ? "Add group" : "Add parameter")}>
+              <TableCell>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", paddingInlineStart: `${r.depth * 1.5}rem` }}>
                   {r.collapseId ? (
-                    <span role="button" tabIndex={0}
-                      aria-label={collapsed.has(r.collapseId) ? "Expand" : "Collapse"}
-                      style={{ display: "inline-flex", cursor: "pointer" }}
-                      // stopPropagation so toggling collapse never enters edit (onRowClick).
-                      onClick={(e) => { e.stopPropagation(); toggle(r.collapseId!); }}
-                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); toggle(r.collapseId!); } }}
-                    >
-                      <Icon mode="Decorative" style={{ width: "0.75rem", height: "0.75rem" }}
-                        name={collapsed.has(r.collapseId) ? "slim-arrow-right" : "slim-arrow-down"} />
-                    </span>
+                    // Chevron is a real button, indented with the level; stopPropagation so a toggle never enters edit (onRowClick).
+                    <Button design="Transparent" style={{ flex: "0 0 auto" }}
+                      icon={collapsed.has(r.collapseId) ? "slim-arrow-right" : "slim-arrow-down"}
+                      tooltip={collapsed.has(r.collapseId) ? "Expand" : "Collapse"}
+                      onClick={(e) => { e.stopPropagation(); toggle(r.collapseId!); }} />
                   ) : null}
-                </span>
-                {titleEdit === r.key && r.ref.kind !== "param" ? (
-                  <Input
-                    value={r.label}
-                    onBlur={() => setTitleEdit(null)}
-                    onInput={(e) => {
-                      const title = e.target.value;
-                      update((d) => ({
-                        ...d,
-                        structure: {
-                          sections: d.structure.sections.map((s, si) => {
-                            if (r.ref.kind === "section") return si === r.ref.s ? { ...s, title } : s;
-                            return si === (r.ref as { s: number }).s
-                              ? { ...s, groups: s.groups.map((g, gi) => (gi === (r.ref as { g: number }).g ? { ...g, title } : g)) }
-                              : s;
-                          }),
-                        },
-                      }));
-                    }}
-                  />
-                ) : (
-                <Text style={{ paddingInlineStart: `${r.depth * 1.5}rem`, fontWeight: r.depth === 0 ? "bold" : "normal" }}>
-                  {r.label}
-                </Text>
-              )}
-            </TableCell>
-            <TableCell><Text>{r.detail}</Text></TableCell>
-          </TableRow>
-        ))}
+                  {titleEdit === r.key && r.ref.kind !== "param" ? (
+                    <Input
+                      value={r.label}
+                      onBlur={() => setTitleEdit(null)}
+                      onInput={(e) => {
+                        const title = e.target.value;
+                        update((d) => ({
+                          ...d,
+                          structure: {
+                            sections: d.structure.sections.map((s, si) => {
+                              if (r.ref.kind === "section") return si === r.ref.s ? { ...s, title } : s;
+                              return si === (r.ref as { s: number }).s
+                                ? { ...s, groups: s.groups.map((g, gi) => (gi === (r.ref as { g: number }).g ? { ...g, title } : g)) }
+                                : s;
+                            }),
+                          },
+                        }));
+                      }}
+                    />
+                  ) : (
+                    <Text style={{ fontWeight: r.depth === 0 ? "bold" : "normal" }}>{r.label}</Text>
+                  )}
+                </div>
+              </TableCell>
+              <TableCell><Text>{r.detail}</Text></TableCell>
+            </TableRow>
+          ),
+        )}
       </Table>
       </div>
 
@@ -192,42 +251,11 @@ export function ParamsTab({ draft, update, issues, tables }: {
         </MessageStrip>
       ) : null}
 
-      <Title level="H5">Computed values</Title>
-      <Table noDataText="No computed values." rowActionCount={1}
-        onRowActionClick={(e) => {
-          const i = Number(((e.detail.row as unknown) as HTMLElement).dataset.idx);
-          update((d) => ({ ...d, computed: d.computed.filter((_, j) => j !== i) }));
-        }}
-        headerRow={
-          <TableHeaderRow>
-            <TableHeaderCell><span>Key</span></TableHeaderCell>
-            <TableHeaderCell width="60%"><span>Expression</span></TableHeaderCell>
-          </TableHeaderRow>
-        }>
-        {draft.computed.map((c, i) => (
-          <TableRow key={i} rowKey={`c-${i}`} data-idx={String(i)} actions={<TableRowAction icon="delete" text="Delete" />}>
-            <TableCell>
-              <Input value={c.key} onInput={(e) =>
-                update((d) => ({ ...d, computed: d.computed.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)) }))} />
-            </TableCell>
-            <TableCell>
-              <ExprInput value={c.expr} model={draft} fieldId={`expr-computed[${i}].expr`}
-                issue={issueFor(issues, `computed[${i}].expr`)}
-                onChange={(v) => update((d) => ({ ...d, computed: d.computed.map((x, j) => (j === i ? { ...x, expr: v ?? "" } : x)) }))} />
-            </TableCell>
-          </TableRow>
-        ))}
-      </Table>
-      <Button icon="add" style={{ alignSelf: "start" }}
-        onClick={() => update((d) => ({ ...d, computed: [...d.computed, { key: addKey("value", [...d.parameters.map((p) => p.key), ...d.computed.map((c) => c.key)]), expr: "0" }] }))}>
-        Add computed value
-      </Button>
-
       {editing ? (
         <ParamDialog
           draft={draft} tables={tables} initial={editing.param} isNew={editing.isNew}
           onCancel={() => setEditing(null)}
-          onOk={(p, place) => { saveParam(p, editing.isNew, place); setEditing(null); }}
+          onOk={(p) => { saveParam(p, editing.isNew, editing.place); setEditing(null); }}
         />
       ) : null}
     </div>
@@ -236,12 +264,9 @@ export function ParamsTab({ draft, update, issues, tables }: {
 
 function ParamDialog({ draft, tables, initial, isNew, onOk, onCancel }: {
   draft: ModelDef; tables: Tables; initial: Param; isNew: boolean;
-  onOk: (p: Param, place?: { s: number; g: number }) => void; onCancel: () => void;
+  onOk: (p: Param) => void; onCancel: () => void;
 }) {
   const [p, setP] = useState<Param>(initial);
-  const groups = draft.structure.sections.flatMap((s, si) =>
-    s.groups.map((g, gi) => ({ s: si, g: gi, label: `${s.title} / ${g.title}` })));
-  const [placeIdx, setPlaceIdx] = useState(0);
   const set = (patch: Partial<Param>) => setP((x) => ({ ...x, ...patch }));
   const keyOk = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(p.key);
   const keyTaken = isNew && draft.parameters.some((x) => x.key === p.key);
@@ -253,7 +278,7 @@ function ParamDialog({ draft, tables, initial, isNew, onOk, onCancel }: {
         <Bar design="Footer" endContent={
           <>
             <Button design="Emphasized" disabled={!keyOk || keyTaken || !p.label}
-              onClick={() => onOk(p, isNew ? groups[placeIdx] : undefined)}>OK</Button>
+              onClick={() => onOk(p)}>OK</Button>
             <Button onClick={onCancel}>Cancel</Button>
           </>
         } />
@@ -286,14 +311,6 @@ function ParamDialog({ draft, tables, initial, isNew, onOk, onCancel }: {
           <Label>Unit</Label>
           <Input value={p.unit ?? ""} onInput={(e) => set({ unit: e.target.value || undefined })} />
         </div>
-        {isNew ? (
-          <div style={{ gridColumn: "1 / -1" }}>
-            <Label>Place in</Label>
-            <Select value={String(placeIdx)} onChange={(e) => setPlaceIdx(Number((e.detail.selectedOption as HTMLElement).dataset.v))}>
-              {groups.map((g, i) => <Option key={i} value={String(i)} data-v={String(i)}>{g.label}</Option>)}
-            </Select>
-          </div>
-        ) : null}
 
         <Title level="H6" style={{ gridColumn: "1 / -1" }}>Value domain</Title>
         <div style={{ gridColumn: "1 / -1" }}>
