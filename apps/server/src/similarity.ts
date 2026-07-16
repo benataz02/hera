@@ -34,6 +34,8 @@ export function scoreRows(history: HistoryDef, entries: Entries, rows: Record<st
   const one = (m: HistoryDef["mappings"][number], entry: Val, hist: Val): number => {
     if (m.match === "exact") return norm(entry) === norm(hist) ? 1 : 0;
     if (m.match === "contains") return norm(entry) && norm(hist).includes(norm(entry)) ? 1 : 0;
+    // closeness: null/undefined historic values score as no-match, not as 0
+    if (hist == null) return 0;
     const a = Number(entry), b = Number(hist), rg = ranges.get(m.column);
     if (!Number.isFinite(a) || !Number.isFinite(b) || !rg) return 0;
     if (rg.max === rg.min) return a === b ? 1 : 0;

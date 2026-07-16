@@ -51,4 +51,19 @@ describe("scoreRows", () => {
   test("top caps results", () => {
     expect(scoreRows(history, { material: "steel" }, rows, 1)).toHaveLength(1);
   });
+
+  test("closeness: null historic value scores as no-match", () => {
+    const rowsWithNull = [
+      { mat: "steel", sec: 10, descr: "Steel cable coated" },
+      { mat: "steel", sec: null, descr: "plain" }, // null in closeness column
+      { mat: "alu", sec: 30, descr: "aluminium special" },
+    ];
+    const r = scoreRows(history, { section: 10 }, rowsWithNull);
+    // range 10..30 (only finite values): sec=10 → 1, sec=30 → 0, sec=null → 0
+    expect(r[0]!.row.sec).toBe(10);
+    expect(r[0]!.score).toBe(1);
+    // row with null sec should score 0 for closeness, so it ranks last
+    expect(r[2]!.row.sec).toBe(null);
+    expect(r[2]!.score).toBe(0);
+  });
 });
