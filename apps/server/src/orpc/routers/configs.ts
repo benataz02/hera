@@ -7,9 +7,10 @@ import {
   type ModelDef, type Outputs, type ResolvedLookups,
 } from "@hera/config-engine";
 import { userProcedure } from "../base.ts";
-import { assertAgentReady } from "./entities.ts";
+import { assertAgentReady, runRequest } from "./entities.ts";
 import { agentFetcher, tenantTables } from "./models.ts";
 import { resolveLookups, type QueryFetcher } from "../../lookups.ts";
+import { docHistoryPath, flattenDocs, sortDocRows } from "../../doc-history.ts";
 
 // The configuration process API: any member drives a project (draft -> calculated via run).
 // Trust model: browser propagates for preview; THESE handlers compute the numbers that get
@@ -225,6 +226,34 @@ export const configsRouter = {
   // key includes the model's updatedAt so a model save is picked up immediately.
   lookups: userProcedure.input(z.object({ modelId: z.uuid() })).handler(async ({ input, context }) =>
     cachedLookups(context.tenantId, await loadModel(context.tenantId, input.modelId))),
+
+  // Exact help: live B1 Orders + Quotations for the project customer and/or the item-code param.
+  // itemCode comes from the client (current unsaved entry); it is only ever a quoted filter value.
+  docHistory: userProcedure
+    .input(z.object({ id: z.uuid(), itemCode: z.string().optional() }))
+    .handler(async ({ input, context }) => {
+      const [project] = await db
+        .select({ customer: configProject.customer })
+        .from(configProject)
+        .where(and(eq(configProject.id, input.id), eq(configProject.tenantId, context.tenantId)))
+        .limit(1);
+      if (!project) throw new ORPCError("NOT_FOUND");
+      const itemCode = input.itemCode?.trim() || undefined;
+      const cardCode = project.customer?.cardCode;
+      if (!itemCode && !cardCode) return { itemCode: null, cardCode: null, rows: [] };
+      await assertAgentReady(context.tenantId);
+      const fetchDocs = (entity: "Orders" | "Quotations") =>
+        runRequest(context.tenantId, "query", { target: "b1", path: docHistoryPath(entity, { itemCode, cardCode }) });
+      const [orders, quotations] = await Promise.all([fetchDocs("Orders"), fetchDocs("Quotations")]);
+      return {
+        itemCode: itemCode ?? null,
+        cardCode: cardCode ?? null,
+        rows: sortDocRows([
+          ...flattenDocs("order", orders, { itemCode, cardCode }),
+          ...flattenDocs("quotation", quotations, { itemCode, cardCode }),
+        ]),
+      };
+    }),
 
   run: userProcedure.input(z.object({ projectId: z.uuid() })).handler(async ({ input, context }) => {
     const [project] = await db
