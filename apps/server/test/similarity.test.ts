@@ -59,11 +59,16 @@ describe("scoreRows", () => {
       { mat: "alu", sec: 30, descr: "aluminium special" },
     ];
     const r = scoreRows(history, { section: 10 }, rowsWithNull);
-    // range 10..30 (only finite values): sec=10 → 1, sec=30 → 0, sec=null → 0
+    // range 10..30 (only finite values, excluding null): sec=10 → 1, sec=30 → 0, sec=null → 0
     expect(r[0]!.row.sec).toBe(10);
     expect(r[0]!.score).toBe(1);
-    // row with null sec should score 0 for closeness, so it ranks last
-    expect(r[2]!.row.sec).toBe(null);
-    expect(r[2]!.score).toBe(0);
+    // row with null sec should score 0 for closeness
+    const rowNull = r.find((x) => x.row.sec === null);
+    expect(rowNull).toBeDefined();
+    expect(rowNull!.score).toBe(0);
+    // verify the sec=30 row scores correctly with the true range (10..30), not the corrupted range (0..30)
+    const row30 = r.find((x) => x.row.sec === 30);
+    expect(row30).toBeDefined();
+    expect(row30!.score).toBe(0); // with correct range 10..30: score=0. bug would give 0.333
   });
 });

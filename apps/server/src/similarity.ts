@@ -25,6 +25,7 @@ export function scoreRows(history: HistoryDef, entries: Entries, rows: Record<st
     if (m.match !== "closeness") continue;
     let min = Infinity, max = -Infinity;
     for (const r of rows) {
+      if (r[m.column] == null) continue; // Skip null/undefined values
       const n = Number(r[m.column]);
       if (Number.isFinite(n)) { min = Math.min(min, n); max = Math.max(max, n); }
     }
