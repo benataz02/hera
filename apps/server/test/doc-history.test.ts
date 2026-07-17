@@ -2,13 +2,25 @@ import { describe, expect, test } from "bun:test";
 import { docHistoryPath, flattenDocs, sortDocRows } from "../src/doc-history.ts";
 
 describe("docHistoryPath", () => {
-  test("both criteria OR'd, quotes escaped, ordered by DocDate desc", () => {
+  test("both criteria OR'd against the crossjoin, quotes escaped, ordered by DocDate desc", () => {
     const p = docHistoryPath("Orders", { itemCode: "IT'M", cardCode: "C001" });
-    expect(p.startsWith("/Orders?")).toBe(true);
-    expect(decodeURIComponent(p)).toContain("CardCode eq 'C001' or DocumentLines/any(d: d/ItemCode eq 'IT''M')");
-    expect(decodeURIComponent(p)).toContain("$orderby=DocDate desc");
+    expect(p.startsWith("/$crossjoin(Orders,Orders/DocumentLines)?")).toBe(true);
+    expect(decodeURIComponent(p)).toContain(
+      "(Orders/CardCode eq 'C001' or Orders/DocumentLines/ItemCode eq 'IT''M')",
+    );
+    expect(decodeURIComponent(p)).toContain("$orderby=Orders/DocDate desc");
     expect(p).toContain("$top=10");
-    expect(p).toContain("$expand=DocumentLines(");
+    // B1 has no lambdas — the whole reason this is a crossjoin.
+    expect(decodeURIComponent(p)).not.toContain("any(");
+  });
+
+  // Without this the crossjoin pairs every document with every line in the company.
+  test("always joins on DocEntry, even with a single criterion", () => {
+    for (const opts of [{ cardCode: "C001" }, { itemCode: "A" }]) {
+      expect(decodeURIComponent(docHistoryPath("Quotations", opts))).toContain(
+        "Quotations/DocEntry eq Quotations/DocumentLines/DocEntry and (",
+      );
+    }
   });
 
   test("throws without criteria", () => {
@@ -16,19 +28,19 @@ describe("docHistoryPath", () => {
   });
 });
 
+// Shape copied from a live b1s/v2 $crossjoin response: one flat pair per line.
+const pair = (d: Record<string, unknown>, l: Record<string, unknown>) => ({
+  Orders: d,
+  "Orders/DocumentLines": l,
+});
 const docs = {
   value: [
-    {
-      DocNum: 7, DocDate: "2026-06-01", CardCode: "C001", CardName: "Acme",
-      DocumentLines: [
-        { ItemCode: "A", ItemDescription: "item A", Quantity: 5, UnitPrice: 10 },
-        { ItemCode: "B", ItemDescription: "item B", Quantity: 1, UnitPrice: 99 },
-      ],
-    },
-    {
-      DocNum: 8, DocDate: "2026-07-01", CardCode: "C777", CardName: "Other",
-      DocumentLines: [{ ItemCode: "A", ItemDescription: "item A", Quantity: 2, UnitPrice: 12 }],
-    },
+    pair({ DocNum: 7, DocDate: "2026-06-01", CardCode: "C001", CardName: "Acme" },
+      { ItemCode: "A", ItemDescription: "item A", Quantity: 5, UnitPrice: 10 }),
+    pair({ DocNum: 7, DocDate: "2026-06-01", CardCode: "C001", CardName: "Acme" },
+      { ItemCode: "B", ItemDescription: "item B", Quantity: 1, UnitPrice: 99 }),
+    pair({ DocNum: 8, DocDate: "2026-07-01", CardCode: "C777", CardName: "Other" },
+      { ItemCode: "A", ItemDescription: "item A", Quantity: 2, UnitPrice: 12 }),
   ],
 };
 

@@ -153,7 +153,9 @@ export function ConfigProcessPage({ id }: { id: string }) {
       onTransitionEnd={(e) => { if (e.propertyName === "flex-basis") setAnimating(false); }}>
     <SplitterElement size={paneOpen ? "62%" : "100%"} minSize={480}
       style={{ transition: animating ? PANE_ANIM : undefined }}>
-    <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+    {/* flex:1 — SplitterElement is display:flex, so this must fill it; max-content here is 0
+        (absolute header + percentage-sized wizard) and the pane would render blank. */}
+    <div style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column" }}>
       {project.status === "requested" ? (
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", margin: "0.5rem 1rem" }}>
           <MessageStrip design="Critical" hideCloseButton style={{ flex: 1 }}>

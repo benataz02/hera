@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { authClient } from "./auth-client.ts";
 import { routeTree } from "./routeTree.gen.ts";
+import { RouteError, RouteNotFound } from "./components/Boundaries.tsx";
 
 const queryClient = new QueryClient();
 queryClient.setQueryDefaults(["session"], {
@@ -14,11 +15,14 @@ queryClient.setQueryDefaults(["session"], {
   staleTime: 1000 * 60 * 5, // 5 minutes
 });
 
-const router = createRouter({ 
+const router = createRouter({
   routeTree,
   context: {
     queryClient,
-  }
+  },
+  // Router-wide floor; a route can still set its own errorComponent/notFoundComponent.
+  defaultErrorComponent: RouteError,
+  defaultNotFoundComponent: RouteNotFound,
 });
 
 declare module "@tanstack/react-router" {

@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { z } from "zod";
+import { z } from "zod/v4";
 import { eq, sql } from "drizzle-orm";
 import { db, agentRequest, tenantIntegration, FilterCondZ, type EnabledEntity, type EntitySchema } from "@hera/db";
 import { outboxChannel, requestChannel, waitForNotify } from "@hera/db/listener";

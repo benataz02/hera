@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import {
-  Bar, Button, Card, CardHeader, DynamicPage, DynamicPageTitle, MessageStrip, ObjectStatus,
+  Card, CardHeader, DynamicPage, DynamicPageTitle, MessageStrip, ObjectStatus,
   Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, Text, Timeline, TimelineItem, Title,
+  Toolbar,
+  ToolbarButton,
 } from "@ui5/webcomponents-react";
 import "@ui5/webcomponents-icons/dist/create-form.js";
 import "@ui5/webcomponents-icons/dist/paper-plane.js";
@@ -56,13 +58,13 @@ export function PortalRequestSummary({ project, model, latestRun, onWithdraw, on
           heading={<Title level="H3">{project.name}</Title>}
           subheading={<Text>{model.name}</Text>}
           actionsBar={
-            <Bar design="Header" endContent={
+            <Toolbar design="Transparent">
               <>
-                {project.status === "requested" ? <Button disabled={busy} onClick={onWithdraw}>Withdraw</Button> : null}
-                {project.status === "rejected" ? <Button design="Emphasized" disabled={busy} onClick={onReopen}>Reopen as draft</Button> : null}
+                {project.status === "requested" ? <ToolbarButton disabled={busy} onClick={onWithdraw} text="Withdraw" /> : null}
+                {project.status === "rejected" ? <ToolbarButton design="Emphasized" disabled={busy} onClick={onReopen} text="Reopen as draft" /> : null}
                 <ObjectStatus state={st.state}>{st.text}</ObjectStatus>
               </>
-            } />
+            </Toolbar>
           }
         />
       }

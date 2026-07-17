@@ -145,6 +145,30 @@ export class SlError extends Error {
   }
 }
 
+// b1s/v2 (OData 4) error shape: {error:{code,message}} with message a plain string. Anything else
+// (HTML error page, reverse-proxy blurb) keeps the raw body — never collapse to statusText, that's
+// how a bare "Bad Request" reaches the browser with the cause discarded. Status + code are folded
+// into the message because sync.ts's msg() forwards only e.message to the cloud.
+// ponytail: v2 only — b1s/v1 wraps message as {lang,value}; add that branch if a v1 tenant appears.
+// Exported (like parseEdmx/buildListPath) so it has a self-check without a live B1.
+export function parseSlError(
+  status: number,
+  statusText: string,
+  raw: string,
+): { code: string | number | undefined; message: string } {
+  let code: string | number | undefined;
+  let detail = raw;
+  try {
+    const body = JSON.parse(raw) as { error?: { code?: string | number; message?: string } };
+    code = body.error?.code;
+    detail = body.error?.message || raw;
+  } catch {
+    // non-JSON body — raw it is
+  }
+  const label = [status, code != null && `code ${code}`].filter(Boolean).join(" ");
+  return { code, message: `B1 ${label}: ${detail || statusText}` };
+}
+
 export interface SlConfig {
   baseUrl: string; // .../b1s/v1 or /b1s/v2
   companyDb: string;
@@ -322,15 +346,9 @@ export class ServiceLayerClient {
   }
 
   private async toError(res: Response): Promise<SlError> {
-    let code: string | number | undefined;
-    let message = res.statusText;
-    try {
-      const body = (await res.json()) as { error?: { code?: string | number; message?: { value?: string } } };
-      code = body.error?.code;
-      message = body.error?.message?.value ?? message;
-    } catch {
-      // non-JSON body
-    }
+    const raw = (await res.text().catch(() => "")).slice(0, 2000);
+    const { code, message } = parseSlError(res.status, res.statusText, raw);
+    console.error(`[sl] ! ${message}`);
     return new SlError(res.status, code, message);
   }
 }
