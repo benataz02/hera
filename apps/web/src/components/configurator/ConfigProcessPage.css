@@ -1,7 +1,6 @@
-/* Full-height wizard: the wrapper owns the header overlay; step bars stick to the bottom
-   of the wizard scroll area. */
+/* Full-height wizard: a normal-flow header Bar sits above the wizard navigator (no overlay), and
+   step bars stick to the bottom of the wizard scroll area. */
 .hera-wizard-wrap {
-  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -10,20 +9,6 @@
 .hera-wizard {
   flex: 1;
   min-height: 0;
-}
-/* Reserve room on the right of the steps bar for the overlay header. */
-.hera-wizard::part(navigator) {
-  padding-inline-end: 24rem;
-}
-.hera-wizard-header {
-  position: absolute;
-  top: 0;
-  right: 1rem;
-  height: 4rem; /* matches the rendered navigator height; tune if the theme changes it */
-  z-index: 3;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
 }
 .hera-step-bar {
   position: sticky;

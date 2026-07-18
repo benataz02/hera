@@ -103,8 +103,7 @@ export function AppShell() {
   return (
     <NavigationLayout
       ref={navLayoutRef}
-      //mode={navMode}
-      mode="Collapsed"
+      mode={navMode}
       header={
         <>
           <ShellBar

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   BusyIndicator, CheckBox, Form, FormGroup, FormItem, Icon, Input, Label, MultiComboBox, MultiComboBoxItem,
-  ObjectStatus, Option, RadioButton, Select, StepInput, SuggestionItem,
+  ObjectStatus, Option, RadioButton, Select, StepInput, SuggestionItem, Text,
 } from "@ui5/webcomponents-react";
 import {
   propagate, refColumns, refKeyCols,
@@ -217,11 +217,29 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading }:
               {g.params.filter((k) => prop.visible[k]).map((k) => {
                 const p = model.parameters.find((x) => x.key === k);
                 if (!p) return null;
+                const dom: DomainOption[] = prop.domains[k] ?? [];
+                const eliminated = dom.filter((o) => o.eliminatedBy).length;
+                // MultiComboBox filters eliminated options out (no per-item disabled in UI5 v2), so
+                // unlike Select/Radio it can't show them greyed — explain the gap with a count instead.
+                const showEliminatedNote = p.ui === "multicombo" && eliminated > 0;
                 return (
-                  <FormItem key={k} labelContent={<Label>{p.label + (p.unit ? ` (${p.unit})` : "")}</Label>}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", width: "100%" }}>
-                      {control(k)}
-                      {prop.defaulted.has(k) ? <ObjectStatus state="Information">auto</ObjectStatus> : null}
+                  <FormItem key={k} labelContent={
+                    <Label>
+                      {p.label + (p.unit ? ` (${p.unit})` : "")}
+                      {p.help ? <Icon name="message-information" accessibleName={p.help} title={p.help}
+                        style={{ marginInlineStart: "0.375rem", cursor: "help", color: "var(--sapContent_IconColor)" }} /> : null}
+                    </Label>
+                  }>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.125rem", width: "100%" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", width: "100%" }}>
+                        {control(k)}
+                        {prop.defaulted.has(k) ? <ObjectStatus state="Information">auto</ObjectStatus> : null}
+                      </div>
+                      {showEliminatedNote ? (
+                        <Text style={{ fontSize: "0.75rem", color: "var(--sapContent_LabelColor)" }}>
+                          {eliminated} option{eliminated === 1 ? "" : "s"} unavailable due to rules
+                        </Text>
+                      ) : null}
                     </div>
                   </FormItem>
                 );

@@ -1,12 +1,14 @@
 import { useState } from "react";
 import {
-  Bar, Button, Dialog, Input, Label, List, ListItemStandard, MessageStrip,
+  Bar, Button, Dialog, IllustratedMessage, Input, Label, List, ListItemStandard, Menu, MenuItem, MessageStrip,
   MultiComboBox, MultiComboBoxItem, Option, Select, StepInput, Table, TableCell, TableHeaderCell,
   TableHeaderRow, TableRow, TableRowAction, Text, Title,
 } from "@ui5/webcomponents-react";
+import "@ui5/webcomponents-fiori/dist/illustrations/AddColumn.js";
 import { refKeyCols } from "@hera/config-engine";
 import type { Issue, LookupRef, ModelDef, Option as EngineOption, Param } from "@hera/config-engine";
 import { client } from "../../orpc.ts";
+import { confirm } from "../confirm.ts";
 import { ExprInput } from "./ExprInput.tsx";
 import { issueFor } from "./useDraftModel.ts";
 import { applyMove, canDrop, parseRowKey, placeParam, removeFromStructure, rowKeyOf, unplacedParams, type Placement, type RowRef } from "./structureOps.ts";
@@ -26,7 +28,10 @@ export function ParamsTab({ draft, update, issues, tables }: {
   draft: ModelDef; update: Update; issues: Issue[]; tables: Tables;
 }) {
   const [editing, setEditing] = useState<{ param: Param; isNew: boolean; place?: { s: number; g: number } } | null>(null);
-  const [titleEdit, setTitleEdit] = useState<string | null>(null);
+  // Inline title edit: keep the original so Escape can revert (edits apply live per keystroke).
+  const [titleEdit, setTitleEdit] = useState<{ key: string; original: string } | null>(null);
+  // Loose-param placement menu: which unplaced key is being placed, and the button that opened it.
+  const [placing, setPlacing] = useState<{ key: string; opener: string } | null>(null);
   // Keyed by stable section/group key (not row index) so collapse survives drag-reordering.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggle = (id: string) =>
@@ -76,6 +81,39 @@ export function ParamsTab({ draft, update, issues, tables }: {
       if (ref.kind === "param") out = { ...out, parameters: out.parameters.filter((p) => p.key !== ref.key) };
       return out;
     });
+
+  // Confirm only when a delete is destructive: a section/group with children (cascades), or a
+  // parameter (drops its whole definition). Empty sections/groups delete without a prompt.
+  const confirmDelete = async (ref: RowRef) => {
+    let message: string | null = null;
+    if (ref.kind === "section") {
+      const sec = draft.structure.sections[ref.s];
+      const groups = sec?.groups.length ?? 0;
+      const params = sec?.groups.reduce((n, g) => n + g.params.length, 0) ?? 0;
+      if (groups > 0) message = `Delete section "${sec?.title}" with its ${groups} group${groups === 1 ? "" : "s"}${params ? ` and ${params} placed parameter${params === 1 ? "" : "s"}` : ""}?`;
+    } else if (ref.kind === "group") {
+      const grp = draft.structure.sections[ref.s]?.groups[ref.g];
+      const params = grp?.params.length ?? 0;
+      if (params > 0) message = `Delete group "${grp?.title}" and unplace its ${params} parameter${params === 1 ? "" : "s"}?`;
+    } else {
+      const p = draft.parameters.find((x) => x.key === ref.key);
+      message = `Delete parameter "${p?.label || ref.key}"? This removes its definition from the model.`;
+    }
+    if (message === null || await confirm({ title: "Delete", message, actionText: "Delete", destructive: true }))
+      deleteRow(ref);
+  };
+
+  const setTitle = (ref: RowRef, title: string) =>
+    update((d) => ({
+      ...d,
+      structure: {
+        sections: d.structure.sections.map((s, si) => {
+          if (ref.kind === "section") return si === ref.s ? { ...s, title } : s;
+          if (ref.kind === "group") return si === ref.s ? { ...s, groups: s.groups.map((g, gi) => (gi === ref.g ? { ...g, title } : g)) } : s;
+          return s;
+        }),
+      },
+    }));
 
   const addKey = (base: string, taken: string[]) => {
     let k = base, n = 2;
@@ -138,7 +176,10 @@ export function ParamsTab({ draft, update, issues, tables }: {
       />
 
       <Table
-        noDataText="Add a section to start structuring the form."
+        noData={
+          <IllustratedMessage name="AddColumn" design="Dot" titleText="No structure yet"
+            subtitleText="Add a section to start structuring the form, then add groups and parameters." />
+        }
         rowActionCount={2}
         onMoveOver={(e) => {
           const src = (e.detail.source.element as HTMLElement | null)?.getAttribute("row-key");
@@ -165,7 +206,7 @@ export function ParamsTab({ draft, update, issues, tables }: {
             return;
           }
           const ref = parseRowKey(rowKey);
-          if (act === "delete") deleteRow(ref);
+          if (act === "delete") void confirmDelete(ref);
           else addUnder(ref);
         }}
         onRowClick={(e) => {
@@ -174,7 +215,10 @@ export function ParamsTab({ draft, update, issues, tables }: {
             const p = draft.parameters.find((x) => x.key === ref.key);
             if (p) setEditing({ param: structuredClone(p), isNew: false });
           } else {
-            setTitleEdit(rowKeyOf(ref));
+            const title = ref.kind === "section"
+              ? draft.structure.sections[ref.s]?.title ?? ""
+              : draft.structure.sections[ref.s]?.groups[ref.g]?.title ?? "";
+            setTitleEdit({ key: rowKeyOf(ref), original: title });
           }
         }}
         headerRow={
@@ -214,24 +258,16 @@ export function ParamsTab({ draft, update, issues, tables }: {
                       tooltip={collapsed.has(r.collapseId) ? "Expand" : "Collapse"}
                       onClick={(e) => { e.stopPropagation(); toggle(r.collapseId!); }} />
                   ) : null}
-                  {titleEdit === r.key && r.ref.kind !== "param" ? (
+                  {titleEdit?.key === r.key && r.ref.kind !== "param" ? (
                     <Input
                       value={r.label}
                       onBlur={() => setTitleEdit(null)}
-                      onInput={(e) => {
-                        const title = e.target.value;
-                        update((d) => ({
-                          ...d,
-                          structure: {
-                            sections: d.structure.sections.map((s, si) => {
-                              if (r.ref.kind === "section") return si === r.ref.s ? { ...s, title } : s;
-                              return si === (r.ref as { s: number }).s
-                                ? { ...s, groups: s.groups.map((g, gi) => (gi === (r.ref as { g: number }).g ? { ...g, title } : g)) }
-                                : s;
-                            }),
-                          },
-                        }));
+                      // Enter commits (edits already applied live); Escape reverts to the original title.
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") setTitleEdit(null);
+                        else if (e.key === "Escape") { setTitle(r.ref, titleEdit.original); setTitleEdit(null); }
                       }}
+                      onInput={(e) => setTitle(r.ref, e.target.value)}
                     />
                   ) : (
                     <Text style={{ fontWeight: r.depth === 0 ? "bold" : "normal" }}>{r.label}</Text>
@@ -247,8 +283,46 @@ export function ParamsTab({ draft, update, issues, tables }: {
 
       {loose.length ? (
         <MessageStrip design="Critical" hideCloseButton>
-          Not shown on the form: {loose.join(", ")} — drag them into a group or edit them to place them.
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.375rem" }}>
+            <span>Not shown on the form — place each into a group (or drag it in above):</span>
+            {loose.map((k) => (
+              <Button key={k} id={`place-${k}`} icon="add" design="Transparent"
+                onClick={() => setPlacing({ key: k, opener: `place-${k}` })}>
+                {draft.parameters.find((p) => p.key === k)?.label || k}
+              </Button>
+            ))}
+          </div>
         </MessageStrip>
+      ) : null}
+
+      {placing ? (
+        <Menu open opener={placing.opener} onClose={() => setPlacing(null)}
+          onItemClick={(e) => {
+            const el = e.detail.item as HTMLElement;
+            const s = Number(el.dataset.s);
+            const g = Number(el.dataset.g);
+            if (!Number.isNaN(s) && !Number.isNaN(g)) {
+              const key = placing.key;
+              update((d) => placeParam(d, key, s, g));
+            }
+            setPlacing(null);
+          }}>
+          {draft.structure.sections.length === 0 ? (
+            <MenuItem text="Add a section first" disabled />
+          ) : (
+            draft.structure.sections.map((sec, si) => (
+              <MenuItem key={si} text={sec.title || "(untitled section)"}>
+                {sec.groups.length ? (
+                  sec.groups.map((g, gi) => (
+                    <MenuItem key={gi} text={g.title || "(untitled group)"} data-s={si} data-g={gi} />
+                  ))
+                ) : (
+                  <MenuItem text="No groups — add one first" disabled />
+                )}
+              </MenuItem>
+            ))
+          )}
+        </Menu>
       ) : null}
 
       {editing ? (
@@ -477,7 +551,7 @@ function ManualOptions({ ref_, onChange }: {
         <div key={i} style={{ display: "flex", gap: "0.5rem" }}>
           <Input placeholder="value" value={String(o.value ?? "")} onInput={(e) => setOpt(i, { value: e.target.value })} />
           <Input placeholder="label (optional)" value={o.label ?? ""} onInput={(e) => setOpt(i, { label: e.target.value })} />
-          <Button icon="delete" design="Transparent"
+          <Button icon="delete" design="Transparent" tooltip="Remove option" accessibleName="Remove option"
             onClick={() => onChange({ ...ref_, options: ref_.options.filter((_, j) => j !== i) })} />
         </div>
       ))}

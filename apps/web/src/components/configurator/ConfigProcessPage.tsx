@@ -7,12 +7,14 @@ import {
 import { propagate, type Entries } from "@hera/config-engine";
 import type { Val } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
+import { toast } from "../toast.ts";
 import { cleanOverrides, statusUi, toggleSelection, type Sel } from "./runView.ts";
 import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
 import { ExtractPanel } from "./ExtractPanel.tsx";
 import { BatchEditor } from "./BatchEditor.tsx";
 import { StepCandidatesReview } from "./StepCandidatesReview.tsx";
 import { HistoryPane } from "./HistoryPane.tsx";
+import { ToBeDone } from "../Boundaries.tsx";
 import "./ConfigProcessPage.css";
 
 // The configuration process: 3 steps, gated left to right. Step 1 (Configure) works on live
@@ -54,10 +56,13 @@ export function ConfigProcessPage({ id }: { id: string }) {
         setSel([]); // a new run invalidates any previous candidate picks
         invalidate();
         setStep(1);
+        toast(`${r.candidateCount} candidate${r.candidateCount === 1 ? "" : "s"} calculated`);
       },
     }),
   );
-  const select = useMutation(orpc.configs.select.mutationOptions({ onSuccess: invalidate }));
+  const select = useMutation(orpc.configs.select.mutationOptions({
+    onSuccess: () => { invalidate(); toast("Selection saved"); },
+  }));
 
   if (q.isPending) return <BusyIndicator active delay={0} style={{ width: "100%", marginTop: "4rem" }} />;
   if (q.error)
@@ -88,10 +93,11 @@ export function ConfigProcessPage({ id }: { id: string }) {
   const batchesDirty = JSON.stringify(batches) !== JSON.stringify(project.batches);
   const staleRun = !!latestRun && (project.status === "draft" || entriesDirty || batchesDirty);
 
-  const goto = (i: number) => {
-    if (step === 0 && i !== 0 && (entriesDirty || batchesDirty)) update.mutate({ id, entries, batches });
-    setStep(i);
-  };
+  // The Candidates step is disabled while inputs are dirty/stale (see WizardStep below), so the only
+  // navigation the user can trigger here is back to Configure — which needs no save. Forward motion
+  // goes exclusively through Calculate (which awaits the update), so we never fire-and-forget a save
+  // that would flip status to "draft" and blank the step the user just landed on.
+  const goto = (i: number) => setStep(i);
   const calculate = async () => {
     try {
       if (entriesDirty || batchesDirty) await update.mutateAsync({ id, entries, batches });
@@ -111,6 +117,8 @@ export function ConfigProcessPage({ id }: { id: string }) {
   };
 
   const configureBody = (
+    <BusyIndicator active={update.isPending || run.isPending} delay={0}
+      text="Calculating candidates — pricing up to 200 combinations…" style={{ display: "block" }}>
     <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
       {lookups.error ? (
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -146,6 +154,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
           </Button>
         } />
     </div>
+    </BusyIndicator>
   );
 
   return (
@@ -166,27 +175,33 @@ export function ConfigProcessPage({ id }: { id: string }) {
         </div>
       ) : null}
       <div className="hera-wizard-wrap">
-        <div className="hera-wizard-header">
-          <Title level="H5">{project.name}</Title>
-          <Text>{model.name}</Text>
-          <ObjectStatus state={statusUi[project.status].state}>{statusUi[project.status].text}</ObjectStatus>
-          <ToggleButton icon="history" pressed={paneOpen} style={{ marginLeft: "auto" }}
-            onClick={() => { setAnimating(true); setPaneOverride(!paneOpen); }}>
-            History
-          </ToggleButton>
-        </div>
+        <Bar
+          startContent={
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+              <Title level="H5">{project.name}</Title>
+              <Text>{model.name}</Text>
+              <ObjectStatus state={statusUi[project.status].state}>{statusUi[project.status].text}</ObjectStatus>
+            </div>
+          }
+          endContent={
+            <ToggleButton icon="history" pressed={paneOpen}
+              onClick={() => { setAnimating(true); setPaneOverride(!paneOpen); }}>
+              History
+            </ToggleButton>
+          }
+        />
         <Wizard className="hera-wizard" contentLayout="SingleStep"
           onStepChange={(e) => goto(Number((e.detail.step as HTMLElement).dataset.idx))}>
           <WizardStep titleText="Configure" icon="settings" data-idx="0" selected={step === 0}>
             {configureBody}
           </WizardStep>
-          <WizardStep titleText="Candidates" icon="grid" data-idx="1" selected={step === 1} disabled={!runReady}>
+          <WizardStep titleText="Candidates" icon="grid" data-idx="1" selected={step === 1} disabled={!runReady || staleRun}>
             {runReady && latestRun ? (
               <StepCandidatesReview model={latestRun.modelSnapshot} lookups={latestRun.lookupSnapshot}
                 runEntries={latestRun.entries} candidates={latestRun.candidates}
                 selection={selection}
-                onToggle={(i, b) => setSel(toggleSelection(selection, i, b))}
-                onChange={setSel}
+                onToggle={(i, b) => { if (select.isSuccess) select.reset(); setSel(toggleSelection(selection, i, b)); }}
+                onChange={(next) => { if (select.isSuccess) select.reset(); setSel(next); }}
                 capped={runMeta?.capped ?? latestRun.candidates.length >= 200}
                 widest={runMeta?.widest}
                 onSave={saveSelection} saving={select.isPending}
@@ -194,7 +209,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
             ) : null}
           </WizardStep>
           <WizardStep titleText="Create quote" icon="sales-quote" data-idx="2" disabled>
-            <Text>Available after review — coming in phase 5.</Text>
+            <ToBeDone what="Quote creation" />
           </WizardStep>
         </Wizard>
       </div>

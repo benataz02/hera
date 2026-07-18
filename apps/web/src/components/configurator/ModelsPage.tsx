@@ -2,12 +2,15 @@ import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Bar, Button, BusyIndicator, Dialog, DynamicPage, DynamicPageTitle, Input, Label, MessageStrip,
+  Bar, Button, BusyIndicator, Dialog, DynamicPage, DynamicPageTitle, IllustratedMessage, Input, Label, MessageStrip,
   Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, TableRowAction, Text, Title,
   Toolbar, ToolbarButton,
 } from "@ui5/webcomponents-react";
+import "@ui5/webcomponents-fiori/dist/illustrations/AddColumn.js";
 import type { ModelDef } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
+import { confirm } from "../confirm.ts";
+import { toast } from "../toast.ts";
 
 // Minimal valid model a new draft starts from; passes checkModel (unitCost is in pricing scope).
 export function starterModel(name: string): ModelDef {
@@ -41,7 +44,14 @@ export function ModelsPage() {
       },
     }),
   );
-  const remove = useMutation(orpc.models.remove.mutationOptions({ onSuccess: invalidate }));
+  const remove = useMutation(orpc.models.remove.mutationOptions({
+    onSuccess: () => { invalidate(); toast("Model deleted"); },
+  }));
+  const confirmRemove = async (id: string, name: string) => {
+    // The server still refuses deleting in-use models; this guards accidental clicks on unused ones.
+    if (await confirm({ title: "Delete model", message: `Delete "${name}"? This can't be undone.`, actionText: "Delete", destructive: true }))
+      remove.mutate({ id });
+  };
 
   if (models.isPending) return <BusyIndicator active delay={0} style={{ width: "100%", marginTop: "4rem" }} />;
 
@@ -62,16 +72,19 @@ export function ModelsPage() {
       {remove.error ? <MessageStrip design="Negative" hideCloseButton>{remove.error.message}</MessageStrip> : null}
 
       <Table
-        noDataText="No models yet — create one to start."
+        noData={
+          <IllustratedMessage name="AddColumn" design="Dot" titleText="No models yet"
+            subtitleText="Create a configurator model to define parameters, rules and pricing." />
+        }
         rowActionCount={1}
         onRowClick={(e) => {
           const id = (e.detail.row as HTMLElement).dataset.id;
           if (id) navigate({ to: "/models/$id", params: { id } });
         }}
         onRowActionClick={(e) => {
-          const id = ((e.detail.row as unknown) as HTMLElement).dataset.id;
-          // ponytail: no confirm dialog — server refuses deletion of in-use models anyway
-          if (id) remove.mutate({ id });
+          const el = (e.detail.row as unknown) as HTMLElement;
+          const id = el.dataset.id;
+          if (id) void confirmRemove(id, el.dataset.name ?? "this model");
         }}
         headerRow={
           <TableHeaderRow sticky>
@@ -81,7 +94,7 @@ export function ModelsPage() {
         }
       >
         {(models.data ?? []).map((m) => (
-          <TableRow key={m.id} rowKey={m.id} data-id={m.id} interactive
+          <TableRow key={m.id} rowKey={m.id} data-id={m.id} data-name={m.name} interactive
             actions={<TableRowAction icon="delete" text="Delete" />}>
             <TableCell><Text>{m.name}</Text></TableCell>
             <TableCell><Text>{new Date(m.updatedAt).toLocaleString()}</Text></TableCell>

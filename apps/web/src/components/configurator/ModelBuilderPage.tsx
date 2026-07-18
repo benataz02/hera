@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useBlocker } from "@tanstack/react-router";
 import {
   Bar, Button, BusyIndicator, MessageStrip,
   ObjectPage, ObjectPageSection, ObjectPageTitle, ObjectStatus,
@@ -7,6 +8,7 @@ import {
 } from "@ui5/webcomponents-react";
 import type { Entries, Issue, ModelDef } from "@hera/config-engine";
 import { tabOf, useDraftModel, type TabKey } from "./useDraftModel.ts";
+import { confirm } from "../confirm.ts";
 import { SettingsTab } from "./SettingsTab.tsx";
 import { ParamsTab } from "./ParamsTab.tsx";
 import { RulesTab } from "./RulesTab.tsx";
@@ -41,6 +43,21 @@ export function ModelBuilderPage({ id }: { id: string }) {
     setAnimating(true);
     setPreviewOpen((v) => !v);
   };
+
+  // Guard against losing an unsaved draft: intercept in-app navigation (including switching models,
+  // which remounts via key={id}) and confirm; enableBeforeUnload covers hard reload / tab close.
+  useBlocker({
+    shouldBlockFn: async () => {
+      if (!m.dirty || m.saving) return false;
+      return !(await confirm({
+        title: "Discard changes?",
+        message: "This model has unsaved changes. Leave without saving?",
+        actionText: "Discard",
+        destructive: true,
+      }));
+    },
+    enableBeforeUnload: () => m.dirty,
+  });
 
   // The preview test-drives the draft with the real engine. While the draft has errors we keep
   // rendering the last valid one so a single bad keystroke doesn't blank the form.
@@ -79,8 +96,12 @@ export function ModelBuilderPage({ id }: { id: string }) {
         style={{ transition: animating ? PANE_ANIM : undefined }}
       >
 
-          {m.saveError && m.serverIssues.length === 0 ? (
-            <MessageStrip design="Negative" hideCloseButton>{m.saveError.message}</MessageStrip>
+          {m.saveError ? (
+            <MessageStrip design="Negative" hideCloseButton>
+              {m.serverIssues.length > 0
+                ? `Save failed — ${m.serverIssues.length} issue${m.serverIssues.length === 1 ? "" : "s"}; see the tab counts.`
+                : m.saveError.message}
+            </MessageStrip>
           ) : null}
 
           <ObjectPage
