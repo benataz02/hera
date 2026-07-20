@@ -66,7 +66,7 @@ export async function extractSuggestions(model: { definition: ModelDef }, lookup
       message: "The extraction service returned an unreadable result. Retry, or enter the values manually.",
     });
   }
-  return { suggestions: validateSuggestions(model.definition, lookups.domains, raw) };
+  return { suggestions: validateSuggestions(model.definition, lookups, {}, raw) };
 }
 
 export const extractionRouter = {

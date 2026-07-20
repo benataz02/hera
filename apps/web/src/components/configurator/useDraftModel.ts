@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { checkModel, type Issue, type ModelDef } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
+import { toast } from "../toast.ts";
 
 export type TabKey = "params" | "rules" | "bom" | "routing" | "tables" | "history" | "settings";
 
@@ -38,9 +39,13 @@ export function useDraftModel(id: string) {
   }, [rec.data, portalMeta]);
 
   const tables = tablesQ.data ?? [];
+  // Commit model: dialogs (ParamDialog, ComboTableDialog) buffer edits and commit on OK; inline
+  // editors (RulesTab, SettingsTab, title edits) mutate this draft directly per keystroke. Validation
+  // runs against a deferred draft so checkModel lags fast typing instead of blocking every keystroke.
+  const deferredDraft = useDeferredValue(draft);
   const issues = useMemo(
-    () => (draft ? checkModel(draft, tables.map((t) => ({ name: t.name, columns: (t.columns as { key: string }[]).map((c) => c.key) }))) : []),
-    [draft, tables],
+    () => (deferredDraft ? checkModel(deferredDraft, tables.map((t) => ({ name: t.name, columns: (t.columns as { key: string }[]).map((c) => c.key) }))) : []),
+    [deferredDraft, tables],
   );
 
   const saveMut = useMutation(
@@ -51,6 +56,7 @@ export function useDraftModel(id: string) {
         qc.invalidateQueries({ queryKey: orpc.models.list.queryOptions().queryKey });
         // save RETURNs the saved row, so seed the cache with it instead of refetching models.get.
         qc.setQueryData(orpc.models.get.queryOptions({ input: { id } }).queryKey, row);
+        toast("Model saved");
       },
       onError: (e) => {
         // models.save rejects invalid definitions with BAD_REQUEST + data.issues (span Issues).

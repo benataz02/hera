@@ -2,14 +2,17 @@ import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Bar, Button, BusyIndicator, Dialog, DynamicPage, DynamicPageTitle, Input, Label, MessageStrip,
+  Bar, Button, BusyIndicator, Dialog, DynamicPage, DynamicPageTitle, IllustratedMessage, Input, Label, MessageStrip,
   ObjectStatus, Option, Select, SegmentedButton, SegmentedButtonItem, Table, TableCell, TableHeaderCell,
   TableHeaderRow, TableRow, TableRowAction, Text, Title,
   Toolbar,
   ToolbarButton,
 } from "@ui5/webcomponents-react";
+import "@ui5/webcomponents-fiori/dist/illustrations/NoData.js";
 import { orpc } from "../../orpc.ts";
 import { statusUi } from "./runView.ts";
+import { confirm } from "../confirm.ts";
+import { toast } from "../toast.ts";
 
 export function ConfigsPage() {
   const navigate = useNavigate();
@@ -29,12 +32,21 @@ export function ConfigsPage() {
       },
     }),
   );
-  const remove = useMutation(orpc.configs.remove.mutationOptions({ onSuccess: invalidate }));
+  const remove = useMutation(orpc.configs.remove.mutationOptions({
+    onSuccess: () => { invalidate(); toast("Configuration deleted"); },
+  }));
+  const confirmRemove = async (id: string, name: string) => {
+    if (await confirm({ title: "Delete configuration", message: `Delete "${name}"? This also removes its calculation runs and can't be undone.`, actionText: "Delete", destructive: true }))
+      remove.mutate({ id });
+  };
 
-  const [filter, setFilter] = useState<"all" | "requested" | "draft" | "quoted">("all");
+  const [filter, setFilter] = useState<"all" | "requested" | "inprogress" | "quoted" | "rejected">("all");
   const all = configs.data ?? [];
   const requestedCount = all.filter((c) => c.status === "requested").length;
-  const bucket = (s: string) => (s === "requested" ? "requested" : s === "quoted" ? "quoted" : "draft");
+  const rejectedCount = all.filter((c) => c.status === "rejected").length;
+  // draft + calculated are both "in progress"; requested/quoted/rejected are terminal-ish states.
+  const bucket = (s: string) =>
+    s === "requested" ? "requested" : s === "quoted" ? "quoted" : s === "rejected" ? "rejected" : "inprogress";
   const rank = (s: string) => (s === "requested" ? 0 : 1); // requested floats to the top
   const shown = all
     .filter((c) => filter === "all" || bucket(c.status) === filter)
@@ -68,21 +80,26 @@ export function ConfigsPage() {
         setFilter(((e.detail.selectedItems[0] as HTMLElement).dataset.f ?? "all") as typeof filter)}>
         <SegmentedButtonItem data-f="all" selected={filter === "all"}>All</SegmentedButtonItem>
         <SegmentedButtonItem data-f="requested" selected={filter === "requested"}>Requested ({requestedCount})</SegmentedButtonItem>
-        <SegmentedButtonItem data-f="draft" selected={filter === "draft"}>Draft</SegmentedButtonItem>
+        <SegmentedButtonItem data-f="inprogress" selected={filter === "inprogress"}>In progress</SegmentedButtonItem>
         <SegmentedButtonItem data-f="quoted" selected={filter === "quoted"}>Quoted</SegmentedButtonItem>
+        <SegmentedButtonItem data-f="rejected" selected={filter === "rejected"}>Rejected ({rejectedCount})</SegmentedButtonItem>
       </SegmentedButton>
 
       <Table
-        noDataText="No configurations yet — create one to start."
+        noData={
+          <IllustratedMessage name="NoData" design="Dot"
+            titleText={all.length === 0 ? "No configurations yet" : "Nothing in this view"}
+            subtitleText={all.length === 0 ? "Create a configuration to start pricing a build." : "Try a different filter above."} />
+        }
         rowActionCount={1}
         onRowClick={(e) => {
           const id = (e.detail.row as HTMLElement).dataset.id;
           if (id) navigate({ to: "/configs/$id", params: { id } });
         }}
         onRowActionClick={(e) => {
-          const id = ((e.detail.row as unknown) as HTMLElement).dataset.id;
-          // ponytail: no confirm dialog, matching ModelsPage
-          if (id) remove.mutate({ id });
+          const el = (e.detail.row as unknown) as HTMLElement;
+          const id = el.dataset.id;
+          if (id) void confirmRemove(id, el.dataset.name ?? "this configuration");
         }}
         headerRow={
           <TableHeaderRow sticky>
@@ -95,7 +112,7 @@ export function ConfigsPage() {
         }
       >
         {shown.map((c) => (
-          <TableRow key={c.id} rowKey={c.id} data-id={c.id} interactive
+          <TableRow key={c.id} rowKey={c.id} data-id={c.id} data-name={c.name} interactive
             actions={<TableRowAction icon="delete" text="Delete" />}>
             <TableCell><Text>{c.name}</Text></TableCell>
             <TableCell><Text>{c.modelName}</Text></TableCell>

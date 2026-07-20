@@ -9,6 +9,8 @@ import "@ui5/webcomponents-fiori/dist/illustrations/NoData.js";
 import type { ModelDef, Val } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
 import { QueryCard } from "./QueryEditor.tsx";
+import { confirm } from "../confirm.ts";
+import { toast } from "../toast.ts";
 
 type Col = { key: string; label: string; type: "string" | "number" | "boolean" };
 // config_table cells are scalar (ValZ), unlike the full Val union which includes string[].
@@ -29,15 +31,27 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
   const [draft, setDraft] = useState<Draft | null>(null); // tenant-table editor (existing)
   const [qIdx, setQIdx] = useState<number | null>(null); // queryTables editor
 
-  const save = useMutation(orpc.models.tables.save.mutationOptions({ onSuccess: invalidate }));
+  const save = useMutation(orpc.models.tables.save.mutationOptions({
+    onSuccess: () => { invalidate(); toast("Table saved"); },
+  }));
   const remove = useMutation(
     orpc.models.tables.remove.mutationOptions({
       onSuccess: () => {
         invalidate();
         setDraft(null);
+        toast("Table deleted");
       },
     }),
   );
+  const confirmRemoveTable = async (id: string, name: string) => {
+    // Lookup tables are their own server rows shared across models — deletion is immediate and irreversible.
+    if (await confirm({ title: "Delete lookup table", message: `Delete table "${name}"? Models that reference it by name will fail their lookups. This can't be undone.`, actionText: "Delete", destructive: true }))
+      remove.mutate({ id });
+  };
+  const confirmRemoveQuery = async (name: string, run: () => void) => {
+    if (await confirm({ title: "Delete query", message: `Delete query "${name}" from this model? It won't persist until you save the model.`, actionText: "Delete", destructive: true }))
+      run();
+  };
 
   if (listQ.isPending) return <BusyIndicator active delay={0} style={{ width: "100%", marginTop: "2rem" }} />;
 
@@ -117,7 +131,9 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
       {draft ? (
         <div style={EDITOR}>
           {save.error ? <MessageStrip design="Negative" hideCloseButton>{save.error.message}</MessageStrip> : null}
-          {save.isSuccess ? <MessageStrip design="Positive" hideCloseButton>Saved.</MessageStrip> : null}
+          <MessageStrip design="Information" hideCloseButton>
+            Lookup tables are stored on their own and save immediately — the model's Save button doesn't cover them.
+          </MessageStrip>
 
           <div style={{ display: "flex", gap: "0.75rem", alignItems: "end" }}>
             <div style={{ flex: 1 }}>
@@ -129,7 +145,7 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
               {save.isPending ? "Saving…" : "Save table"}
             </Button>
             {draft.id ? (
-              <Button design="Negative" disabled={remove.isPending} onClick={() => remove.mutate({ id: draft.id! })}>Delete</Button>
+              <Button design="Negative" disabled={remove.isPending} onClick={() => void confirmRemoveTable(draft.id!, draft.name)}>Delete</Button>
             ) : null}
           </div>
 
@@ -202,15 +218,18 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
               update((d) => ({ ...d, queryTables: d.queryTables.map((q, i) => (i === qIdx ? { ...q, ...patch } : q)) }));
             return (
               <>
+                <MessageStrip design="Information" hideCloseButton>
+                  Queries are part of the model — edits here are saved with the model's Save button.
+                </MessageStrip>
                 <div style={{ display: "flex", gap: "0.75rem", alignItems: "end" }}>
                   <div style={{ flex: 1 }}>
                     <Label required>Name (referenced by parameter domains and LOOKUP)</Label>
                     <Input style={{ width: "100%" }} value={qt.name} onInput={(e) => setQt({ name: e.target.value })} />
                   </div>
-                  <Button design="Negative" onClick={() => {
+                  <Button design="Negative" onClick={() => void confirmRemoveQuery(qt.name, () => {
                     update((d) => ({ ...d, queryTables: d.queryTables.filter((_, i) => i !== qIdx) }));
                     setQIdx(null);
-                  }}>Delete</Button>
+                  })}>Delete</Button>
                 </div>
 
                 <QueryCard key={qIdx} target={qt.target} path={qt.path} columns={qt.columns} onChange={setQt} />

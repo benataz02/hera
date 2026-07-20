@@ -1,24 +1,29 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Bar, Button, BusyIndicator, Dialog, Form, FormGroup, FormItem, Label, MessageStrip,
-  ObjectStatus, SplitterElement, SplitterLayout, Text, TextArea, Title, ToggleButton, Wizard, WizardStep,
+  Bar, Button, BusyIndicator, Dialog, Label, MessageStrip, ObjectPage, ObjectPageHeader, ObjectPageSection,
+  ObjectPageSubSection, ObjectPageTitle, ObjectStatus, SplitterElement, SplitterLayout,
+  Text, TextArea, Title, ToggleButton, Toolbar,
 } from "@ui5/webcomponents-react";
 import { propagate, type Entries } from "@hera/config-engine";
 import type { Val } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
+import { toast } from "../toast.ts";
 import { cleanOverrides, statusUi, toggleSelection, type Sel } from "./runView.ts";
 import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
 import { ExtractPanel } from "./ExtractPanel.tsx";
-import { BatchEditor } from "./BatchEditor.tsx";
 import { StepCandidatesReview } from "./StepCandidatesReview.tsx";
 import { HistoryPane } from "./HistoryPane.tsx";
-import "./ConfigProcessPage.css";
+import { ToBeDone } from "../Boundaries.tsx";
+import {
+  buildCalculationUpdate, CONFIG_PROCESS_STEP_IDS, initialConfigProcessStep, POST_RUN_STEP,
+} from "./configProcessState.ts";
 
-// The configuration process: 3 steps, gated left to right. Step 1 (Configure) works on live
-// model + lookups and includes the batch quantities; step 2 (Candidates) renders ONLY from the
-// immutable run snapshot, with the editable outputs of every selected cell inline. Local state
-// overlays server state (override ?? server value) until a mutation persists it.
+// The configuration process as an ObjectPage in IconTabBar mode: each step (
+// Configure → Candidates → Create quote) is an ObjectPageSection shown as a tab, gated left to
+// right like the old wizard (locked steps are disabled tabs); the config model's sections render
+// as ObjectPageSubSections inside Configure. The floating footer carries the step actions.
+// Local state overlays server state (override ?? server value) until a mutation persists it.
 export function ConfigProcessPage({ id }: { id: string }) {
   const qc = useQueryClient();
   const q = useQuery(orpc.configs.get.queryOptions({ input: { id } }));
@@ -53,11 +58,14 @@ export function ConfigProcessPage({ id }: { id: string }) {
         setRunMeta({ capped: r.capped, widest: r.widest });
         setSel([]); // a new run invalidates any previous candidate picks
         invalidate();
-        setStep(1);
+        setStep(POST_RUN_STEP);
+        toast(`${r.candidateCount} candidate${r.candidateCount === 1 ? "" : "s"} calculated`);
       },
     }),
   );
-  const select = useMutation(orpc.configs.select.mutationOptions({ onSuccess: invalidate }));
+  const select = useMutation(orpc.configs.select.mutationOptions({
+    onSuccess: () => { invalidate(); toast("Selection saved"); },
+  }));
 
   if (q.isPending) return <BusyIndicator active delay={0} style={{ width: "100%", marginTop: "4rem" }} />;
   if (q.error)
@@ -68,7 +76,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
   const batches = batchesOverride ?? project.batches;
   const selection = selOverride ?? latestRun?.selection ?? [];
   const runReady = !!latestRun && project.status !== "draft";
-  const step = stepOverride ?? (project.status === "draft" ? 0 : 1);
+  const step = stepOverride ?? initialConfigProcessStep(project.status);
 
   const paneOpen = paneOverride ?? !!model.definition.history;
   const PANE_ANIM = "flex-basis 0.28s cubic-bezier(0.2, 0, 0, 1)";
@@ -88,13 +96,17 @@ export function ConfigProcessPage({ id }: { id: string }) {
   const batchesDirty = JSON.stringify(batches) !== JSON.stringify(project.batches);
   const staleRun = !!latestRun && (project.status === "draft" || entriesDirty || batchesDirty);
 
-  const goto = (i: number) => {
-    if (step === 0 && i !== 0 && (entriesDirty || batchesDirty)) update.mutate({ id, entries, batches });
-    setStep(i);
-  };
-  const calculate = async () => {
+  // The Candidates tab is disabled while inputs are dirty/stale (see tabRef on its section),
+  // so the only navigation the user can trigger here is back to Configure — which needs no save.
+  // Forward motion goes exclusively through Calculate (which awaits the update), so we never
+  // fire-and-forget a save that would flip status to "draft" and blank the step just landed on.
+  const goto = (i: number) => setStep(i);
+  const calculate = async (calculationEntries: Entries = entries) => {
     try {
-      if (entriesDirty || batchesDirty) await update.mutateAsync({ id, entries, batches });
+      const updateInput = buildCalculationUpdate(
+        id, project.entries, calculationEntries, project.batches, batches,
+      );
+      if (updateInput) await update.mutateAsync(updateInput);
       run.mutate({ projectId: id });
     } catch {
       /* update.error renders below */
@@ -110,42 +122,67 @@ export function ConfigProcessPage({ id }: { id: string }) {
     });
   };
 
-  const configureBody = (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-      {lookups.error ? (
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <MessageStrip design="Negative" hideCloseButton style={{ flex: 1 }}>{lookups.error.message}</MessageStrip>
-          <Button onClick={() => lookups.refetch()}>Retry</Button>
+  const calcBusy = update.isPending || run.isPending;
+
+  const configureFooter = (
+    <Bar design="FloatingFooter"
+      startContent={
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <ConsistencyStatus model={model.definition} lookups={lookups.data} entries={entries} />
+          {staleRun ? <ObjectStatus state="Critical">inputs changed — calculate again</ObjectStatus> : null}
         </div>
-      ) : null}
-      <ExtractPanel modelId={project.modelId} model={model.definition} entries={entries} onChange={setEntries} />
-      <ConfiguratorForm model={model.definition} lookups={lookups.data} entries={entries} onChange={setEntries}
-        loading={lookups.isFetching} />
-      <Form headerText="Batch quantities" headerLevel="H5" labelSpan="S12 M4" layout="S1 M1 L1 XL1">
-        <FormGroup>
-          <FormItem labelContent={<Label>Quantities</Label>}>
-            <BatchEditor batches={batches} onChange={setBatches} />
-          </FormItem>
-        </FormGroup>
-      </Form>
-      {update.error || run.error ? (
-        <MessageStrip design="Negative" hideCloseButton>{update.error?.message ?? run.error?.message}</MessageStrip>
-      ) : null}
-      <Bar design="FloatingFooter" className="hera-step-bar"
-        startContent={
-          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-            <ConsistencyStatus model={model.definition} lookups={lookups.data} entries={entries} />
-            {staleRun ? <ObjectStatus state="Critical">inputs changed — calculate again</ObjectStatus> : null}
+      }
+      endContent={
+        <Button design="Emphasized"
+          disabled={conflicted || lookups.isPending || batches.length === 0 || calcBusy}
+          onClick={() => void calculate()}>
+          {calcBusy ? "Calculating…" : "Calculate"}
+        </Button>
+      } />
+  );
+
+  const candidatesFooter = (
+    <Bar design="FloatingFooter"
+      startContent={
+        <Text>
+          {selection.length} quotation line{selection.length === 1 ? "" : "s"} selected
+        </Text>
+      }
+      endContent={
+        <Button design="Emphasized" disabled={select.isPending || selection.length === 0} onClick={saveSelection}>
+          {select.isPending ? "Saving…" : "Save selection"}
+        </Button>
+      } />
+  );
+
+  const pageHeader = (
+    <ObjectPageHeader>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        {project.status === "requested" ? (
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <MessageStrip design="Critical" hideCloseButton style={{ flex: 1 }}>
+              Requested by {createdByEmail ?? "a portal user"} for {project.customer?.cardName ?? "—"} —
+              review the configuration, then create the quotation or reject with a note.
+            </MessageStrip>
+            <Button design="Negative" onClick={() => setRejectOpen(true)}>Reject</Button>
           </div>
-        }
-        endContent={
-          <Button design="Emphasized"
-            disabled={conflicted || lookups.isPending || batches.length === 0 || update.isPending || run.isPending}
-            onClick={() => void calculate()}>
-            {update.isPending || run.isPending ? "Calculating…" : "Calculate"}
-          </Button>
-        } />
-    </div>
+        ) : null}
+        {lookups.error ? (
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <MessageStrip design="Negative" hideCloseButton style={{ flex: 1 }}>{lookups.error.message}</MessageStrip>
+            <Button onClick={() => lookups.refetch()}>Retry</Button>
+          </div>
+        ) : null}
+        {update.error || run.error ? (
+          <MessageStrip design="Negative" hideCloseButton>
+            {update.error?.message ?? run.error?.message}
+          </MessageStrip>
+        ) : null}
+        {step === 0 ? (
+          <ExtractPanel modelId={project.modelId} model={model.definition} entries={entries} onChange={setEntries} />
+        ) : null}
+      </div>
+    </ObjectPageHeader>
   );
 
   return (
@@ -153,51 +190,68 @@ export function ConfigProcessPage({ id }: { id: string }) {
       onTransitionEnd={(e) => { if (e.propertyName === "flex-basis") setAnimating(false); }}>
     <SplitterElement size={paneOpen ? "62%" : "100%"} minSize={480}
       style={{ transition: animating ? PANE_ANIM : undefined }}>
-    {/* flex:1 — SplitterElement is display:flex, so this must fill it; max-content here is 0
-        (absolute header + percentage-sized wizard) and the pane would render blank. */}
+    {/* flex:1 — SplitterElement is display:flex, so this must fill it or the pane renders blank. */}
     <div style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column" }}>
-      {project.status === "requested" ? (
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", margin: "0.5rem 1rem" }}>
-          <MessageStrip design="Critical" hideCloseButton style={{ flex: 1 }}>
-            Requested by {createdByEmail ?? "a portal user"} for {project.customer?.cardName ?? "—"} —
-            review the configuration, then create the quotation or reject with a note.
-          </MessageStrip>
-          <Button design="Negative" onClick={() => setRejectOpen(true)}>Reject</Button>
-        </div>
-      ) : null}
-      <div className="hera-wizard-wrap">
-        <div className="hera-wizard-header">
-          <Title level="H5">{project.name}</Title>
-          <Text>{model.name}</Text>
-          <ObjectStatus state={statusUi[project.status].state}>{statusUi[project.status].text}</ObjectStatus>
-          <ToggleButton icon="history" pressed={paneOpen} style={{ marginLeft: "auto" }}
-            onClick={() => { setAnimating(true); setPaneOverride(!paneOpen); }}>
-            History
-          </ToggleButton>
-        </div>
-        <Wizard className="hera-wizard" contentLayout="SingleStep"
-          onStepChange={(e) => goto(Number((e.detail.step as HTMLElement).dataset.idx))}>
-          <WizardStep titleText="Configure" icon="settings" data-idx="0" selected={step === 0}>
-            {configureBody}
-          </WizardStep>
-          <WizardStep titleText="Candidates" icon="grid" data-idx="1" selected={step === 1} disabled={!runReady}>
-            {runReady && latestRun ? (
-              <StepCandidatesReview model={latestRun.modelSnapshot} lookups={latestRun.lookupSnapshot}
-                runEntries={latestRun.entries} candidates={latestRun.candidates}
-                selection={selection}
-                onToggle={(i, b) => setSel(toggleSelection(selection, i, b))}
-                onChange={setSel}
-                capped={runMeta?.capped ?? latestRun.candidates.length >= 200}
-                widest={runMeta?.widest}
-                onSave={saveSelection} saving={select.isPending}
-                error={select.error?.message ?? null} saved={select.isSuccess} />
-            ) : null}
-          </WizardStep>
-          <WizardStep titleText="Create quote" icon="sales-quote" data-idx="2" disabled>
-            <Text>Available after review — coming in phase 5.</Text>
-          </WizardStep>
-        </Wizard>
-      </div>
+      <ObjectPage
+        hidePinButton
+        mode="IconTabBar"
+        style={{ flex: 1, minHeight: 0 }}
+        selectedSectionId={CONFIG_PROCESS_STEP_IDS[step]}
+        onSelectedSectionChange={(e) => goto(e.detail.selectedSectionIndex)}
+        titleArea={
+          <ObjectPageTitle
+            header={<Title level="H5">{project.name}</Title>}
+            subHeader={
+              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                <Text>{model.name}</Text>
+                <ObjectStatus state={statusUi[project.status].state}>{statusUi[project.status].text}</ObjectStatus>
+              </div>
+            }
+            actionsBar={
+              <Toolbar design="Transparent">
+                <ToggleButton icon="history" pressed={paneOpen}
+                  onClick={() => { setAnimating(true); setPaneOverride(!paneOpen); }}>
+                  History
+                </ToggleButton>
+              </Toolbar>
+            }
+          />
+        }
+        headerArea={pageHeader}
+        footerArea={step === 0 ? configureFooter : step === 1 ? candidatesFooter : undefined}
+        placeholder={calcBusy ? (
+          <BusyIndicator active delay={0} text="Calculating candidates — pricing up to 200 combinations…"
+            style={{ width: "100%", marginTop: "4rem" }} />
+        ) : undefined}
+      >
+        <ObjectPageSection id="configure" titleText="Configure" hideTitleText>
+          {model.definition.structure.sections.map((s) => (
+            <ObjectPageSubSection key={s.key} id={s.key} titleText={s.title}>
+              <ConfiguratorForm section={s.key} model={model.definition} lookups={lookups.data} entries={entries}
+                onChange={setEntries} loading={lookups.isFetching} batch={{ batches, onChange: setBatches }} />
+            </ObjectPageSubSection>
+          ))}
+        </ObjectPageSection>
+        {/* wizard gating lives on the underlying ui5-tab: the inline tabRef re-runs every render,
+            keeping disabled in sync — a disabled tab can't be selected, like the old WizardStep. */}
+        <ObjectPageSection id="candidates" titleText="Candidates" hideTitleText
+          tabRef={(el) => { if (el) el.disabled = !runReady || staleRun; }}>
+          {runReady && latestRun ? (
+            <StepCandidatesReview model={latestRun.modelSnapshot} lookups={latestRun.lookupSnapshot}
+              runEntries={latestRun.entries} candidates={latestRun.candidates}
+              selection={selection}
+              onToggle={(i, b) => { if (select.isSuccess) select.reset(); setSel(toggleSelection(selection, i, b)); }}
+              onChange={(next) => { if (select.isSuccess) select.reset(); setSel(next); }}
+              capped={runMeta?.capped ?? latestRun.candidates.length >= 200}
+              widest={runMeta?.widest}
+              error={select.error?.message ?? null} saved={select.isSuccess} />
+          ) : null}
+        </ObjectPageSection>
+        <ObjectPageSection id="quote" titleText="Create quote" hideTitleText
+          tabRef={(el) => { if (el) el.disabled = true; }}>
+          <ToBeDone what="Quote creation" />
+        </ObjectPageSection>
+      </ObjectPage>
 
       <Dialog open={rejectOpen} headerText="Reject request" onClose={() => setRejectOpen(false)}
         footer={
