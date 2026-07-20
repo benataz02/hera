@@ -1,0 +1,38 @@
+# Configurator Agent
+
+## Context
+
+The one-shot assist turn is replaced by a **function-calling agent loop**: the user iterates in
+chat, the model calls tools (validate values, read drawings, search history, calculate, create
+the quote), the server validates every action, and results stream to the browser live. The
+assistant's reach now extends through the whole process — fill values → calculate → select
+candidates → create quote — with one human confirmation gate before the only action that
+leaves the system.
+
+## Decisions backend
+
+| Axis | Decision |
+|---|---|
+| Interaction shape | **Server-side function-calling loop** (max 8 iterations) per chat turn; Gemini function calling, not structured output. |
+| Transport | **Full token streaming** over an oRPC event iterator (async generator, same transport `quote.watch` proves): reply text streams as deltas, tool activity and applied changes stream as typed events. |
+| Agent reach | **Full**: `setValues`, `previewCandidates`, `calculate` (persists), `selectCandidates`, `createQuote`. Every write tool's guard equals its UI button's enabled-condition — the LLM never gets a capability the session user doesn't have. |
+| Quote safety | **In-chat confirmation gate**: `createQuote` never executes inside the loop; it emits a `confirm` event (customer, selections, totals) and ends the turn. The user's confirm click starts a new turn carrying `approved`; the server executes then, and outbox dedup makes double-submit harmless. |
+| Value application | **Live**: each successful `setValues` emits a `changes` event; the browser applies values + AI markers immediately via `applyAssist` while the model keeps talking. Revert stays per-message as spec'd. |
+| Drawing reading | **Dedicated `extractFromDrawing` tool** — a focused Gemini sub-call reusing `buildExtractionRequest` (prompt + enum responseSchema + `inlineData`). The attachment stays *out* of the main loop's contents (sent once per extraction, not re-uploaded every iteration). Applying extracted values still goes through `setValues` — one validation path. |
+| Provider | Unchanged: platform `GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-3-flash`). |
+
+## Decisions frontend
+
+| Axis | Decision |
+|---|---|
+| Placement | **Right splitter pane, not a step**: `STEP_IDS` stays `["configure","candidates","quote"]`. The chat lives where `HistoryPane` lived, so the form is visible while values land, and the chat keeps working on the Candidates step. |
+| History | **Merged into the pane**: "Similar configurations" and "Document history" render as collapsible Panels (collapsed by default) above the chat — current `HistoryPane` content with Copy buttons intact, no LLM involved in rendering them. The standalone history pane disappears. |
+| Apply mode | **Agent-style auto-apply**: valid values go straight into local `entries`; each assistant message shows a change log (`param: old → new` + evidence) with per-value Revert and message-level Revert all. Invalid values are shown with reasons, never applied. |
+| Form feedback | **Persistent AI marker**: fields set by the assistant get an `ObjectStatus state="Information"` chip with `sap-icon://ai` beside the control (same slot/pattern as the existing `defaulted → "auto"` chip), tooltip = evidence. Cleared when the user edits that field or reverts. No UI5 component exists for this (`@ui5/webcomponents-ai@2.24` is generative-text UX only: Button, Input, TextArea, PromptInput, ToolbarLabel, Versioning, WritingAssistant). |
+| Follow-ups | **Model-proposed suggestion chips**: responseSchema gains `suggestions: string[]` (max 3, short user-voice prompts). Rendered under the latest assistant reply only; clicking sends that text as a user message. |
+| Agent reach | **Values + Calculate**: the assistant may fill values and, on explicit user intent, return `action: "calculate"`; the client then runs the existing `calculate()`. It never saves selections or creates quotes. |
+| Persistence | **Session-only**: chat and AI markers live in component state, gone on reload (matches extraction's stateless posture). Applied values persist through the normal Calculate/update path. `// ponytail: store transcript on project when the portal-review flow needs it` |
+| Backend shape | **One-shot assist turn**: one oRPC procedure per chat message; server pre-computes narrowed domains (`propagate`), history context, then a single Gemini structured-output call. No tool loop, no streaming. `// ponytail: single-call assist; Gemini function-calling loop over SSE if multi-step reasoning fires` |
+| Extraction entry point | The chat **absorbs extraction on this page**: attaching a PDF/PNG/JPEG to a message adds it as `inlineData`. `ExtractPanel` leaves the page header; the component and `extraction.extract` stay for the portal. |
+| Provider | Reuse the extraction Gemini setup verbatim: platform `GEMINI_API_KEY`, model id via `GEMINI_MODEL` (default `gemini-3-flash`), structured output. |
+| UI kit | `@ui5/webcomponents-ai-react` (already installed): `PromptInput` for input (built-in AI submit button). No chat component exists in UI5, so the log is composed from standard components. |

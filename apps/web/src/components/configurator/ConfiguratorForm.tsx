@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ComponentProps } from "react";
 import {
   BusyIndicator, CheckBox, Form, FormGroup, FormItem, Icon, Input, Label, MultiComboBox, MultiComboBoxItem,
   ObjectStatus, Option, RadioButton, Select, StepInput, SuggestionItem, Text,
@@ -8,6 +8,7 @@ import {
   type DomainOption, type Entries, type LookupRef, type ModelDef, type Param, type ResolvedLookups, type ResolvedTable, type Val,
 } from "@hera/config-engine";
 import { ValueHelpDialog } from "./ValueHelpDialog.tsx";
+import { BatchEditor } from "./BatchEditor.tsx";
 import { clientBaseLookups, resolveEntry } from "./formHelpers.ts";
 
 /** The ref's display columns for one option value, joined — shown next to the option. */
@@ -51,6 +52,7 @@ function QueryValueInput({ p, refDef, dom, value, table, onCommit }: {
   return (
     <>
       <Input showSuggestions filter="None" value={shown} placeholder="Type or pick…" showClearIcon
+        style={{ width: "100%" }}
         icon={<Icon name="value-help" style={{ cursor: "pointer" }} onClick={() => setVhOpen(true)} />}
         onInput={(e) => setTyped(e.target.value ?? "")}
         onChange={(e) => commit(e.target.value ?? "")}>
@@ -69,8 +71,8 @@ function QueryValueInput({ p, refDef, dom, value, table, onCommit }: {
 }
 
 // The one form both the builder preview and the wizard render. Fully controlled:
-// entries in, entries out; all engine work happens in propagate(). Renders sections
-// only — scrolling, footers and the consistency line belong to the caller.
+// entries in, entries out; all engine work happens in propagate(). Optional batch quantities
+// keep the internal Configure step together; scrolling, footers and consistency stay with the caller.
 
 /** The signature answer to "is this consistent and how big is it?" — one component so the
  *  string stays identical in the wizard bar, the preview footer and the portal step.
@@ -90,15 +92,19 @@ export function ConsistencyStatus({ model, lookups, entries }: {
   );
 }
 
-const FORM_PROPS = { labelSpan: "S12 M4", layout: "S1 M2 L2 XL2", headerLevel: "H5" } as const;
+// labelSpan 12 everywhere = labels on top of their fields (natively left-aligned), field takes the full column.
+const FORM_PROPS = { labelSpan: "S12 M12 L12 XL12", layout: "S1 M2 L2 XL2", headerLevel: "H5" } as const;
 
-export function ConfiguratorForm({ model, lookups, entries, onChange, loading }: {
+export function ConfiguratorForm({ model, lookups, entries, onChange, loading, batch, section }: {
   model: ModelDef;
   lookups?: ResolvedLookups;
   entries: Entries;
   onChange: (next: Entries) => void;
   /** the single lookups fetch is still in flight — table/query fields show a spinner until it lands */
   loading?: boolean;
+  batch?: ComponentProps<typeof BatchEditor>;
+  /** render only this section, without its own Form header — the caller shows the title (e.g. an ObjectPageSection) */
+  section?: string;
 }) {
   const lk = useMemo(() => lookups ?? clientBaseLookups(model), [lookups, model]);
   const prop = useMemo(() => propagate(model, lk, entries), [model, lk, entries]);
@@ -148,7 +154,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading }:
     if (p.ui === "multicombo")
       return (
         // MultiComboBoxItem has no disabled prop -> eliminated options are filtered out.
-        <MultiComboBox
+        <MultiComboBox style={{ width: "100%" }}
           onSelectionChange={(e) => {
             const texts = e.detail.items.map((i) => (i as HTMLElement).getAttribute("text")!);
             set(key, texts.length ? texts : undefined);
@@ -163,6 +169,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading }:
       const r = p.domain?.kind === "range" ? p.domain : undefined;
       return (
         <StepInput value={typeof v === "number" ? v : undefined} min={r?.min} max={r?.max} step={r?.step ?? 1}
+          style={{ width: "100%" }}
           onChange={(e) => set(key, e.target.value ?? undefined)} />
       );
     }
@@ -180,7 +187,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading }:
       const tref = p.domain?.kind === "options" && p.domain.ref.source === "table" ? p.domain.ref : undefined;
       const tbl = tref ? lk.tables[tref.table] : undefined;
       return (
-        <Select value={v === undefined ? "" : JSON.stringify(v)}
+        <Select value={v === undefined ? "" : JSON.stringify(v)} style={{ width: "100%" }}
           onChange={(e) => {
             const j = (e.detail.selectedOption as HTMLElement).dataset.j;
             set(key, j === undefined || j === "" ? undefined : (JSON.parse(j) as Val));
@@ -201,6 +208,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading }:
 
     return (
       <Input type={p.type === "number" ? "Number" : "Text"} value={v === undefined || v === null ? "" : String(v)}
+        style={{ width: "100%" }}
         onChange={(e) => {
           const raw = e.target.value ?? "";
           set(key, raw === "" ? undefined : p.type === "number" ? Number(raw) : raw);
@@ -208,10 +216,12 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading }:
     );
   };
 
+  const sections = section ? model.structure.sections.filter((s) => s.key === section) : model.structure.sections;
+  const lastKey = model.structure.sections.at(-1)?.key;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-      {model.structure.sections.map((s) => (
-        <Form key={s.key} headerText={s.title} {...FORM_PROPS}>
+      {sections.map((s) => (
+        <Form key={s.key} headerText={section ? undefined : s.title} {...FORM_PROPS}>
           {s.groups.map((g) => (
             <FormGroup key={g.key} headerText={g.title}>
               {g.params.filter((k) => prop.visible[k]).map((k) => {
@@ -246,6 +256,13 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading }:
               })}
             </FormGroup>
           ))}
+          {batch && s.key === lastKey ? (
+            <FormGroup headerText="Batch quantities">
+              <FormItem labelContent={<Label>Quantities</Label>}>
+                <BatchEditor {...batch} />
+              </FormItem>
+            </FormGroup>
+          ) : null}
         </Form>
       ))}
     </div>
