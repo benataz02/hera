@@ -1,15 +1,17 @@
-# Assistant: conversations + multi-provider models — design
+# Assistant: optional package, conversations, multi-provider models — design
 
-Extends the configurator assistant (`2026-07-21-configurator-assistant-design.md`) with two things it
-lacks: **bounded conversations** (new chat, load a past one) and a **user-switchable model** across
-Anthropic, Google and OpenAI behind hand-rolled adapters.
+Reshapes the configurator assistant (`2026-07-21-configurator-assistant-design.md`) into an **optional
+feature package**, and extends it with **bounded conversations** (new chat, load a past one) and a
+**user-switchable model** across Anthropic, Google and OpenAI behind hand-rolled adapters.
 
-Nothing about tools, parts, persistence semantics, admission or the revert/AI-marker model changes.
+Tool semantics, `ChatPart`, persistence, admission and the revert/AI-marker model are unchanged.
 
 ---
 
 ## 1. Why
 
+- **Optional.** The assistant is an add-on, not part of the backbone. Today it is welded into
+  `apps/server` and `apps/web`; a deployment that doesn't want it has no way to leave it out.
 - **Conversations.** A thread today *is* every `config_chat_turn` for a `(tenantId, projectId)` pair.
   Nothing scopes or ends it, so it grows forever and `providerHistory`'s 30-message cap silently
   amputates the oldest context with no way to start clean.
@@ -20,7 +22,116 @@ Nothing about tools, parts, persistence semantics, admission or the revert/AI-ma
 
 ---
 
-## 2. Conversations
+## 2. Packaging
+
+### Layout
+
+```
+packages/assistant/
+  package.json                exports: "./server", "./web"
+  src/server/
+    index.ts                  createAssistantRouter, availableModels, type AssistantRouter
+    router.ts                 the oRPC procedures
+    host.ts                   type AssistantHost — the five injected capabilities
+    providers/                types.ts models.ts anthropic.ts google.ts openai.ts
+    loop.ts prompt.ts setValues.ts admission.ts conversations.ts tools.ts
+    *.test.ts
+  src/web/
+    index.ts                  AssistantPanel, useAssistant
+    client.ts                 the package's own oRPC client
+    AssistantPanel.tsx useAssistant.ts assistantState.ts assistantState.test.ts
+```
+
+Everything under `apps/server/src/chat/`, `apps/server/src/orpc/routers/assistant.ts` and
+`apps/web/src/components/assistant/` moves here. Nothing else moves.
+
+### The host interface — capabilities, not utilities
+
+`assistant.ts` currently reaches into four `apps/server` modules for eleven symbols. Injecting those
+verbatim would drag the app's internals into the package's API. Instead the host exposes **one
+capability per tool**, each absorbing the plumbing behind it:
+
+```ts
+export type AssistantHost = {
+  base: <the app's userProcedure builder>;                          // auth + tenant resolution
+  loadProject(tenantId, projectId): Promise<ProjectContext | null>; // configProject + loadModel + cachedLookups
+  history(tenantId, projectId, itemCode?): Promise<DocResult>;      // docHistoryForProject
+  documents(tenantId, projectId, itemCode): Promise<DocResult>;     // assertAgentReady + runRequest + docLinesBothPath
+                                                                    //   + flattenDocs + sortDocRows
+  extract(definition, lookups, drawing): Promise<{ suggestions }>;  // extractSuggestions
+};
+```
+
+Five members. `documents` and `history` throw `ORPCError` on their existing failure paths (no
+customer, agent offline); the package already turns a thrown `ORPCError` into a conversational tool
+error, so that behaviour is unchanged. The package defines its own four-line `DrawingZ` rather than
+importing `ExtractFileZ` — structurally identical, one fewer host member.
+
+> **Known risk.** `base` is the app's `userProcedure`, an oRPC builder carrying a context type. Typing
+> it structurally (parameterised on a `{ tenantId: string }` context) is the one fiddly part of this
+> change. If oRPC's builder generics fight back, fall back to the host passing a
+> `withTenant(handler)` wrapper instead of the builder, and let the package build its own procedures.
+
+### Mounting — the off switch
+
+```ts
+// apps/server/src/orpc/router.ts
+export const router = {
+  sync, entities, variants, models, configs, portal, portalClients,
+  ...(assistantEnabled() ? { assistant: createAssistantRouter(host) } : {}),
+};
+```
+
+`assistantEnabled()` = `process.env.ASSISTANT_ENABLED !== "off"` **and** at least one provider key is
+set. So the default is: keys present → on; no keys → the router simply isn't there. This replaces
+today's mount-then-throw-`SERVICE_UNAVAILABLE` behaviour.
+
+The web hides the sparkle toggle when `assistant.models` fails or returns `[]` — one `retry: false`
+query covering both "not mounted" (404) and "mounted, no keys" (empty). No feature procedure, no
+tenant column, no build flag.
+
+### The web half types itself
+
+`useAssistant` cannot import `apps/web/src/orpc.ts`. The package builds its own client instead —
+same origin, same cookies, typed by the router it ships:
+
+```ts
+// packages/assistant/src/web/client.ts
+import type { AssistantRouter } from "../server/index.ts";   // import type — erased, no runtime reaches the bundle
+const link = new RPCLink({ url: `${window.location.origin}/rpc` });
+export const client: RouterClient<{ assistant: AssistantRouter }> = createORPCClient(link);
+export const orpc = createTanstackQueryUtils(client);
+```
+
+Wrapping in `{ assistant: … }` keeps the RPC paths and TanStack query keys identical to the app's
+client, so invalidation still works across both. The package owns both sides of the `assistant`
+mount key. It relies on the app's `QueryClientProvider`, which already wraps the whole tree.
+
+`apps/web` shrinks to two lines: import `AssistantPanel`/`useAssistant` from `@hera/assistant/web` in
+`ConfigProcessPage.tsx`. `apps/server/src/orpc/router.ts` drops its `ChatEvent`/`ChatPart` re-exports.
+
+### Dependencies
+
+`@hera/assistant` deps: `@orpc/server`, `@orpc/client`, `@orpc/tanstack-query`, `zod`, `drizzle-orm`,
+`@hera/db`, `@hera/config-engine`, `@anthropic-ai/sdk`, `@google/genai`, `openai` *(new)*.
+
+React, `react-dom`, `@tanstack/react-query`, `@ui5/webcomponents-react` and `@ui5/webcomponents-ai-react`
+are **peerDependencies and devDependencies both** — peer so `apps/web` supplies the single copy (two
+Reacts break hooks), dev so the package typechecks standalone. Bun's isolated install does not resolve
+transitively, so every import in `src/` must appear in one of those lists.
+
+`@anthropic-ai/sdk` moves out of `apps/server`'s manifest entirely. `@google/genai` stays in both:
+the package needs it for the Google adapter, `apps/server` still needs it for drawing extraction.
+
+### The tables stay in `@hera/db`
+
+`packages/db/src/schema/chat.ts` does **not** move. Moving it would put `@hera/db` in a dependency
+cycle with the package, and split the drizzle-kit migration pipeline in two. Two unused tables in a
+deployment with the assistant off cost nothing.
+
+---
+
+## 3. Conversations
 
 ### Schema (migration `0005`)
 
@@ -59,11 +170,10 @@ in-flight turn, regardless of which conversation is open.
 | `assistant.chat` | `conversationId` and `model` added to the input |
 | `assistant.models` | **new** — no input → `[{ id, label, provider }]`, only models whose API key is set |
 
-`conversations` is one query over sequence-0 messages, folded in JS by a pure
-`foldConversations(rows)` in `apps/server/src/chat/conversations.ts` (same shape as `admission.ts` /
-`setValues.ts`: pure, tested, thin router). Title = the first user message, truncated in SQL
-(`left(parts->0->>'text', 80)`) so the payload stays small — sequence-0 parts are always exactly
-`[{ type: "text", text }]`, written by one hardcoded insert.
+`conversations` is one query over sequence-0 messages, folded in JS by a pure `foldConversations(rows)`
+in `conversations.ts` (same shape as `admission.ts` / `setValues.ts`: pure, tested, thin router).
+Title = the first user message, truncated in SQL (`left(parts->0->>'text', 80)`) so the payload stays
+small — sequence-0 parts are always exactly `[{ type: "text", text }]`, written by one hardcoded insert.
 
 ```
 // ponytail: folds every turn row for the project; switch to DISTINCT ON + MAX() if a project
@@ -87,6 +197,8 @@ not the project's entire past.
   the history menu.
 - `openConversation(id)` — set the id, clear `live`, let the `messages` query refetch.
 - Both abort an in-flight turn first (same call as `stop()`).
+- `available: boolean` — false when `models` 404s or returns `[]`; `ConfigProcessPage` hides the
+  toggle on it.
 
 A conversation whose uuid was minted but never sent has no rows and simply never appears in the list.
 
@@ -107,9 +219,9 @@ existing `m.live` check already covers it, because a loaded conversation has no 
 
 ---
 
-## 3. Providers
+## 4. Providers
 
-### Neutral types (`apps/server/src/chat/providers/types.ts`)
+### Neutral types (`src/server/providers/types.ts`)
 
 The **transcript is the interface**. The router accumulates provider-agnostic turns; each adapter
 re-serializes the whole transcript per request, so adapters hold no state.
@@ -149,7 +261,7 @@ An assistant turn that is a bare tool call has `text: ""`. Every adapter must **
 rather than serialize it — Anthropic rejects empty text blocks, and OpenAI wants `content: null`
 alongside `tool_calls`. One shared guard, exercised by the mapping tests.
 
-### Registry (`apps/server/src/chat/providers/models.ts`)
+### Registry (`src/server/providers/models.ts`)
 
 One literal array — the single place a model id is added or removed.
 
@@ -163,8 +275,9 @@ export const MODELS = [
 ] as const;
 ```
 
-`assistant.models` returns the entries whose `envKey` is set. `chat` resolves `input.model` the same
-way and rejects an unavailable id — a client cannot select an unconfigured or unknown model.
+`availableModels()` returns the entries whose `envKey` is set — it backs both `assistant.models` and
+`assistantEnabled()`. `chat` resolves `input.model` the same way and rejects an unavailable id, so a
+client cannot select an unconfigured or unknown model.
 
 This **supersedes `ANTHROPIC_MODEL`** for chat; the picker is the model choice now. `GEMINI_MODEL`
 still governs drawing extraction, which is untouched.
@@ -178,7 +291,7 @@ Each is a pure request mapper + a pure chunk reducer + ~20 lines of stream glue.
 
 | | Anthropic | Google | OpenAI |
 |---|---|---|---|
-| SDK | `@anthropic-ai/sdk` *(installed)* | `@google/genai` *(installed)* | `openai` **(new dep)** |
+| SDK | `@anthropic-ai/sdk` | `@google/genai` | `openai` **(new dep)** |
 | Call | `messages.stream` | `models.generateContentStream` | `chat.completions.create({stream:true})` |
 | System | `system` param | `config.systemInstruction` | leading `system` message |
 | Max tokens | `max_tokens` | `config.maxOutputTokens` | `max_completion_tokens` |
@@ -200,8 +313,8 @@ Stop-reason mapping:
 `errorText` keeps today's `"<status>: <message>"` convention per SDK error type, so the existing
 verbatim-provider-error behaviour survives unchanged for all three.
 
-**No adapter needs multimodal support.** `extract_from_drawing` runs Gemini's extraction path
-server-side and returns text plus a `suggestions` part; the drawing never reaches the chat provider.
+**No adapter needs multimodal support.** `extract_from_drawing` runs the host's Gemini extraction path
+and returns text plus a `suggestions` part; the drawing never reaches the chat provider.
 
 ### `set_values` tool schema
 
@@ -225,7 +338,7 @@ per-key validation:
 Non-string input (an object-shaped call from a model that ignores the schema) still validates through
 the existing path, so the change is additive.
 
-### Loop changes (`apps/server/src/chat/loop.ts`)
+### Loop changes (`src/server/loop.ts`)
 
 - `decideNext({ stop, toolUse, round, maxRounds, aborted })` — same `NextAction`, no Anthropic types.
 - `toolRoundMessages` → `appendToolRound(transcript, assistantTurn, toolResult)` returning `Turn[]`.
@@ -247,15 +360,13 @@ for (let round = 0; ; ) {
 }
 ```
 
-The `ANTHROPIC_API_KEY` guard becomes a no-configured-models guard naming all three env vars.
-
 ---
 
-## 4. Errors
+## 5. Errors
 
 | Case | Behaviour |
 |---|---|
-| No provider key set at all | `SERVICE_UNAVAILABLE`, "The assistant is not configured on this server (set ANTHROPIC_API_KEY, GEMINI_API_KEY or OPENAI_API_KEY)." |
+| No provider key set / `ASSISTANT_ENABLED=off` | Router not mounted; `assistant.models` 404s; the web hides the toggle. Replaces the old `SERVICE_UNAVAILABLE` message. |
 | Unknown / unconfigured `model` | `BAD_REQUEST`; the client re-reads `assistant.models` and falls back |
 | Provider API error | unchanged — verbatim `"<status>: <message>"` from that provider's `errorText` |
 | Everything else | unchanged (deadline, tool rounds, max tokens, refusal, cancel) |
@@ -265,31 +376,41 @@ provider as plain `{ role, text }` turns via `providerHistory`, and `model` is r
 
 ---
 
-## 5. Testing
+## 6. Testing
+
+All server tests move with their sources; `bun test packages/assistant` becomes a root
+`test:assistant` script alongside `test:server`.
 
 | File | What |
 |---|---|
-| `chat/providers/providers.test.ts` | **new** — one table-driven file: transcript → each provider's request body, and each provider's chunks → `ProviderEvent`s, including every stop-reason row above |
-| `chat/conversations.test.ts` | **new** — `foldConversations`: title truncation, ordering by last activity, one-turn conversation |
-| `chat/loop.test.ts` | rewritten against neutral shapes (smaller — no Anthropic fixtures) |
-| `chat/setValues.test.ts` | + coercion cases: numeric string, `NaN`, `"true"`, multicombo wrapping |
-| `assistantState.test.ts` | unchanged — parts and folding are untouched |
+| `src/server/providers/providers.test.ts` | **new** — one table-driven file: transcript → each provider's request body, and each provider's chunks → `ProviderEvent`s, including every stop-reason row above |
+| `src/server/conversations.test.ts` | **new** — `foldConversations`: title truncation, ordering by last activity, one-turn conversation |
+| `src/server/loop.test.ts` | rewritten against neutral shapes (smaller — no Anthropic fixtures) |
+| `src/server/setValues.test.ts` | + coercion cases: numeric string, `NaN`, `"true"`, multicombo wrapping |
+| `src/server/admission.test.ts`, `prompt.test.ts` | moved, otherwise unchanged |
+| `src/web/assistantState.test.ts` | moved, otherwise unchanged — parts and folding are untouched |
 
 Manual e2e: three keys set → picker lists five models → same question answered by each; new chat →
 empty panel, old thread still in the history menu; reload → correct conversation restored; unset two
-keys → picker shows only the remaining provider.
+keys → picker shows only the remaining provider; `ASSISTANT_ENABLED=off` → no sparkle toggle and the
+rest of the Configure step behaves normally.
 
 ---
 
-## 6. Docs
+## 7. Docs
 
-`docs/assistant-guide.md`: three API keys instead of one, the model picker, new-chat/history controls,
-and `ANTHROPIC_MODEL` marked superseded for chat.
+`docs/assistant-guide.md`: three API keys instead of one, `ASSISTANT_ENABLED`, the model picker,
+new-chat/history controls, and `ANTHROPIC_MODEL` marked superseded for chat.
 
 ---
 
-## 7. Deliberately skipped
+## 8. Deliberately skipped
 
+- **Per-tenant** assistant flag — the off switch is per deployment; add a column when a deployment
+  actually needs to sell it per customer.
+- **Folder-removable** package (`rm -rf packages/assistant` still builds) — needs dynamic import at
+  the mount point and costs static typing at the seam. The package boundary makes it a later option,
+  not a now requirement.
 - Rename, delete or archive a conversation — the list is derived; add a table when it's asked for.
 - Cross-conversation search, and summarization of threads past the 30-message cap.
 - Server-side per-user model preference — localStorage until it demonstrably isn't enough.
