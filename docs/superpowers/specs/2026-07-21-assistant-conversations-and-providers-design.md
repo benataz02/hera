@@ -29,6 +29,9 @@ Tool semantics, `ChatPart`, persistence, admission and the revert/AI-marker mode
 ```
 packages/assistant/
   package.json                exports: "./server", "./web"
+  src/
+    parts.ts                  ChatPart & friends — shared by both halves, types only
+    schema.ts                 configChatTurn, configChatMessage (drizzle)
   src/server/
     index.ts                  createAssistantRouter, availableModels, type AssistantRouter
     router.ts                 the oRPC procedures
@@ -42,8 +45,9 @@ packages/assistant/
     AssistantPanel.tsx useAssistant.ts assistantState.ts assistantState.test.ts
 ```
 
-Everything under `apps/server/src/chat/`, `apps/server/src/orpc/routers/assistant.ts` and
-`apps/web/src/components/assistant/` moves here. Nothing else moves.
+Everything under `apps/server/src/chat/`, `apps/server/src/orpc/routers/assistant.ts`,
+`apps/web/src/components/assistant/` and `packages/db/src/schema/chat.ts` moves here. Nothing else
+moves.
 
 ### The host interface — capabilities, not utilities
 
@@ -123,11 +127,40 @@ transitively, so every import in `src/` must appear in one of those lists.
 `@anthropic-ai/sdk` moves out of `apps/server`'s manifest entirely. `@google/genai` stays in both:
 the package needs it for the Google adapter, `apps/server` still needs it for drawing extraction.
 
-### The tables stay in `@hera/db`
+### The package owns its tables
 
-`packages/db/src/schema/chat.ts` does **not** move. Moving it would put `@hera/db` in a dependency
-cycle with the package, and split the drizzle-kit migration pipeline in two. Two unused tables in a
-deployment with the assistant off cost nothing.
+`packages/db/src/schema/chat.ts` is deleted and its line drops out of `schema/index.ts`. Every
+consumer of those tables and types is a file moving into the package anyway, so nothing outside is
+orphaned. The definitions land in two files, split so browser code can never reach drizzle:
+
+```
+packages/assistant/src/
+  parts.ts    ChatPart, ChatDocRow, ChatSuggestion, ChatTurnStatus
+              types only — one `import type { Val }` and nothing else
+  schema.ts   configChatTurn, configChatMessage
+              drizzle-orm/pg-core + `import type { ChatPart } from "./parts.ts"`
+```
+
+`src/web/*` imports `parts.ts` and never `schema.ts`, so the split enforces by construction what
+would otherwise be discipline.
+
+**No cycle**, because `@hera/db` never imports the package. drizzle-kit reads the file directly:
+
+```ts
+// packages/db/drizzle.config.ts
+schema: ["./src/schema/index.ts", "../assistant/src/schema.ts"],
+```
+
+One migration pipeline, one journal, one `db:migrate`: the package owns the *definitions*,
+`packages/db` keeps the *mechanism*. Table names are unchanged, so the move itself produces no diff —
+only the `0005` columns do.
+
+> ⚠ **Never run `db:generate` with the package removed.** drizzle-kit would see two tables vanish and
+> emit `DROP TABLE`. Removing the assistant means leaving its (inert) tables behind, not regenerating.
+
+Verify during implementation: drizzle-kit runs with `--cwd packages/db` and must resolve
+`../assistant/src/schema.ts`. Keeping that file's only runtime import `drizzle-orm/pg-core` — every
+other import `import type` — keeps that resolution trivial.
 
 ---
 
@@ -411,6 +444,8 @@ new-chat/history controls, and `ANTHROPIC_MODEL` marked superseded for chat.
 - **Folder-removable** package (`rm -rf packages/assistant` still builds) — needs dynamic import at
   the mount point and costs static typing at the seam. The package boundary makes it a later option,
   not a now requirement.
+- A **separate drizzle config and journal** for the package — the package owns its table definitions,
+  `packages/db` keeps the single migration mechanism. Split them only if a second package ships tables.
 - Rename, delete or archive a conversation — the list is derived; add a table when it's asked for.
 - Cross-conversation search, and summarization of threads past the 30-message cap.
 - Server-side per-user model preference — localStorage until it demonstrably isn't enough.
