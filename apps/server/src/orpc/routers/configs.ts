@@ -114,7 +114,10 @@ export async function executeRunFromSnapshot(
     const runId = await db.transaction(async (tx) => {
       // CAS re-checked inside the transaction: the guarded UPDATE only matches the observed version.
       const updated = await tx.update(configProject)
-        .set({ entries, batches, status: "calculated", updatedAt: now })
+        .set({
+          ...(expectedVersion ? { entries, batches } : {}),
+          status: "calculated", updatedAt: now,
+        })
         .where(and(
           eq(configProject.id, projectId), eq(configProject.tenantId, tenantId),
           ...(expectedVersion ? [eq(configProject.updatedAt, expectedVersion)] : []),
@@ -358,11 +361,12 @@ export const configsRouter = {
         .limit(1);
       if (!run) throw new ORPCError("NOT_FOUND");
       const selections = applySelection(run, input.selection);
-      await db
+      const [updated] = await db
         .update(configRun)
         .set({ selection: input.selection, selectionVersion: sql`${configRun.selectionVersion} + 1` })
-        .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, context.tenantId)));
-      return { selections, selectionVersion: run.selectionVersion + 1 };
+        .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, context.tenantId)))
+        .returning({ selectionVersion: configRun.selectionVersion });
+      return { selections, selectionVersion: updated!.selectionVersion };
     }),
 
   // Internal reviewer sends a portal request back with a note. requested → rejected.
