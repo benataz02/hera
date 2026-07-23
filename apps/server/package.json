@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@google/genai": "^2.10.0",
+    "@hera/assistant": "workspace:*",
     "@hera/config-engine": "workspace:*",
     "@hera/db": "workspace:*",
     "@orpc/client": "^1.14.6",
