@@ -4,7 +4,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { db, configModel, configProject, configRun, user, type ProjectEvent, type RunCandidate, type RunSelection } from "@hera/db";
 import {
   computeOutputs, DslError, enumerate, EntriesZ, OutputOverridesZ, propagate,
-  type ModelDef, type Outputs, type ResolvedLookups, type Val,
+  type Entries, type ModelDef, type Outputs, type ResolvedLookups, type Val,
 } from "@hera/config-engine";
 import { userProcedure } from "../base.ts";
 import { assertAgentReady, runRequest } from "./entities.ts";
@@ -58,6 +58,84 @@ export async function cachedLookups(tenantId: string, model: Awaited<ReturnType<
   return lookups;
 }
 
+/** Guarded run path shared by configs.run and Chati's calculate tool. expectedVersion=null skips
+ *  the CAS. Reuse: latest run whose modelSnapshot+entries+batches exactly match, on a calculated
+ *  project, is returned instead of re-inserting. */
+export async function executeRunFromSnapshot(
+  tenantId: string, projectId: string, entries: Entries, batches: number[],
+  expectedVersion: Date | null, fetchQuery: QueryFetcher,
+) {
+  if (!batches.length) throw new ORPCError("BAD_REQUEST", { message: "Add at least one batch quantity" });
+  const [project] = await db.select().from(configProject)
+    .where(and(eq(configProject.id, projectId), eq(configProject.tenantId, tenantId))).limit(1);
+  if (!project) throw new ORPCError("NOT_FOUND");
+  if (expectedVersion && project.updatedAt.getTime() !== expectedVersion.getTime())
+    throw new ORPCError("CONFLICT", { message: "STATE_CHANGED" });
+
+  const model = await loadModel(tenantId, project.modelId);
+  const lookups = await freshLookups(tenantId, model.definition, fetchQuery);
+
+  // Reuse check against the latest run (cheap JSON equality; snapshots are canonical already).
+  const [latest] = await db.select().from(configRun)
+    .where(and(eq(configRun.projectId, projectId), eq(configRun.tenantId, tenantId)))
+    .orderBy(desc(configRun.createdAt)).limit(1);
+  const batchesOf = (r: { candidates: RunCandidate[] }) => r.candidates[0]?.perBatch.map((b) => b.batchQty) ?? [];
+  if (
+    latest && project.status === "calculated" &&
+    JSON.stringify(latest.entries) === JSON.stringify(entries) &&
+    JSON.stringify(batchesOf(latest)) === JSON.stringify(batches) &&
+    JSON.stringify(latest.modelSnapshot) === JSON.stringify(model.definition)
+  ) {
+    return {
+      runId: latest.id, projectVersion: project.updatedAt.toISOString(),
+      selectionVersion: latest.selectionVersion, reused: true,
+      candidateCount: latest.candidates.length, capped: latest.candidates.length >= 200,
+      widest: undefined, candidates: latest.candidates,
+    };
+  }
+
+  try {
+    const pre = propagate(model.definition, lookups, entries);
+    if (pre.conflicts.length)
+      throw new ORPCError("BAD_REQUEST", {
+        message: `Configuration has conflicts: ${pre.conflicts.map((c) => c.message).join("; ")}`,
+      });
+    const en = enumerate(model.definition, lookups, entries);
+    if (!en.candidates.length)
+      throw new ORPCError("BAD_REQUEST", { message: "No valid configuration completes the current entries" });
+    const candidates: RunCandidate[] = en.candidates.map((assignment) => ({
+      assignment,
+      perBatch: batches.map((batchQty) => ({
+        batchQty, outputs: computeOutputs(model.definition, lookups, assignment, batchQty),
+      })),
+    }));
+
+    const now = new Date();
+    const runId = await db.transaction(async (tx) => {
+      // CAS re-checked inside the transaction: the guarded UPDATE only matches the observed version.
+      const updated = await tx.update(configProject)
+        .set({ entries, batches, status: "calculated", updatedAt: now })
+        .where(and(
+          eq(configProject.id, projectId), eq(configProject.tenantId, tenantId),
+          ...(expectedVersion ? [eq(configProject.updatedAt, expectedVersion)] : []),
+        ))
+        .returning({ id: configProject.id });
+      if (!updated.length) throw new ORPCError("CONFLICT", { message: "STATE_CHANGED" });
+      const [run] = await tx.insert(configRun).values({
+        tenantId, projectId, modelSnapshot: model.definition, lookupSnapshot: lookups, entries, candidates,
+      }).returning({ id: configRun.id });
+      return run!.id;
+    });
+    return {
+      runId, projectVersion: now.toISOString(), selectionVersion: 0, reused: false,
+      candidateCount: candidates.length, capped: en.capped, widest: en.widest, candidates,
+    };
+  } catch (e) {
+    if (e instanceof DslError) throw new ORPCError("BAD_REQUEST", { message: e.message });
+    throw e;
+  }
+}
+
 export async function executeRun(tenantId: string, projectId: string, fetchQuery: QueryFetcher) {
   const [project] = await db
     .select()
@@ -65,50 +143,65 @@ export async function executeRun(tenantId: string, projectId: string, fetchQuery
     .where(and(eq(configProject.id, projectId), eq(configProject.tenantId, tenantId)))
     .limit(1);
   if (!project) throw new ORPCError("NOT_FOUND");
-  if (!project.batches.length) throw new ORPCError("BAD_REQUEST", { message: "Add at least one batch quantity" });
+  const { runId, candidateCount, capped, widest } = await executeRunFromSnapshot(
+    tenantId, projectId, project.entries, project.batches, null, fetchQuery,
+  );
+  return { runId, candidateCount, capped, widest };
+}
 
+// Exact help: live B1 Orders + Quotations for the project customer and/or the item-code param.
+// itemCode is only ever a quoted filter value.
+export async function fetchDocHistory(tenantId: string, projectId: string, itemCode?: string) {
+  const [project] = await db
+    .select({ customer: configProject.customer })
+    .from(configProject)
+    .where(and(eq(configProject.id, projectId), eq(configProject.tenantId, tenantId)))
+    .limit(1);
+  if (!project) throw new ORPCError("NOT_FOUND");
+  const trimmedItemCode = itemCode?.trim() || undefined;
+  const cardCode = project.customer?.cardCode;
+  if (!trimmedItemCode && !cardCode) return { itemCode: null, cardCode: null, rows: [] };
+  await assertAgentReady(tenantId);
+  const fetchDocs = (entity: "Orders" | "Quotations") =>
+    runRequest(tenantId, "query", { target: "b1", path: docHistoryPath(entity, { itemCode: trimmedItemCode, cardCode }) });
+  const [orders, quotations] = await Promise.all([fetchDocs("Orders"), fetchDocs("Quotations")]);
+  return {
+    itemCode: trimmedItemCode ?? null,
+    cardCode: cardCode ?? null,
+    rows: sortDocRows([
+      ...flattenDocs("order", orders, { itemCode: trimmedItemCode, cardCode }),
+      ...flattenDocs("quotation", quotations, { itemCode: trimmedItemCode, cardCode }),
+    ]),
+  };
+}
+
+// Similarity help: rank cached historic rows against the live (unsaved) entries. `values` are
+// the row's mapped param values, coerced to each param's type — what the Copy button applies.
+export async function searchSimilarRows(tenantId: string, projectId: string, entries: Entries) {
+  const [project] = await db
+    .select({ modelId: configProject.modelId })
+    .from(configProject)
+    .where(and(eq(configProject.id, projectId), eq(configProject.tenantId, tenantId)))
+    .limit(1);
+  if (!project) throw new ORPCError("NOT_FOUND");
   const model = await loadModel(tenantId, project.modelId);
-  const lookups = await freshLookups(tenantId, model.definition, fetchQuery); // always fresh at run time
-
-  try {
-    const pre = propagate(model.definition, lookups, project.entries);
-    if (pre.conflicts.length)
-      throw new ORPCError("BAD_REQUEST", {
-        message: `Configuration has conflicts: ${pre.conflicts.map((c) => c.message).join("; ")}`,
-      });
-    const en = enumerate(model.definition, lookups, project.entries);
-    if (!en.candidates.length)
-      throw new ORPCError("BAD_REQUEST", { message: "No valid configuration completes the current entries" });
-
-    const candidates: RunCandidate[] = en.candidates.map((assignment) => ({
-      assignment,
-      perBatch: project.batches.map((batchQty) => ({
-        batchQty,
-        outputs: computeOutputs(model.definition, lookups, assignment, batchQty),
-      })),
-    }));
-
-    const runId = await db.transaction(async (tx) => {
-      const [run] = await tx
-        .insert(configRun)
-        .values({
-          tenantId, projectId,
-          modelSnapshot: model.definition, lookupSnapshot: lookups,
-          entries: project.entries, candidates,
-        })
-        .returning({ id: configRun.id });
-      await tx
-        .update(configProject)
-        .set({ status: "calculated", updatedAt: new Date() })
-        .where(eq(configProject.id, projectId));
-      return run!.id;
-    });
-    return { runId, candidateCount: candidates.length, capped: en.capped, widest: en.widest };
-  } catch (e) {
-    // Save-gated models shouldn't hit DSL errors, but live lookup data can (missing LOOKUP row).
-    if (e instanceof DslError) throw new ORPCError("BAD_REQUEST", { message: e.message });
-    throw e;
-  }
+  const h = model.definition.history;
+  if (!h?.mappings.length) return { results: [] };
+  const rows = await loadHistoryRows(tenantId, model.id);
+  const typeOf = new Map(model.definition.parameters.map((p) => [p.key, p.type]));
+  const coerce = (param: string, v: Val): Val =>
+    v === null ? null
+    : typeOf.get(param) === "number" ? (Number.isFinite(Number(v)) ? Number(v) : null)
+    : typeOf.get(param) === "boolean" ? (typeof v === "boolean" ? v : String(v).toLowerCase() === "true")
+    : String(v);
+  return {
+    results: scoreRows(h, entries, rows).map((s) => ({
+      score: s.score,
+      matches: s.matches,
+      display: Object.fromEntries(h.display.map((c) => [c, s.row[c] ?? null])),
+      values: Object.fromEntries(h.mappings.map((m) => [m.param, coerce(m.param, s.row[m.column] ?? null)])),
+    })),
+  };
 }
 
 export function applySelection(
@@ -233,60 +326,13 @@ export const configsRouter = {
   // itemCode comes from the client (current unsaved entry); it is only ever a quoted filter value.
   docHistory: userProcedure
     .input(z.object({ id: z.uuid(), itemCode: z.string().optional() }))
-    .handler(async ({ input, context }) => {
-      const [project] = await db
-        .select({ customer: configProject.customer })
-        .from(configProject)
-        .where(and(eq(configProject.id, input.id), eq(configProject.tenantId, context.tenantId)))
-        .limit(1);
-      if (!project) throw new ORPCError("NOT_FOUND");
-      const itemCode = input.itemCode?.trim() || undefined;
-      const cardCode = project.customer?.cardCode;
-      if (!itemCode && !cardCode) return { itemCode: null, cardCode: null, rows: [] };
-      await assertAgentReady(context.tenantId);
-      const fetchDocs = (entity: "Orders" | "Quotations") =>
-        runRequest(context.tenantId, "query", { target: "b1", path: docHistoryPath(entity, { itemCode, cardCode }) });
-      const [orders, quotations] = await Promise.all([fetchDocs("Orders"), fetchDocs("Quotations")]);
-      return {
-        itemCode: itemCode ?? null,
-        cardCode: cardCode ?? null,
-        rows: sortDocRows([
-          ...flattenDocs("order", orders, { itemCode, cardCode }),
-          ...flattenDocs("quotation", quotations, { itemCode, cardCode }),
-        ]),
-      };
-    }),
+    .handler(({ input, context }) => fetchDocHistory(context.tenantId, input.id, input.itemCode)),
 
   // Similarity help: rank cached historic rows against the live (unsaved) entries. `values` are
   // the row's mapped param values, coerced to each param's type — what the Copy button applies.
   similar: userProcedure
     .input(z.object({ id: z.uuid(), entries: EntriesZ }))
-    .handler(async ({ input, context }) => {
-      const [project] = await db
-        .select({ modelId: configProject.modelId })
-        .from(configProject)
-        .where(and(eq(configProject.id, input.id), eq(configProject.tenantId, context.tenantId)))
-        .limit(1);
-      if (!project) throw new ORPCError("NOT_FOUND");
-      const model = await loadModel(context.tenantId, project.modelId);
-      const h = model.definition.history;
-      if (!h?.mappings.length) return { results: [] };
-      const rows = await loadHistoryRows(context.tenantId, model.id);
-      const typeOf = new Map(model.definition.parameters.map((p) => [p.key, p.type]));
-      const coerce = (param: string, v: Val): Val =>
-        v === null ? null
-        : typeOf.get(param) === "number" ? (Number.isFinite(Number(v)) ? Number(v) : null)
-        : typeOf.get(param) === "boolean" ? (typeof v === "boolean" ? v : String(v).toLowerCase() === "true")
-        : String(v);
-      return {
-        results: scoreRows(h, input.entries, rows).map((s) => ({
-          score: s.score,
-          matches: s.matches,
-          display: Object.fromEntries(h.display.map((c) => [c, s.row[c] ?? null])),
-          values: Object.fromEntries(h.mappings.map((m) => [m.param, coerce(m.param, s.row[m.column] ?? null)])),
-        })),
-      };
-    }),
+    .handler(({ input, context }) => searchSimilarRows(context.tenantId, input.id, input.entries)),
 
   run: userProcedure.input(z.object({ projectId: z.uuid() })).handler(async ({ input, context }) => {
     const [project] = await db
@@ -314,9 +360,9 @@ export const configsRouter = {
       const selections = applySelection(run, input.selection);
       await db
         .update(configRun)
-        .set({ selection: input.selection })
+        .set({ selection: input.selection, selectionVersion: sql`${configRun.selectionVersion} + 1` })
         .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, context.tenantId)));
-      return { selections };
+      return { selections, selectionVersion: run.selectionVersion + 1 };
     }),
 
   // Internal reviewer sends a portal request back with a note. requested → rejected.

@@ -86,6 +86,7 @@ export const configRun = pgTable(
     entries: jsonb("entries").$type<Entries>().notNull(),
     candidates: jsonb("candidates").$type<RunCandidate[]>().notNull(),
     selection: jsonb("selection").$type<RunSelection[]>(),
+    selectionVersion: integer("selection_version").notNull().default(0),
     b1DocEntry: integer("b1_doc_entry"),
     quotedAt: timestamp("quoted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
