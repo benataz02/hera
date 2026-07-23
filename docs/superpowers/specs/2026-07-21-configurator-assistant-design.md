@@ -28,7 +28,7 @@ preserved under *Upgrade paths* for when phase 5 lands.
 | Placement | **`packages/assistant`** owns the loop, provider registry, tool declarations, prompt builder, conversation schema, and an oRPC router factory. `apps/server` mounts the router and injects the db instance + tool executors (they need server context: lookups, validation, runs, extraction). UI stays in `apps/web`. |
 | Provider | **User-switchable per conversation**: Gemini / Anthropic / OpenAI via `@tanstack/ai` + `@tanstack/ai-gemini` / `-anthropic` / `-openai` adapters. Platform env keys (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) + per-provider `*_MODEL` overrides; the picker lists only providers whose key is set. All `@tanstack/ai*` packages are 0.x — pin versions; the package boundary contains API churn. |
 | Persistence | **DB-backed conversations, per project**: `assistant_conversation` + `assistant_message` tables owned by the package (migrations still generated from `packages/db`). "New chat" starts a fresh conversation; past ones are listable, loadable, and deletable. AI markers and revert stay **live-session only**. |
-| State | Transcript is **server-authoritative** (loaded from DB by `conversationId`); `entries` remain **client-authoritative** between turns and travel with every request; tools mutate a per-turn working copy mirrored to the browser by events. |
+| State | Transcript is **server-authoritative** (loaded from DB by `conversationId`) and stored in **TanStack AI's normalized message format including tool-call/tool-result parts** — the model sees its own earlier tool activity, and each adapter converts to the provider's native wire shapes per request (full fidelity with the selected provider, no provider lock-in). `entries` remain **client-authoritative** between turns and travel with every request; tools mutate a per-turn working copy mirrored to the browser by events. |
 | Agent reach | `setValues`, `extractFromDrawing`, `previewCandidates`, `calculate` (persists), `selectCandidates`, `searchSimilar`, `getDocHistory`, `suggestFollowUps`. Every write tool's guard equals its UI button's enabled-condition. **No `createQuote`** (phase 5 unbuilt). |
 | Value application | **Live**: each successful `setValues` emits a `changes` event; the browser applies values + AI markers immediately while the model keeps talking. Revert stays per-message. |
 | Drawing reading | **Dedicated `extractFromDrawing` tool** — delegates to the existing Gemini extraction path (`callExtraction` + `buildExtractionRequest`) **regardless of the chat provider**; the attachment stays *out* of the main loop's contents. No `GEMINI_API_KEY` → the tool returns an error result the model relays. Applying extracted values still goes through `setValues` — one validation path. |
@@ -67,8 +67,10 @@ the process page, `configs.run` delegating to `executeRun`.
 
 - `assistant_conversation`: `id, tenantId, projectId, provider, model, title` (first user
   message, truncated), `createdAt, updatedAt`.
-- `assistant_message`: `id, conversationId, role, content` (jsonb — exactly what the UI renders:
-  `{text, changes?, invalid?, suggestions?, fileName?}`), `createdAt`.
+- `assistant_message`: `id, conversationId, role, content` (jsonb with two keys — `ui`: what the
+  pane renders, `{text, changes?, invalid?, suggestions?, fileName?}`; `model`: the TanStack AI
+  normalized message incl. tool-call/tool-result parts, replayed to the LLM on later turns),
+  `createdAt`. Storing both beats re-deriving one from the other on every load.
 - Procedures (all through `userProcedure`'s tenant-membership context, conversation rows
   additionally checked against the tenant):
   - `assist.providers` → `[{provider, model, available}]` from which env keys are set.
@@ -80,8 +82,10 @@ the process page, `configs.run` delegating to `executeRun`.
 - Persistence timing: the user message is written at turn start; the assistant message is
   written in a `finally` with whatever accumulated (partial text/changes survive disconnects
   and mid-stream errors).
-- Provider is stored on the conversation and switchable mid-conversation — safe because the
-  persisted transcript is plain text + tool results, portable across providers.
+- Provider is stored on the conversation and switchable mid-conversation — safe because
+  messages persist in TanStack AI's provider-neutral format; the adapter regenerates the
+  native shapes (Anthropic `tool_use` blocks, Gemini `functionCall` parts, OpenAI `tool_calls`)
+  from it on every request. Provider-only artifacts (e.g. thinking blocks) are not persisted.
 
 ### Turn lifecycle (`assist.chat`)
 
@@ -98,14 +102,16 @@ Input:
 1. Load project + model, `assertAgentReady` if `needsAgent`, `freshLookups`. Load (or create)
    the conversation; persist the user message; load the last 20 messages as the transcript.
    Working copy `working = {...entries}`; `propagate` for the turn-start snapshot.
-2. Build system prompt + provider-neutral messages from the transcript (text only — no file
-   bytes in the loop context).
+2. Build system prompt + the transcript's normalized messages (text and tool-call/result
+   parts; never file bytes — those stay out of the loop context).
 3. Run TanStack AI `chat()` with the adapter for the conversation's provider and the tool set
    (≤8 iterations, then one forced no-tools wrap-up). Stream chunks translate to events:
    text → `delta`; tool start → `tool`; tool executions run the injected executors and emit
    their domain events (`changes`, `candidates`, `selection`).
 4. Yield `done` with suggestions collected via `suggestFollowUps`; persist the assistant
-   message.
+   message (`ui` render shape + `model` normalized parts). Replayed tool results from old
+   turns can carry stale domain snapshots — harmless because the system prompt's turn-start
+   snapshot is rebuilt fresh every turn and instructed as authoritative.
 
 ### Event protocol
 
@@ -324,7 +330,8 @@ Rule: **errors the model can act on go into the loop; errors it can't end the tu
   events preserved **and** partial assistant message persisted.
 - **Conversations**: CRUD procedures tenant-scoped (foreign tenant's conversation → not found);
   chat with no `conversationId` creates one and emits `conversation`; transcript truncation at
-  20; delete cascades messages.
+  20; delete cascades messages; persisted `model` parts round-trip — a turn with tool calls is
+  replayed to the next turn's adapter with those tool-call/result parts intact.
 - **Web**: stream-consumer reducer tests (delta appends; changes applies + marks; `selection`
   invalidates and reflects picks; error keeps partials + Retry re-sends current entries; done
   renders chips). Revert/marker tests as spec'd. Conversation switch/load: loaded messages
