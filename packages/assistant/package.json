@@ -9,6 +9,10 @@
   "dependencies": {
     "@hera/config-engine": "workspace:*",
     "@orpc/server": "^1.14.6",
+    "@tanstack/ai": "0.42.0",
+    "@tanstack/ai-anthropic": "0.16.3",
+    "@tanstack/ai-gemini": "0.20.1",
+    "@tanstack/ai-openai": "0.17.1",
     "drizzle-orm": "^0.45.2",
     "zod": "^4.4.3"
   },
