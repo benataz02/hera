@@ -1,371 +1,353 @@
-# Configurator assistant: conversations + multi-provider models + `packages/assistant` — design
+# Configurator Assistant
 
-Extends the configurator assistant (base design: `2026-07-20-configurator-agent-design.md`) with
-three things: **bounded conversations** (new chat, load a past one), a **user-switchable model**
-across Anthropic, Google and OpenAI behind hand-rolled adapters, and a new home — all server-side
-assistant code lands in **`packages/assistant`** (`@hera/assistant`), mounted by `apps/server` in
-one line. The web UI stays in `apps/web/src/components/assistant/`. Tool semantics, `ChatPart`,
-persistence, admission and the revert/AI-marker model are unchanged.
+## Context
 
----
+The configuration process page (`ConfigProcessPage`) has three accelerators with separate
+surfaces: drawing extraction (header panel), similar-configuration copy + B1 doc history (right
+pane), and live domain propagation in the form. This feature unifies them behind a conversational
+assistant driven by a **server-side function-calling agent loop**: the user iterates in chat, the
+model calls tools (validate values, read drawings, search history, preview, calculate, select
+candidates), the server validates every action, and results stream to the browser live.
 
-## 1. Why
+The assistant is a **separate feature package** (`packages/assistant`) with its own DB tables:
+conversations persist per project (list, load, start new, delete), and the user picks the LLM
+provider per conversation — Gemini, Anthropic, or OpenAI — through TanStack AI adapters.
 
-- **Conversations.** A thread today *is* every `config_chat_turn` for a `(tenantId, projectId)`
-  pair. Nothing scopes or ends it, so it grows forever and `providerHistory`'s 30-message cap
-  silently amputates the oldest context with no way to start clean.
-- **Providers.** Anthropic is welded into the turn loop at five points: `TOOLS`
-  (`Anthropic.Tool[]`), the `messages` array type, `decideNext`'s stop-reason strings,
-  `toolRoundMessages`' `tool_result` block, and the `content_block_delta` stream branch. Everything
-  downstream (`ChatPart`, the DB rows, `assistantState.ts`) is already provider-neutral. A
-  framework (Vercel AI SDK etc.) would buy a shared interface across providers at the cost of a
-  dependency and an abstraction layer — hand-rolled adapters over a neutral transcript are enough
-  for three providers and one call shape.
-- **Package.** The assistant is a self-contained feature — its own tables, its own router, its own
-  provider SDKs. A workspace package makes that boundary physical and keeps the server's
-  dependency list honest; the server mounts a router and knows nothing else.
+**Reach ends at `selectCandidates`.** Quote creation (phase 5: `configs.createQuote` → durable
+`agent_request` row → agent posts a B1 Quotation idempotently) does not exist anywhere yet — no
+server procedure, no agent kind, the Create quote step is a `ToBeDone` placeholder — so the
+agent gets no `createQuote` tool and no confirmation gate. The full confirm-gate design is
+preserved under *Upgrade paths* for when phase 5 lands.
 
----
+## Decisions
 
-## 2. Package: `packages/assistant`
+| Axis | Decision |
+|---|---|
+| Interaction shape | **Server-side function-calling loop** (max 8 iterations) per chat turn, run by TanStack AI's `chat()` with zod `toolDefinition()` tools. |
+| Transport | **Full token streaming** over an oRPC event iterator (async-generator handler). This is the repo's **first** SSE endpoint — the old `quote.watch` precedent died with the outbox rework; oRPC supports this natively over the existing Hono RPC handler. The server translates TanStack AI stream chunks into our event protocol. |
+| Placement | **`packages/assistant`** owns the loop, provider registry, tool declarations, prompt builder, conversation schema, and an oRPC router factory. `apps/server` mounts the router and injects the db instance + tool executors (they need server context: lookups, validation, runs, extraction). UI stays in `apps/web`. |
+| Provider | **User-switchable per conversation**: Gemini / Anthropic / OpenAI via `@tanstack/ai` + `@tanstack/ai-gemini` / `-anthropic` / `-openai` adapters. Platform env keys (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) + per-provider `*_MODEL` overrides; the picker lists only providers whose key is set. All `@tanstack/ai*` packages are 0.x — pin versions; the package boundary contains API churn. |
+| Persistence | **DB-backed conversations, per project**: `assistant_conversation` + `assistant_message` tables owned by the package (migrations still generated from `packages/db`). "New chat" starts a fresh conversation; past ones are listable, loadable, and deletable. AI markers and revert stay **live-session only**. |
+| State | Transcript is **server-authoritative** (loaded from DB by `conversationId`); `entries` remain **client-authoritative** between turns and travel with every request; tools mutate a per-turn working copy mirrored to the browser by events. |
+| Agent reach | `setValues`, `extractFromDrawing`, `previewCandidates`, `calculate` (persists), `selectCandidates`, `searchSimilar`, `getDocHistory`, `suggestFollowUps`. Every write tool's guard equals its UI button's enabled-condition. **No `createQuote`** (phase 5 unbuilt). |
+| Value application | **Live**: each successful `setValues` emits a `changes` event; the browser applies values + AI markers immediately while the model keeps talking. Revert stays per-message. |
+| Drawing reading | **Dedicated `extractFromDrawing` tool** — delegates to the existing Gemini extraction path (`callExtraction` + `buildExtractionRequest`) **regardless of the chat provider**; the attachment stays *out* of the main loop's contents. No `GEMINI_API_KEY` → the tool returns an error result the model relays. Applying extracted values still goes through `setValues` — one validation path. |
+| Pane placement | **Right splitter pane, not a step**: `CONFIG_PROCESS_STEP_IDS` stays `["configure","candidates","quote"]`. The chat lives where `HistoryPane` lived; the form stays visible while values land; the chat keeps working on the Candidates step. |
+| History | **Merged into the pane**: "Similar configurations" and "Document history" as collapsible Panels (collapsed by default) above the chat — current `HistoryPane` content with Copy intact, no LLM involved. The standalone history pane disappears. |
+| Form feedback | **Persistent AI marker**: assistant-set fields get an `ObjectStatus state="Information"` chip with `sap-icon://ai` beside the control (same slot as the `defaulted → "auto"` chip), tooltip = evidence. Cleared when the user edits that field or reverts. |
+| Follow-ups | **Model-proposed suggestion chips** via the `suggestFollowUps` tool (≤3, short user-voice prompts), rendered under the latest assistant reply only; clicking sends that text. |
+| UI kit | `@ui5/webcomponents-ai-react` (installed): `PromptInput` for input. No UI5 chat component exists, so the log is composed from standard components. The frontend keeps our domain event protocol — no `@tanstack/ai-react` (its chat client doesn't model `changes`/`candidates`/`selection`). |
 
-### Layout
+## Architecture
 
 ```
-packages/assistant/
-  package.json          @hera/assistant
-  src/
-    index.ts            exports createAssistantRouter + schema
-    schema.ts           config_chat_turn, config_chat_message (pure drizzle table defs)
-    router.ts           createAssistantRouter(deps) → { chat, messages, conversations, models }
-    loop.ts  prompt.ts  admission.ts  setValues.ts  conversations.ts
-    providers/          types.ts  models.ts  anthropic.ts  google.ts  openai.ts
-    *.test.ts           tests live beside the code
+packages/assistant      src/schema.ts    assistant_conversation + assistant_message (Drizzle pgTable)
+                        src/provider.ts  provider registry from env; listAvailable()
+                        src/tools.ts     toolDefinition() declarations (zod inputs); execution injected
+                        src/prompt.ts    buildAssistPrompt(...) — imports formatParameterBlock
+                        src/router.ts    createAssistantRouter(base, deps):
+                                         assist.{providers,list,get,delete,chat}
+packages/config-engine  exports formatParameterBlock(...) factored out of extract.ts — one source
+                        of truth for how parameters are described to any LLM
+packages/db             drizzle.config.ts `schema` becomes an array that also includes
+                        ../assistant/src/schema.ts — one migration pipeline, no runtime dep
+apps/server             mounts createAssistantRouter(userProcedure, { db, executors }) — the
+                        executors close over server context (lookups, validateSuggestionSet,
+                        executeRun, select path, similarity, doc history, callExtraction)
+apps/web                AssistantPane.tsx (new) consumes the event stream: deltas, activity lines,
+                        live changes, follow-up chips, conversation switcher. ConfigProcessPage
+                        swaps it in for HistoryPane; ConfiguratorForm gains the aiMarks chip.
 ```
 
-### Wiring: `createAssistantRouter(deps)`
+Groundwork that already exists: `validateSuggestionSet` (combined-state validation,
+`apps/server/src/extraction.ts`), `calculate(calculationEntries)` + `buildCalculationUpdate` on
+the process page, `configs.run` delegating to `executeRun`.
 
-The package never imports `apps/server`. The app injects the two things only it can provide:
+### Conversations
 
-```ts
-// packages/assistant/src/router.ts
-export function createAssistantRouter(deps: {
-  base: UserBase;                  // tenant-authed procedure builder (apps/server/src/orpc/base.ts)
-  callExtraction: CallExtraction;  // drawing-extraction core; backs extract_from_drawing
-}) {
-  return { chat, messages, conversations, models };
-}
+- `assistant_conversation`: `id, tenantId, projectId, provider, model, title` (first user
+  message, truncated), `createdAt, updatedAt`.
+- `assistant_message`: `id, conversationId, role, content` (jsonb — exactly what the UI renders:
+  `{text, changes?, invalid?, suggestions?, fileName?}`), `createdAt`.
+- Procedures (all through `userProcedure`'s tenant-membership context, conversation rows
+  additionally checked against the tenant):
+  - `assist.providers` → `[{provider, model, available}]` from which env keys are set.
+  - `assist.list({projectId})` → conversation summaries, newest first.
+  - `assist.get({conversationId})` → messages for rendering a loaded conversation.
+  - `assist.delete({conversationId})` → hard delete (cascade messages).
+  - `assist.chat` (below) — `conversationId` absent ⇒ creates the conversation on first turn
+    (provider from the request, title from the message).
+- Persistence timing: the user message is written at turn start; the assistant message is
+  written in a `finally` with whatever accumulated (partial text/changes survive disconnects
+  and mid-stream errors).
+- Provider is stored on the conversation and switchable mid-conversation — safe because the
+  persisted transcript is plain text + tool results, portable across providers.
 
-// apps/server/src/orpc/router.ts
-assistant: createAssistantRouter({ base: userProcedure, callExtraction }),
+### Turn lifecycle (`assist.chat`)
+
+Input:
+
+```
+{ projectId, conversationId?,               // absent → create
+  provider?,                                // used on create / switch; must be available
+  entries,                                  // unsaved local overrides = real state
+  message (≤4000ch),
+  file?: ExtractFileZ }                     // consumed only by extractFromDrawing
 ```
 
-End-to-end `AppRouter` typing is unchanged — the factory's return type is inferred through the
-router export, so web and e2e clients notice nothing.
+1. Load project + model, `assertAgentReady` if `needsAgent`, `freshLookups`. Load (or create)
+   the conversation; persist the user message; load the last 20 messages as the transcript.
+   Working copy `working = {...entries}`; `propagate` for the turn-start snapshot.
+2. Build system prompt + provider-neutral messages from the transcript (text only — no file
+   bytes in the loop context).
+3. Run TanStack AI `chat()` with the adapter for the conversation's provider and the tool set
+   (≤8 iterations, then one forced no-tools wrap-up). Stream chunks translate to events:
+   text → `delta`; tool start → `tool`; tool executions run the injected executors and emit
+   their domain events (`changes`, `candidates`, `selection`).
+4. Yield `done` with suggestions collected via `suggestFollowUps`; persist the assistant
+   message.
 
-**No feature flag.** With no provider key set, `assistant.models` returns `[]` and the web hides
-the sparkle toggle. That is the off switch; the router is always mounted.
+### Event protocol
 
-### Schema and migrations, no cycle
-
-`src/schema.ts` imports only `drizzle-orm`. `packages/db`'s `drizzle.config.ts` adds
-`../assistant/src/schema.ts` to its schema paths, so generation and migration keep running from
-`packages/db` — which never imports `@hera/assistant`. At runtime the dependency points the other
-way only: `@hera/assistant` imports `@hera/db` for the client. One direction per layer, no cycle.
-
-### Dependencies
-
-Every direct import is listed explicitly in `package.json` (bun isolated installs do not resolve
-transitively in this monorepo): `@anthropic-ai/sdk`, `@google/genai`, `openai` **(the one new
-dep)**, `@orpc/server`, `drizzle-orm`, `zod`, `@hera/db`. `apps/server` drops the provider SDKs it
-no longer imports directly.
-
----
-
-## 3. Conversations
-
-### Schema (migration `0005`)
-
-`config_chat_turn` gains two columns. No new table, no title column, no archive flag.
-
-| Column | Type | Notes |
+| Event | Payload | Client reaction |
 |---|---|---|
-| `conversation_id` | `uuid NOT NULL` | client-generated, like `id` |
-| `model` | `text` (nullable) | the model that answered; nullable for pre-migration rows |
+| `delta` | `text` | append to streaming assistant bubble |
+| `tool` | `name, label` | activity line ("Searching similar configurations…") |
+| `changes` | `[{key, from, to, evidence, valid, reason?}]` | apply live + AI markers; invalid rows flagged, never applied |
+| `candidates` | run summary | invalidate `configs.get`, jump to Candidates tab (calculate persisted) |
+| `selection` | saved selection state | invalidate + reflect picks |
+| `conversation` | `{id, title, provider}` | first turn of a new conversation: adopt the id |
+| `error` | `message, retryable` | error bubble + Retry; partial text/changes stay |
+| `done` | `{suggestions: string[]}` | close bubble, render follow-up chips |
 
-Plus `index (tenant_id, project_id, conversation_id, created_at)`.
+The `selection` event exists because of a state asymmetry: `setValues` mutates only the
+client-authoritative working copy (mirrored by `changes`), but `calculate` and `selectCandidates`
+persist server state mid-turn — the browser must invalidate its query cache when that happens,
+not at `done`.
 
-Drizzle generates `ADD COLUMN ... NOT NULL`, which fails on a non-empty table. **Hand-edit the
-generated SQL** into the three-step form — existing turns of one project collapse into one legacy
-conversation:
+Mid-turn user edits of the form stay allowed — last write wins; a user edit clears that field's
+AI marker. The input row locks during a turn; the form does not.
 
-```sql
-ALTER TABLE config_chat_turn ADD COLUMN conversation_id uuid;
-UPDATE config_chat_turn t SET conversation_id = g.cid
-  FROM (SELECT tenant_id, project_id, gen_random_uuid() AS cid
-        FROM config_chat_turn GROUP BY tenant_id, project_id) g
- WHERE t.tenant_id = g.tenant_id AND t.project_id = g.project_id;
-ALTER TABLE config_chat_turn ALTER COLUMN conversation_id SET NOT NULL;
-```
+## Tool roster
 
-`config_chat_message` is unchanged — the turn is the anchor, and both list and load join through
-it. The `config_chat_one_running_uq` partial unique index stays **project**-scoped: one panel, one
-in-flight turn, regardless of which conversation is open.
+Eight tools declared once in `packages/assistant/src/tools.ts` with zod input schemas via
+`toolDefinition()`; execution is injected by `apps/server` as plain functions extracted from
+existing handler bodies (the procedures stay thin wrappers — no behavior change to existing
+routes). All run inside `userProcedure`'s tenant-membership context, closed over
+`{ model, lookups, working, tenantId, projectId, file }`.
 
-### Procedures
-
-| Procedure | Change |
-|---|---|
-| `assistant.conversations` | **new** — `{ projectId }` → `[{ conversationId, title, startedAt, lastActivityAt }]`, newest activity first |
-| `assistant.messages` | `conversationId` added to the input, **required** |
-| `assistant.chat` | `conversationId` and `model` added to the input |
-| `assistant.models` | **new** — no input → `[{ id, label, provider }]`, only models whose API key is set |
-
-`conversations` is one query over sequence-0 messages, folded in JS by a pure
-`foldConversations(rows)` in `packages/assistant/src/conversations.ts` (same shape as
-`admission.ts` / `setValues.ts`: pure, tested, thin router). Title = the first user message,
-truncated in SQL (`left(parts->0->>'text', 80)`) so the payload stays small — sequence-0 parts are
-always exactly `[{ type: "text", text }]`, written by one hardcoded insert.
-
-```
-// ponytail: folds every turn row for the project; switch to DISTINCT ON + MAX() if a project
-// ever accumulates thousands of turns.
-```
-
-### Turn history is now conversation-scoped
-
-The `history` select inside `chat` gains `eq(configChatTurn.conversationId, input.conversationId)`.
-That single predicate is what actually fixes "persists forever" — the model sees one conversation,
-not the project's entire past.
-
-### Client
-
-`useAssistant` owns the conversation state:
-
-- `conversationId: string | null` — `null` until resolved.
-- On mount, `conversations` resolves it: the most recent conversation, or a fresh
-  `crypto.randomUUID()` when the project has none. `messages` stays `enabled: false` until then.
-- `newChat()` — mint a uuid, clear `live`. **Nothing is deleted;** the previous conversation stays
-  in the history menu.
-- `openConversation(id)` — set the id, clear `live`, let the `messages` query refetch.
-- Both abort an in-flight turn first (same call as `stop()`).
-- `available: boolean` — false when `models` returns `[]`; `ConfigProcessPage` hides the sparkle
-  toggle on it.
-
-A conversation whose uuid was minted but never sent has no rows and simply never appears in the
-list.
-
-### Panel UI
-
-The header `Bar` carries all three controls; the conversation list is a stock `Menu`.
-
-```
-┌────────────────────────────────────┐
-│ [Opus 4.8      ▾]      ＋   🕐   ✕ │
-├────────────────────────────────────┤
-│   How can I help you?              │
-│   [Extract…] [What's left?]        │
-```
-
-Past conversations render inert exactly as persisted turns do today (no Accept, no Revert) — the
-existing `m.live` check already covers it, because a loaded conversation has no live messages.
-
----
-
-## 4. Providers
-
-### Neutral types (`packages/assistant/src/providers/types.ts`)
-
-The **transcript is the interface**. The router accumulates provider-agnostic turns; each adapter
-re-serializes the whole transcript per request, so adapters hold no state.
-
-```ts
-export type ToolUse = { id: string; name: string; input: unknown };
-
-export type Turn =
-  | { role: "user"; text: string }
-  | { role: "assistant"; text: string; toolUse?: ToolUse }
-  | { role: "tool"; id: string; name: string; content: string; isError?: boolean };
-
-export type StopReason = "end" | "tool_use" | "max_tokens" | "refusal" | "other";
-
-export type ProviderEvent =
-  | { type: "token"; text: string }
-  | { type: "stop"; reason: StopReason; text: string; toolUse?: ToolUse };
-
-export type NeutralTool = { name: string; description: string; parameters: JsonSchema };
-
-export type Provider = {
-  stream(req: {
-    model: string; system: string; tools: NeutralTool[];
-    transcript: Turn[]; signal: AbortSignal;
-  }): AsyncIterable<ProviderEvent>;
-  errorText(e: unknown): string;
-};
-```
-
-The adapter yields tokens and exactly one terminal `stop` carrying the assembled text and at most
-one tool call. `loop.ts` then depends on nothing but `StopReason` and `ToolUse`.
-
-The `tool` turn carries **both `id` and `name`**: Anthropic and OpenAI match tool results by id,
-**Gemini matches by function name**. Dropping either breaks one provider.
-
-An assistant turn that is a bare tool call has `text: ""`. Every adapter must **omit** the empty
-text rather than serialize it — Anthropic rejects empty text blocks, and OpenAI wants
-`content: null` alongside `tool_calls`. One shared guard, exercised by the mapping tests.
-
-### Registry (`packages/assistant/src/providers/models.ts`)
-
-One literal array — the single place a model id is added or removed.
-
-```ts
-export const MODELS = [
-  { id: "claude-opus-4-8",  label: "Claude Opus 4.8", provider: "anthropic", envKey: "ANTHROPIC_API_KEY" },
-  { id: "claude-sonnet-5",  label: "Claude Sonnet 5", provider: "anthropic", envKey: "ANTHROPIC_API_KEY" },
-  { id: "gemini-3-pro",     label: "Gemini 3 Pro",    provider: "google",    envKey: "GEMINI_API_KEY" },
-  { id: "gemini-3-flash",   label: "Gemini 3 Flash",  provider: "google",    envKey: "GEMINI_API_KEY" },
-  { id: "gpt-5",            label: "GPT-5",           provider: "openai",    envKey: "OPENAI_API_KEY" },
-] as const;
-```
-
-`availableModels()` returns the entries whose `envKey` is set — it backs `assistant.models` and the
-web's `available` flag. `chat` resolves `input.model` the same way and rejects an unavailable id,
-so a client cannot select an unconfigured or unknown model.
-
-`ANTHROPIC_MODEL` is **removed** — the picker is the model choice for chat now; the registry is the
-only place model ids live. `GEMINI_MODEL` still governs drawing extraction, which is untouched.
-
-The client remembers the last pick in `localStorage["hera.assistant.model"]`, validated against
-`assistant.models` on open, falling back to the first available. No user-preference schema.
-
-### Adapters
-
-Each is a pure request mapper + a pure chunk reducer + ~20 lines of stream glue, under
-`packages/assistant/src/providers/`.
-
-| | Anthropic | Google | OpenAI |
-|---|---|---|---|
-| SDK | `@anthropic-ai/sdk` *(installed)* | `@google/genai` *(installed)* | `openai` **(new dep)** |
-| Call | `messages.stream` | `models.generateContentStream` | `chat.completions.create({stream:true})` |
-| System | `system` param | `config.systemInstruction` | leading `system` message |
-| Max tokens | `max_tokens` | `config.maxOutputTokens` | `max_completion_tokens` |
-| Tool result | `tool_result` block, by `tool_use_id` | `functionResponse`, by **name** | `role:"tool"`, by `tool_call_id` |
-| Tool args | object | object | JSON **string** — `JSON.stringify` out, `JSON.parse` in |
-| No parallel calls | `tool_choice.disable_parallel_tool_use` | *no flag* — adapter takes the first `functionCall` | `parallel_tool_calls: false` |
-| Abort | `{ signal }` | `config.abortSignal` | `{ signal }` |
-
-Stop-reason mapping:
-
-| Neutral | Anthropic | Google `finishReason` | OpenAI `finish_reason` |
-|---|---|---|---|
-| `end` | `end_turn`, `stop_sequence` | `STOP` (no function calls) | `stop` |
-| `tool_use` | `tool_use` | `STOP` **with** function calls | `tool_calls` |
-| `max_tokens` | `max_tokens` | `MAX_TOKENS` | `length` |
-| `refusal` | `refusal` | `SAFETY`, `PROHIBITED_CONTENT`, `BLOCKLIST` | `content_filter` |
-| `other` | anything else | anything else | anything else |
-
-`errorText` keeps today's `"<status>: <message>"` convention per SDK error type, so the existing
-verbatim-provider-error behaviour survives unchanged for all three.
-
-**No adapter needs multimodal support.** `extract_from_drawing` runs Gemini's extraction path
-server-side and returns text plus a `suggestions` part; the drawing never reaches the chat
-provider.
-
-### `set_values` tool schema
-
-A free-form `{ type: "object" }` with no `properties` is Anthropic-only — Gemini's OpenAPI subset
-rejects it and OpenAI strict mode refuses it. The map becomes an array of string pairs:
-
-```ts
-values: [{ key: "material", value: "aluminium" }, { key: "section", value: "25" }]
-```
-
-`applySetValues` gains a coercion step keyed on the parameter's declared type, before its existing
-per-key validation:
-
-| `p.type` / `p.ui` | Coercion | Failure |
+| Tool | Args → Returns | Backing / guards |
 |---|---|---|
-| `number` | `Number(v)` | `NaN` → `"Expected a number"` |
-| `boolean` | `v === "true"` | other text → `"Expected true or false"` |
-| `multicombo` | `[v]` | — |
-| `string` | `v` | — |
+| `setValues` | `{values:[{key,value}]}` → per-value `{valid, reason?}`, changed narrowed domains, remaining conflicts, still-unset params | `validateSuggestionSet` on `working`; valid values mutate it + emit `changes`. The rich return powers self-correction. |
+| `extractFromDrawing` | `{}` → per-param `{value, evidence}` (nulls omitted) | `callExtraction` (see refactor) — always Gemini. Error result if no attachment or no `GEMINI_API_KEY`. |
+| `previewCandidates` | `{overrides?}` → top-K candidates + count | Pure `enumerate` + `computeOutputs` on working + overrides. No persistence — the what-if instrument. |
+| `calculate` | `{}` → run summary | Persist working entries via the `update` path, then `executeRun` — exactly the UI's `calculate()`. Guard: rejected if conflicts remain or batches empty (= Calculate button condition). Emits `candidates`. |
+| `selectCandidates` | `{selections:[{candidateIdx, batchQty}], mode:"add"\|"replace"}` → selection state | Extracted `select` path (totals recomputed server-side from the run snapshot — client/LLM numbers never persisted). Guard: latest run exists and is not stale (mirrors the Candidates tab condition: project calculated, working entries/batches unchanged since the run). Emits `selection`. |
+| `searchSimilar` | `{}` → top-3 `{score, values, display}` | Extracted `similar` internals. |
+| `getDocHistory` | `{itemCode?}` → doc rows | Extracted `docHistory` internals via agent; agent failure → `{unavailable:true}` tool result, never a dead turn. |
+| `suggestFollowUps` | `{suggestions: string[]}` (≤3) → no-op | Stashed for `done`. A tool (not structured output) so it works identically on all three providers. Model forgets → empty chips, no error. |
 
-Non-string input (an object-shaped call from a model that ignores the schema) still validates
-through the existing path, so the change is additive.
+### Extraction refactor (`apps/server/src/orpc/routers/extraction.ts`)
 
-### Loop changes (`packages/assistant/src/loop.ts`)
+Split `extractSuggestions` into:
+- `callExtraction(model, lookups, file) → raw parsed record` — key check, Gemini call with
+  `buildExtractionRequest`, JSON parse, error mapping. Shared core.
+- `extraction.extract` (portal/standalone) = `callExtraction` + `validateSuggestions(…, {}, raw)`
+  — behavior unchanged; existing tests must keep passing.
+- The assistant's tool executor = `callExtraction` + format as tool result.
 
-- `decideNext({ stop, toolUse, round, maxRounds, aborted })` — same `NextAction`, no Anthropic
-  types.
-- `toolRoundMessages` → `appendToolRound(transcript, assistantTurn, toolResult)` returning
-  `Turn[]`.
-- `providerHistory` in `prompt.ts` returns `Turn[]`; its "first message must be user" shift stays —
-  Anthropic and Gemini both require it, OpenAI does not care.
+## System prompt
 
-The router's provider block becomes:
+`buildAssistPrompt(model, propagated, entries, ctx: {customer, status, selections, attachment?})`
+in `packages/assistant/src/prompt.ts` — pure, rebuilt fresh every turn (turn-start snapshot;
+`setValues` returns keep the model current mid-turn). Section order: role → domain context →
+parameters → current state → rules (stable first, rules last).
 
-```ts
-const spec = availableModel(input.model);           // 400 if unknown/unconfigured
-const provider = PROVIDERS[spec.provider]();
-for (let round = 0; ; ) {
-  let stop: Extract<ProviderEvent, { type: "stop" }> | undefined;
-  for await (const ev of provider.stream({ model: spec.id, system, tools: TOOLS, transcript, signal: combined })) {
-    if (ev.type === "token") yield { type: "token", text: ev.text };
-    else stop = ev;
-  }
-  ...
-}
+```
+You are the configuration assistant for "{model.name}". You work beside a sales
+user who sees the product configuration form at all times; values you set appear
+in it immediately, marked as AI-set, and the user can revert any of them.
+
+{model.extraction.context}
+
+## Parameters
+- {key}: {label} ({type}{, unit}) — {help}
+  Current: {entries[key] ?? "not set"}{ (defaulted)}
+  Allowed: {narrowed domain / range}          ← eliminated options excluded
+  {Hint: extractionHint}
+
+## Current state
+Customer: {cardCode — name}
+Project status: {draft | calculated}; {n} candidates, {m} selected
+Open conflicts: {messages | "none"}
+{Attachment: "{name}" ({mimeType}) — use extractFromDrawing to read it.}
+
+## How to work
+- Values go through setValues only. Its result tells you what was rejected and
+  why, and how the allowed values narrowed — fix rejections yourself when the
+  user's intent is clear; ask only when it genuinely is not.
+- Never invent a value. Every value must come from the user's words, the drawing
+  (via extractFromDrawing), or a past configuration (searchSimilar /
+  getDocHistory) — and its evidence string must say which.
+- Explore what-ifs with previewCandidates; it changes nothing. Run calculate only
+  when the user wants results and no conflicts remain. selectCandidates saves the
+  user's picks on the current run.
+- You cannot create quotations — the user does that from the Create quote step
+  after selecting candidates. Never claim a quote exists or will be created.
+- Prefer acting over describing: if the user asks for something a tool does, call
+  the tool. Don't narrate a plan without executing it, and don't re-state the
+  form — the user is looking at it.
+- Reply in the user's language. Be brief; short sentences over lists when a few
+  values are involved.
+- Before your final reply of a turn, call suggestFollowUps with up to 3 short
+  next-step prompts phrased in the user's voice ("Fill the remaining 3
+  parameters", "Calculate candidates" — the latter only when no conflicts
+  remain). Skip suggestions that don't apply.
 ```
 
-The `ANTHROPIC_API_KEY` guard becomes a no-configured-models guard naming all three env vars.
+The parameter block reuses `extract.ts` formatting via the shared `formatParameterBlock`
+(exported from `packages/config-engine`) — one source of truth for how parameters are described
+to the LLM. Evidence discipline feeds the marker tooltips (UI contract). The
+no-quote-capability line stops the model from promising an action it doesn't have.
 
----
+## Frontend
 
-## 5. Errors
+### Pane layout
 
-| Case | Behaviour |
-|---|---|
-| No provider key set at all | `assistant.models` returns `[]`; the web hides the toggle. `chat` also throws `SERVICE_UNAVAILABLE` defensively, naming all three env vars. |
-| Unknown / unconfigured `model` | `BAD_REQUEST`; the client re-reads `assistant.models` and falls back |
-| Provider API error | unchanged — verbatim `"<status>: <message>"` from that provider's `errorText` |
-| Everything else | unchanged (deadline, tool rounds, max tokens, refusal, cancel) |
+```
+┌─ Assistant ──────────────────┐
+│ [model ▾]      [🗂 chats] [+] │  ← provider picker, conversation list, new chat
+│ ▸ Similar configurations (3) │  ← collapsible Panels, collapsed by default,
+│ ▸ Document history           │    HistoryPane content + Copy buttons (no LLM)
+│ ─────────────────────────────│
+│  (scrollable chat log)       │
+│  (follow-up chips)           │
+│  [attach] [PromptInput    ➤] │
+└──────────────────────────────┘
+```
 
-Switching model mid-conversation is legal and needs no special handling: history reaches every
-provider as plain `{ role, text }` turns via `providerHistory`, and `model` is recorded per turn.
+- The title-bar `History` ToggleButton becomes **Assistant** (icon `ai`); same open/close
+  animation, same default-open heuristic (`model.definition.history` present).
+- Header row: provider `Select` (only available providers; value = conversation's provider,
+  changeable anytime), conversation list popover (`assist.list`: title + relative time +
+  per-item delete), **New chat** button (drops `conversationId`; next send creates one).
+- The pane is step-independent: values applied while on Candidates make `entries` dirty — the
+  existing `staleRun` banner and tab-disabling already handle that.
 
----
+### `AssistantPane.tsx`
 
-## 6. Testing
+- Props `{ projectId, model, lookups, entries, onApply, onCandidates, onSelection, onCopy,
+  paneOpen, chat? }` — `onCandidates`/`onSelection` are the page's reactions to the
+  server-persisting events (invalidate + navigate / invalidate + reset `selOverride`); `chat` is
+  the injectable stream-consumer for tests (ExtractPanel precedent).
+- Conversation state: `conversationId` in component state; `assist.get` hydrates the log when
+  one is loaded from the list. Loaded (pre-session) messages render read-only: change lines
+  show as history without revert buttons, and set no AI markers — revert and markers apply only
+  to messages streamed in the live session (a persisted `from` is stale against today's
+  entries).
+- Top: the two history Panels — `HistoryPane`'s internals embedded (queries keep `paneOpen`
+  gating; Copy routes through the existing `copyValues` fill-empty-only path, which does **not**
+  set AI markers — only chat-applied values do).
+- Message shape: `{ role, text, changes?, invalid?, suggestions?, file? }` with
+  `changes: [{ key, from, to, evidence, reverted }]` — the same shape persisted in
+  `assistant_message.content`.
+- Assistant message renders: streaming reply text → activity lines (from `tool` events) → one
+  line per applied change (`Label: old → new` as `ObjectStatus Information`, evidence in small
+  muted text beneath) with per-line **↩ revert** → invalid values as `ObjectStatus Negative` +
+  reason (never applied) → **Revert all** (shown when ≥2 changes). Reverted lines render
+  struck-through.
+- Suggestion chips under the latest assistant message only; clicking sends that text. User
+  bubbles right-aligned; attachment shown as removable `Tag`.
+- Empty state: three starter chips — "What's left to fill?", "Fill this from a drawing",
+  "Copy my most similar past config".
+- Input row: `PromptInput` (Enter/AI button → send) + attach `Button` in `FileUploader
+  hideInput`. Streaming turn: input disabled; the live bubble is the busy indicator.
+- Revert per value: restore `from` (delete the entry if `from` was undefined), flag the line
+  `reverted`, clear its AI marker. Revert all = revert every non-reverted line of that message.
+  Last-write-wins snapshot restore. `// ponytail: snapshot restore, no op-log; fine for visible session state`
+- File validation client-side before sending — `toBase64` + MIME map exported from
+  `ExtractPanel.tsx` and reused.
 
-All server-side tests live in the package, beside the code.
+### `ConfigProcessPage.tsx` + `ConfiguratorForm.tsx` integration
 
-| File | What |
-|---|---|
-| `packages/assistant/src/providers/providers.test.ts` | **new** — one table-driven file: transcript → each provider's request body, and each provider's chunks → `ProviderEvent`s, including every stop-reason row above |
-| `packages/assistant/src/conversations.test.ts` | **new** — `foldConversations`: title truncation, ordering by last activity, one-turn conversation |
-| `packages/assistant/src/loop.test.ts` | rewritten against neutral shapes (smaller — no Anthropic fixtures) |
-| `packages/assistant/src/setValues.test.ts` | + coercion cases: numeric string, `NaN`, `"true"`, multicombo wrapping |
-| `apps/web` `assistantState.test.ts` | unchanged — parts and folding are untouched |
+- Right `SplitterElement` hosts `AssistantPane` instead of `HistoryPane`; remove `<ExtractPanel>`
+  from `pageHeader`.
+- **AI markers**: new state `aiMarks: Map<paramKey, evidence>`. `changes` events set marks;
+  the form's `onChange` wrapper diffs old vs new entries and clears the marker of any key the
+  *user* changed; revert clears marks too. `ConfiguratorForm` takes an optional `aiMarks` prop
+  and renders the chip beside the control in the `defaulted → "auto"` slot.
+- `candidates` event: invalidate `configs.get`, `setStep(POST_RUN_STEP)` — same as the Calculate
+  button's success path. `selection` event: invalidate + reset local `selOverride`.
+- Mid-turn manual edits allowed; the streaming turn locks only the chat input.
 
-Manual e2e: three keys set → picker lists five models → same question answered by each; new chat →
-empty panel, old thread still in the history menu; reload → correct conversation restored; unset
-all keys → no sparkle toggle and the rest of the Configure step behaves normally.
+## Error handling
 
----
+Rule: **errors the model can act on go into the loop; errors it can't end the turn.**
 
-## 7. Docs
+- **Tool-level → tool result, loop continues**: zod-validated args (bad → "invalid
+  arguments: …", model retries); domain guards return their reason; history tools return
+  `{unavailable:true}` on agent failure; `extractFromDrawing` returns an error result when the
+  Gemini key is missing.
+- **Pre-stream** (requested provider's key not set / >15MB / agent not ready / project or
+  conversation not found): normal `ORPCError`s, identical mapping to extraction.
+- **Mid-stream** (provider or infrastructure failure): yield `{type:"error", retryable}` and
+  return — streamed partials stay (applied values passed validation) and the partial assistant
+  message is persisted by the `finally`. Retry re-sends the same message with current entries;
+  safe because entries are client-authoritative between turns.
+- **Iteration cap**: not an error — forced no-tools wrap-up, then `done`.
+- **Turn timeout**: 120s watchdog → `error` retryable.
+- **Client disconnect**: generator abort stops the loop; committed writes (a persisted run or
+  selection, the partial assistant message) stay; lost `changes` events don't diverge state
+  because the next request carries the client's entries, and the query-cache invalidation on
+  reload shows persisted state.
 
-`docs/assistant-guide.md`: the feature lives in `packages/assistant`, three API keys instead of
-one, the model picker, new-chat/history controls, and `ANTHROPIC_MODEL` removed (superseded by the
-registry + picker).
+## Limits
 
----
+`MAX_ITERATIONS = 8`; transcript = last 20 messages loaded per turn; message ≤4000 chars; file
+≤15MB; 120s turn watchdog; platform env keys (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY` + optional `*_MODEL` overrides with pinned defaults). `@tanstack/ai*` pinned
+(0.x). `// ponytail: per-tenant keys/metering when a tenant asks`
 
-## 8. Deliberately skipped
+## Testing / Verification
 
-- Rename, delete or archive a conversation — the list is derived; add a table when it's asked for.
-- Cross-conversation search, and summarization of threads past the 30-message cap.
-- Server-side per-user model preference — localStorage until it demonstrably isn't enough.
-- Parallel tool calls, streamed tool arguments, multimodal chat input, per-tenant API keys.
-- A provider framework (Vercel AI SDK) — three hand-rolled adapters over one neutral transcript
-  type; revisit only if the provider count or call shapes grow.
+- **assistant** `prompt.test.ts`: prompt has narrowed domains (eliminated absent), current
+  values, conflicts, attachment note only with a file; `setValues` declaration enum matches the
+  model; never-guess + no-quote-capability instructions present. `provider.test.ts`:
+  `listAvailable` reflects env keys. `extract.test.ts` (config-engine) untouched and green
+  after the `formatParameterBlock` factor-out.
+- **Server executor** (no LLM): `setValues` applies/flags/rejects-jointly-conflicting; every
+  guard fires (conflicted calculate rejected; stale-run selectCandidates rejected); dead agent →
+  `{unavailable:true}`.
+- **Server loop** (scripted fake TanStack AI adapter, injected): text-only → deltas + done;
+  tool call → tool + changes → second iteration; cap → forced wrap-up; calculate →
+  `candidates` event; selectCandidates → `selection` event; mid-loop throw → error event, prior
+  events preserved **and** partial assistant message persisted.
+- **Conversations**: CRUD procedures tenant-scoped (foreign tenant's conversation → not found);
+  chat with no `conversationId` creates one and emits `conversation`; transcript truncation at
+  20; delete cascades messages.
+- **Web**: stream-consumer reducer tests (delta appends; changes applies + marks; `selection`
+  invalidates and reflects picks; error keeps partials + Retry re-sends current entries; done
+  renders chips). Revert/marker tests as spec'd. Conversation switch/load: loaded messages
+  read-only (no revert, no markers); New chat clears the log and next send creates.
+- **Manual e2e**: attach drawing → "configure this from the drawing and pick the cheapest
+  option" → extraction activity line, form fills live with `ai` chips, calculate lands on
+  Candidates, selection saved via chat. Switch provider mid-conversation and continue. Reload →
+  conversation loads read-only; New chat → fresh; delete removes from list. Mid-turn manual
+  edit clears its marker; kill server mid-turn → error bubble, Retry completes; unset all
+  provider keys shows the friendly error.
+
+## Upgrade paths (out of scope)
+
+- **`createQuote` + confirmation gate** (blocked on phase 5 — quote creation does not exist:
+  no `configs.createQuote`, no durable agent `quote` kind, Quote step is `ToBeDone`; the schema
+  already reserves `configRun.b1DocEntry`/`quotedAt`). When it lands, the preserved design is:
+  a `createQuote` tool that **never executes inside the loop** — it yields a `confirm` event
+  (customer, selections, totals) and ends the turn; the user's confirm click starts a new turn
+  carrying `approved: { tool: "createQuote", args }`; the server executes the approved tool
+  *first* and its result (success or failure) opens the model context; dedup on the durable
+  request row makes double-submit harmless. Guard: calculated + ≥1 selection. Prompt line
+  "never claim a quote exists until the tool has run" replaces the current no-capability line.
+- Drawing extraction through the active provider's vision (today: always Gemini).
+- Per-tenant AI keys / metering.
+- Parallel tool execution within an iteration (sequential is fine at this tool count).
+- Multi-file attachments per turn.
