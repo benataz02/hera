@@ -72,6 +72,18 @@
         "vite": "^8.0.16",
       },
     },
+    "packages/assistant": {
+      "name": "@hera/assistant",
+      "dependencies": {
+        "@hera/config-engine": "workspace:*",
+        "@orpc/server": "^1.14.6",
+        "drizzle-orm": "^0.45.2",
+        "zod": "^4.4.3",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.3.14",
+      },
+    },
     "packages/config-engine": {
       "name": "@hera/config-engine",
       "dependencies": {
@@ -214,6 +226,8 @@
     "@google/genai": ["@google/genai@2.10.0", "", { "dependencies": { "google-auth-library": "^10.3.0", "p-retry": "^4.6.2", "protobufjs": "^7.5.4", "ws": "^8.18.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.2" }, "optionalPeers": ["@modelcontextprotocol/sdk"] }, "sha512-e4cFxj3tiuMtsgOT4G9c1hXyGJhg7/Buj7VVeBacRY3fRtkRZZ59Q3nuVp2xbq8BGQXLXCDB253qMhklMOeUDg=="],
 
     "@hera/agent": ["@hera/agent@workspace:apps/agent"],
+
+    "@hera/assistant": ["@hera/assistant@workspace:packages/assistant"],
 
     "@hera/config-engine": ["@hera/config-engine@workspace:packages/config-engine"],
 
