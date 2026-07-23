@@ -4,10 +4,13 @@
 
 The configuration process page (`ConfigProcessPage`) has three accelerators with separate
 surfaces: drawing extraction (header panel), similar-configuration copy + B1 doc history (right
-pane), and live domain propagation in the form. This feature unifies them behind a conversational
-assistant driven by a **server-side function-calling agent loop**: the user iterates in chat, the
-model calls tools (validate values, read drawings, search history, preview, calculate, select
-candidates), the server validates every action, and results stream to the browser live.
+pane), and live domain propagation in the form. This feature adds a conversational assistant in
+a **SAP Joule-style floating window**, driven by a **server-side function-calling agent loop**:
+the user iterates in chat, the model calls tools (validate values, read drawings, search
+history, preview, calculate, select candidates), the server validates every action, and results
+stream to the browser live — structured results render as info cards, Joule-style. The
+similar-configurations/doc-history pane stays a separate surface, untouched; the assistant
+reaches the same data through its tools.
 
 The assistant is a **separate feature package** (`packages/assistant`) with its own DB tables:
 conversations persist per project (list, load, start new, delete), and the user picks the LLM
@@ -32,11 +35,12 @@ preserved under *Upgrade paths* for when phase 5 lands.
 | Agent reach | `setValues`, `extractFromDrawing`, `previewCandidates`, `calculate` (persists), `selectCandidates`, `searchSimilar`, `getDocHistory`, `suggestFollowUps`. Every write tool's guard equals its UI button's enabled-condition. **No `createQuote`** (phase 5 unbuilt). |
 | Value application | **Live**: each successful `setValues` emits a `changes` event; the browser applies values + AI markers immediately while the model keeps talking. Revert stays per-message. |
 | Drawing reading | **Dedicated `extractFromDrawing` tool** — delegates to the existing Gemini extraction path (`callExtraction` + `buildExtractionRequest`) **regardless of the chat provider**; the attachment stays *out* of the main loop's contents. No `GEMINI_API_KEY` → the tool returns an error result the model relays. Applying extracted values still goes through `setValues` — one validation path. |
-| Pane placement | **Right splitter pane, not a step**: `CONFIG_PROCESS_STEP_IDS` stays `["configure","candidates","quote"]`. The chat lives where `HistoryPane` lived; the form stays visible while values land; the chat keeps working on the Candidates step. |
-| History | **Merged into the pane**: "Similar configurations" and "Document history" as collapsible Panels (collapsed by default) above the chat — current `HistoryPane` content with Copy intact, no LLM involved. The standalone history pane disappears. |
+| Window placement | **Joule-style floating window**, not a pane or step: `CONFIG_PROCESS_STEP_IDS` stays `["configure","candidates","quote"]`. Launched from an **Assistant** button (icon `ai`) in the process page title bar; fixed bottom-right overlay with gradient header (back / expand / close), rendered by `ConfigProcessPage` (tools are project-bound). Expand toggles a near-fullscreen mode. The form stays visible and interactive while the window is open; the window survives step changes. |
+| History | **Stays separate**: `HistoryPane` (Similar configurations + Document history + Copy) keeps its right splitter pane and `History` toggle exactly as today — no merge, no removal. The assistant reaches the same data via `searchSimilar`/`getDocHistory` and shows results as cards. |
+| Info display | **Joule-style cards**: structured tool results (`searchSimilar`, `getDocHistory`, `previewCandidates`) stream to the browser via a `result` event and render as `Card`s in the log (rows + key figures), not prose; `changes` and `candidates` render as dedicated cards (applied-values card with revert, run-summary card). |
 | Form feedback | **Persistent AI marker**: assistant-set fields get an `ObjectStatus state="Information"` chip with `sap-icon://ai` beside the control (same slot as the `defaulted → "auto"` chip), tooltip = evidence. Cleared when the user edits that field or reverts. |
 | Follow-ups | **Model-proposed suggestion chips** via the `suggestFollowUps` tool (≤3, short user-voice prompts), rendered under the latest assistant reply only; clicking sends that text. |
-| UI kit | `@ui5/webcomponents-ai-react` (installed): `PromptInput` for input. No UI5 chat component exists, so the log is composed from standard components. The frontend keeps our domain event protocol — no `@tanstack/ai-react` (its chat client doesn't model `changes`/`candidates`/`selection`). |
+| UI kit | `@ui5/webcomponents-ai-react` (installed): `PromptInput` for input. No UI5 chat component exists, so the window is composed from standard components (`Card`, `List`, `ObjectStatus`, `Tag`) with custom bubble/window CSS echoing the Joule look (gradient header, rounded elevated frame). The frontend keeps our domain event protocol — no `@tanstack/ai-react` (its chat client doesn't model `changes`/`candidates`/`selection`). |
 
 ## Architecture
 
@@ -54,9 +58,10 @@ packages/db             drizzle.config.ts `schema` becomes an array that also in
 apps/server             mounts createAssistantRouter(userProcedure, { db, executors }) — the
                         executors close over server context (lookups, validateSuggestionSet,
                         executeRun, select path, similarity, doc history, callExtraction)
-apps/web                AssistantPane.tsx (new) consumes the event stream: deltas, activity lines,
-                        live changes, follow-up chips, conversation switcher. ConfigProcessPage
-                        swaps it in for HistoryPane; ConfiguratorForm gains the aiMarks chip.
+apps/web                AssistantWindow.tsx (new) — Joule-style floating window consuming the
+                        event stream: deltas, activity lines, info cards, live changes,
+                        follow-up chips, conversation switcher. ConfigProcessPage renders it and
+                        keeps HistoryPane untouched; ConfiguratorForm gains the aiMarks chip.
 ```
 
 Groundwork that already exists: `validateSuggestionSet` (combined-state validation,
@@ -68,9 +73,9 @@ the process page, `configs.run` delegating to `executeRun`.
 - `assistant_conversation`: `id, tenantId, projectId, provider, model, title` (first user
   message, truncated), `createdAt, updatedAt`.
 - `assistant_message`: `id, conversationId, role, content` (jsonb with two keys — `ui`: what the
-  pane renders, `{text, changes?, invalid?, suggestions?, fileName?}`; `model`: the TanStack AI
-  normalized message incl. tool-call/tool-result parts, replayed to the LLM on later turns),
-  `createdAt`. Storing both beats re-deriving one from the other on every load.
+  window renders, `{text, changes?, invalid?, results?, suggestions?, fileName?}`; `model`: the
+  TanStack AI normalized message incl. tool-call/tool-result parts, replayed to the LLM on later
+  turns), `createdAt`. Storing both beats re-deriving one from the other on every load.
 - Procedures (all through `userProcedure`'s tenant-membership context, conversation rows
   additionally checked against the tenant):
   - `assist.providers` → `[{provider, model, available}]` from which env keys are set.
@@ -119,7 +124,8 @@ Input:
 |---|---|---|
 | `delta` | `text` | append to streaming assistant bubble |
 | `tool` | `name, label` | activity line ("Searching similar configurations…") |
-| `changes` | `[{key, from, to, evidence, valid, reason?}]` | apply live + AI markers; invalid rows flagged, never applied |
+| `result` | `{tool, data}` (read tools only: `searchSimilar`, `getDocHistory`, `previewCandidates`) | render an info card in the log (result rows + key figures, Joule-style) |
+| `changes` | `[{key, from, to, evidence, valid, reason?}]` | apply live + AI markers; render the applied-values card; invalid rows flagged, never applied |
 | `candidates` | run summary | invalidate `configs.get`, jump to Candidates tab (calculate persisted) |
 | `selection` | saved selection state | invalidate + reflect picks |
 | `conversation` | `{id, title, provider}` | first turn of a new conversation: adopt the id |
@@ -146,11 +152,11 @@ routes). All run inside `userProcedure`'s tenant-membership context, closed over
 |---|---|---|
 | `setValues` | `{values:[{key,value}]}` → per-value `{valid, reason?}`, changed narrowed domains, remaining conflicts, still-unset params | `validateSuggestionSet` on `working`; valid values mutate it + emit `changes`. The rich return powers self-correction. |
 | `extractFromDrawing` | `{}` → per-param `{value, evidence}` (nulls omitted) | `callExtraction` (see refactor) — always Gemini. Error result if no attachment or no `GEMINI_API_KEY`. |
-| `previewCandidates` | `{overrides?}` → top-K candidates + count | Pure `enumerate` + `computeOutputs` on working + overrides. No persistence — the what-if instrument. |
+| `previewCandidates` | `{overrides?}` → top-K candidates + count | Pure `enumerate` + `computeOutputs` on working + overrides. No persistence — the what-if instrument. Emits `result` (info card). |
 | `calculate` | `{}` → run summary | Persist working entries via the `update` path, then `executeRun` — exactly the UI's `calculate()`. Guard: rejected if conflicts remain or batches empty (= Calculate button condition). Emits `candidates`. |
 | `selectCandidates` | `{selections:[{candidateIdx, batchQty}], mode:"add"\|"replace"}` → selection state | Extracted `select` path (totals recomputed server-side from the run snapshot — client/LLM numbers never persisted). Guard: latest run exists and is not stale (mirrors the Candidates tab condition: project calculated, working entries/batches unchanged since the run). Emits `selection`. |
-| `searchSimilar` | `{}` → top-3 `{score, values, display}` | Extracted `similar` internals. |
-| `getDocHistory` | `{itemCode?}` → doc rows | Extracted `docHistory` internals via agent; agent failure → `{unavailable:true}` tool result, never a dead turn. |
+| `searchSimilar` | `{}` → top-3 `{score, values, display}` | Extracted `similar` internals. Emits `result` (info card). |
+| `getDocHistory` | `{itemCode?}` → doc rows | Extracted `docHistory` internals via agent; agent failure → `{unavailable:true}` tool result, never a dead turn. Emits `result` (info card). |
 | `suggestFollowUps` | `{suggestions: string[]}` (≤3) → no-op | Stashed for `done`. A tool (not structured output) so it works identically on all three providers. Model forgets → empty chips, no error. |
 
 ### Extraction refactor (`apps/server/src/orpc/routers/extraction.ts`)
@@ -218,56 +224,73 @@ no-quote-capability line stops the model from promising an action it doesn't hav
 
 ## Frontend
 
-### Pane layout
+### Window layout (Joule-style)
 
 ```
-┌─ Assistant ──────────────────┐
-│ [model ▾]      [🗂 chats] [+] │  ← provider picker, conversation list, new chat
-│ ▸ Similar configurations (3) │  ← collapsible Panels, collapsed by default,
-│ ▸ Document history           │    HistoryPane content + Copy buttons (no LLM)
-│ ─────────────────────────────│
-│  (scrollable chat log)       │
-│  (follow-up chips)           │
-│  [attach] [PromptInput    ➤] │
-└──────────────────────────────┘
+┌─ ‹  Assistant        [model ▾] ⛶ ✕ ┐   ← gradient header (Joule look): back →
+│                                    │     conversations view, expand, close
+│      Hello {firstName},            │
+│      How can I help you?           │   ← welcome view (empty conversation):
+│  ┌ Talk to me naturally, e.g.    ┐ │     greeting + hint card + starter chips
+│  └ "What's left to fill?"        ┘ │
+│  Get started                       │
+│  (Fill from a drawing) (Copy my…)  │
+│                                    │
+│  [attach] [Type something…      ➤] │
+└────────────────────────────────────┘
 ```
 
-- The title-bar `History` ToggleButton becomes **Assistant** (icon `ai`); same open/close
-  animation, same default-open heuristic (`model.definition.history` present).
-- Header row: provider `Select` (only available providers; value = conversation's provider,
-  changeable anytime), conversation list popover (`assist.list`: title + relative time +
-  per-item delete), **New chat** button (drops `conversationId`; next send creates one).
-- The pane is step-independent: values applied while on Candidates make `entries` dirty — the
-  existing `staleRun` banner and tab-disabling already handle that.
+Floating window fixed to the bottom-right of the viewport, rounded corners, elevation shadow,
+gradient header echoing the Joule reference; opened by an **Assistant** button (icon `ai`) in
+the process page title bar. Expand (`⛶`) grows it to near-fullscreen; close keeps conversation
+state (component stays mounted while the page lives). Three views inside one window:
 
-### `AssistantPane.tsx`
+- **Welcome** — a fresh conversation with no messages: greeting with the user's first name,
+  a "talk to me naturally" hint card, and three starter chips ("What's left to fill?",
+  "Fill this from a drawing", "Copy my most similar past config").
+- **Chat** — the conversation log (below).
+- **Conversations** — via the header back arrow (`‹`): `assist.list` for this project (title,
+  relative time, per-item delete), **New chat** button (drops `conversationId`; next send
+  creates one). Picking one hydrates the chat view via `assist.get`.
 
-- Props `{ projectId, model, lookups, entries, onApply, onCandidates, onSelection, onCopy,
-  paneOpen, chat? }` — `onCandidates`/`onSelection` are the page's reactions to the
+Header also holds the provider `Select` (only available providers; value = the conversation's
+provider, changeable anytime). The window is step-independent: values applied while on
+Candidates make `entries` dirty — the existing `staleRun` banner and tab-disabling already
+handle that. `HistoryPane` and its `History` toggle stay exactly as they are today.
+
+### `AssistantWindow.tsx`
+
+- Props `{ open, onClose, projectId, model, lookups, entries, onApply, onCandidates,
+  onSelection, chat? }` — `onCandidates`/`onSelection` are the page's reactions to the
   server-persisting events (invalidate + navigate / invalidate + reset `selOverride`); `chat` is
-  the injectable stream-consumer for tests (ExtractPanel precedent).
+  the injectable stream-consumer for tests (ExtractPanel precedent). No `onCopy` — history
+  copying stays in `HistoryPane`; the assistant applies values only through its own
+  `setValues` path.
 - Conversation state: `conversationId` in component state; `assist.get` hydrates the log when
   one is loaded from the list. Loaded (pre-session) messages render read-only: change lines
   show as history without revert buttons, and set no AI markers — revert and markers apply only
   to messages streamed in the live session (a persisted `from` is stale against today's
   entries).
-- Top: the two history Panels — `HistoryPane`'s internals embedded (queries keep `paneOpen`
-  gating; Copy routes through the existing `copyValues` fill-empty-only path, which does **not**
-  set AI markers — only chat-applied values do).
-- Message shape: `{ role, text, changes?, invalid?, suggestions?, file? }` with
+- Message shape: `{ role, text, changes?, invalid?, results?, suggestions?, file? }` with
   `changes: [{ key, from, to, evidence, reverted }]` — the same shape persisted in
-  `assistant_message.content`.
-- Assistant message renders: streaming reply text → activity lines (from `tool` events) → one
-  line per applied change (`Label: old → new` as `ObjectStatus Information`, evidence in small
-  muted text beneath) with per-line **↩ revert** → invalid values as `ObjectStatus Negative` +
-  reason (never applied) → **Revert all** (shown when ≥2 changes). Reverted lines render
-  struck-through.
-- Suggestion chips under the latest assistant message only; clicking sends that text. User
-  bubbles right-aligned; attachment shown as removable `Tag`.
-- Empty state: three starter chips — "What's left to fill?", "Fill this from a drawing",
-  "Copy my most similar past config".
-- Input row: `PromptInput` (Enter/AI button → send) + attach `Button` in `FileUploader
-  hideInput`. Streaming turn: input disabled; the live bubble is the busy indicator.
+  `assistant_message.content.ui`.
+- Chat bubbles, Joule-style: user messages right-aligned in a primary-tinted bubble
+  (attachment shown as removable `Tag`); assistant turns left-aligned in a light bubble.
+- Assistant turn renders: streaming reply text → activity lines (from `tool` events) → **info
+  cards** interleaved in event order:
+  - `result` card (`searchSimilar` / `getDocHistory` / `previewCandidates`): a `Card` with
+    result rows (label + key figure per row, e.g. candidate + price, doc + date) and a footer
+    count/total where the data has one — the Joule information-showing style.
+  - Applied-values card (`changes`): one row per change (`Label: old → new` as `ObjectStatus
+    Information`, evidence in small muted text beneath) with per-row **↩ revert**; invalid
+    values as `ObjectStatus Negative` + reason (never applied); **Revert all** in the card
+    footer when ≥2 changes. Reverted rows render struck-through.
+  - Run-summary card (`candidates`): candidate count + top rows + an "Open Candidates" link
+    that jumps to the tab.
+- Suggestion chips under the latest assistant message only; clicking sends that text.
+- Input row: `PromptInput` ("Type or speak something…" placeholder, Enter/AI button → send) +
+  attach `Button` in `FileUploader hideInput`. Streaming turn: input disabled; the live bubble
+  is the busy indicator.
 - Revert per value: restore `from` (delete the entry if `from` was undefined), flag the line
   `reverted`, clear its AI marker. Revert all = revert every non-reverted line of that message.
   Last-write-wins snapshot restore. `// ponytail: snapshot restore, no op-log; fine for visible session state`
@@ -276,8 +299,10 @@ no-quote-capability line stops the model from promising an action it doesn't hav
 
 ### `ConfigProcessPage.tsx` + `ConfiguratorForm.tsx` integration
 
-- Right `SplitterElement` hosts `AssistantPane` instead of `HistoryPane`; remove `<ExtractPanel>`
-  from `pageHeader`.
+- `HistoryPane` and its splitter pane stay untouched. The title bar gains the **Assistant**
+  button toggling `AssistantWindow` (rendered by the page as a fixed overlay); remove
+  `<ExtractPanel>` from `pageHeader` (the chat absorbs extraction on this page; the component
+  and `extraction.extract` stay for the portal).
 - **AI markers**: new state `aiMarks: Map<paramKey, evidence>`. `changes` events set marks;
   the form's `onChange` wrapper diffs old vs new entries and clears the marker of any key the
   *user* changed; revert clears marks too. `ConfiguratorForm` takes an optional `aiMarks` prop
@@ -325,23 +350,28 @@ Rule: **errors the model can act on go into the loop; errors it can't end the tu
   guard fires (conflicted calculate rejected; stale-run selectCandidates rejected); dead agent →
   `{unavailable:true}`.
 - **Server loop** (scripted fake TanStack AI adapter, injected): text-only → deltas + done;
-  tool call → tool + changes → second iteration; cap → forced wrap-up; calculate →
-  `candidates` event; selectCandidates → `selection` event; mid-loop throw → error event, prior
-  events preserved **and** partial assistant message persisted.
+  tool call → tool + changes → second iteration; read tool → `result` event with payload;
+  cap → forced wrap-up; calculate → `candidates` event; selectCandidates → `selection` event;
+  mid-loop throw → error event, prior events preserved **and** partial assistant message
+  persisted.
 - **Conversations**: CRUD procedures tenant-scoped (foreign tenant's conversation → not found);
   chat with no `conversationId` creates one and emits `conversation`; transcript truncation at
   20; delete cascades messages; persisted `model` parts round-trip — a turn with tool calls is
   replayed to the next turn's adapter with those tool-call/result parts intact.
-- **Web**: stream-consumer reducer tests (delta appends; changes applies + marks; `selection`
-  invalidates and reflects picks; error keeps partials + Retry re-sends current entries; done
-  renders chips). Revert/marker tests as spec'd. Conversation switch/load: loaded messages
-  read-only (no revert, no markers); New chat clears the log and next send creates.
-- **Manual e2e**: attach drawing → "configure this from the drawing and pick the cheapest
-  option" → extraction activity line, form fills live with `ai` chips, calculate lands on
-  Candidates, selection saved via chat. Switch provider mid-conversation and continue. Reload →
-  conversation loads read-only; New chat → fresh; delete removes from list. Mid-turn manual
-  edit clears its marker; kill server mid-turn → error bubble, Retry completes; unset all
-  provider keys shows the friendly error.
+- **Web**: stream-consumer reducer tests (delta appends; changes applies + marks; `result`
+  produces a card entry; `selection` invalidates and reflects picks; error keeps partials +
+  Retry re-sends current entries; done renders chips). Revert/marker tests as spec'd.
+  Conversation switch/load: loaded messages read-only (no revert, no markers); New chat clears
+  the log and next send creates.
+- **Manual e2e**: open the Assistant window → welcome view with greeting + starter chips.
+  Attach drawing → "configure this from the drawing and pick the cheapest option" → extraction
+  activity line, form fills live with `ai` chips (window floating over the form), calculate
+  shows the run-summary card and lands on Candidates, selection saved via chat; "show similar
+  configurations" renders a result card. Switch provider mid-conversation and continue.
+  Reload → conversation loads read-only; New chat → fresh; delete removes from list. Mid-turn
+  manual edit clears its marker; kill server mid-turn → error bubble, Retry completes; unset
+  all provider keys shows the friendly error. HistoryPane still opens via its History toggle,
+  independent of the window.
 
 ## Upgrade paths (out of scope)
 
@@ -358,3 +388,4 @@ Rule: **errors the model can act on go into the loop; errors it can't end the tu
 - Per-tenant AI keys / metering.
 - Parallel tool execution within an iteration (sequential is fine at this tool count).
 - Multi-file attachments per turn.
+- Voice input (the Joule reference has a mic; text-only for now).
