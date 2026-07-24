@@ -2,6 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db, configModel, configProject, configRun, user, type ProjectEvent, type RunCandidate, type RunSelection } from "@hera/db";
+import { assistantConversation } from "@hera/assistant/schema";
 import {
   computeOutputs, DslError, enumerate, EntriesZ, OutputOverridesZ, propagate,
   type Entries, type ModelDef, type Outputs, type ResolvedLookups, type Val,
@@ -314,6 +315,8 @@ export const configsRouter = {
 
   remove: userProcedure.input(z.object({ id: z.uuid() })).handler(async ({ input, context }) => {
     await db.transaction(async (tx) => {
+      // Chati conversations for this project; FKs cascade turns/messages/tool_executions.
+      await tx.delete(assistantConversation).where(and(eq(assistantConversation.tenantId, context.tenantId), eq(assistantConversation.projectId, input.id)));
       await tx.delete(configRun).where(and(eq(configRun.projectId, input.id), eq(configRun.tenantId, context.tenantId)));
       await tx.delete(configProject).where(and(eq(configProject.id, input.id), eq(configProject.tenantId, context.tenantId)));
     });
