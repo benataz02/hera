@@ -1,22 +1,28 @@
-import { ORPCError } from "@orpc/server";
+import { ORPCError, eventIterator } from "@orpc/server";
 import type { BuilderWithMiddlewares, Context, Schema } from "@orpc/server";
 import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { assistantConversation, assistantMessage, assistantTurn } from "./schema.ts";
 import { listProviders } from "./provider.ts";
-import type { Db } from "./turns.ts";
+import { AssistantEventZ } from "./events.ts";
+import { runTurn, makeAssistChatInputZ, type AssistantDeps } from "./loop.ts";
 
-// CRUD half of the Chati router (conversation providers/list/get/delete). The streaming
-// `chat` procedure is a separate later addition. This package never imports apps/server's
-// `userProcedure` directly (packages can't depend on the app that consumes them) — instead
-// `createAssistantRouter` is generic over the injected procedure builder, so the server wires
-// its own `userProcedure` (context `{ tenantId, userId, ... }`) through at the call site with
-// full type safety, no `any` in the public surface.
+// CRUD half of the Chati router (conversation providers/list/get/delete) plus the streaming
+// `chat` procedure (Task 13, loop.ts). This package never imports apps/server's `userProcedure`
+// directly (packages can't depend on the app that consumes them) — instead `createAssistantRouter`
+// is generic over the injected procedure builder, so the server wires its own `userProcedure`
+// (context `{ tenantId, userId, ... }`) through at the call site with full type safety, no `any`
+// in the public surface.
+//
+// oRPC findings (orpc skill, checked against the installed @orpc/server types): `eventIterator`
+// wraps a zod schema as a streaming `.output()`; a generator handler (`async function* ({ input,
+// context, signal }) { ... }`) is a first-class handler shape — no adapter-specific wiring
+// needed. `signal` is the real per-request `AbortSignal` (aborts on client disconnect), passed
+// straight through to `runTurn`. Event ids for SSE resumption are stamped by `withEventMeta`
+// inside `loop.ts`'s `eventFor` helper (`{turnId}:{seq}`), not here — keeps the id right next to
+// the seq allocation that produces it.
 
-export type AssistantDeps = {
-  db: Db;
-  loadProject(tenantId: string, projectId: string): Promise<{ id: string; updatedAt: Date } | null>;
-};
+export type { AssistantDeps };
 
 /** The minimal context every procedure here needs; the server's real userProcedure context
  *  (which also carries `role`) is a subtype and satisfies this structurally. */
@@ -114,6 +120,13 @@ export function createAssistantRouter<TInitialContext extends Context, TCurrentC
         if (live) throw new ORPCError("CONFLICT", { message: "TURN_IN_PROGRESS" });
         await deps.db.delete(assistantConversation).where(eq(assistantConversation.id, c.id));
         return { ok: true };
+      }),
+
+    chat: base
+      .input(makeAssistChatInputZ(deps.fileSchema))
+      .output(eventIterator(AssistantEventZ))
+      .handler(async function* ({ input, context, signal }) {
+        yield* runTurn(deps, context, input, signal ?? new AbortController().signal);
       }),
   };
 }

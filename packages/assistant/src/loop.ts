@@ -1,0 +1,739 @@
+import { createHash } from "node:crypto";
+import { ORPCError, withEventMeta } from "@orpc/server";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
+import { z } from "zod";
+import {
+  domainOf, propagate,
+  type Entries, type ModelDef, type ResolvedLookups, type Val,
+} from "@hera/config-engine";
+import { buildAssistPrompt } from "./prompt.ts";
+import { AssistantEventZ, type AssistantEvent, type ChangeRow } from "./events.ts";
+import { TOOLS, staleResult, makeSetValuesInputZ, type Evidence, type ToolName } from "./tools.ts";
+import { resolveProvider } from "./provider.ts";
+import {
+  allocSeq, bumpCounters, claimTurn, finalizeTurn, renewLease, runToolOperation, updateWorking,
+  LEASE_RENEW_MS, type Db, type TurnRow,
+} from "./turns.ts";
+import {
+  assistantConversation, assistantMessage, assistantTurn,
+  type MessageContent, type Provider, type UiChange,
+} from "./schema.ts";
+
+// The turn engine (Task 13). Pure `packages/assistant` — no import from apps/server anywhere in
+// this file. Every server-specific behavior (file validation, the real model adapter, tool
+// executors, project/model loading, usage policy, audit) arrives through `AssistantDeps`.
+//
+// oRPC findings (orpc skill, confirmed against the installed @orpc/server types before writing
+// `chat` in router.ts): `eventIterator` from "@orpc/server" wraps an output zod schema for a
+// streaming procedure; the handler is a plain `async function*` receiving `{ input, context,
+// signal, lastEventId }` — `signal` is a real `AbortSignal` that aborts on client disconnect,
+// no extra plumbing needed. `withEventMeta(data, { id })` stamps a per-event SSE id (used here as
+// `${turnId}:${seq}`) without adding an enumerable field, so it round-trips through the strict
+// `AssistantEventZ` output validation untouched.
+
+// ---- Global constants (plan's "Global Constraints" section, copied verbatim) ----
+const MAX_ITERATIONS = 8;
+const MAX_TOOL_CALLS = 8; // executedToolCallCount ceiling, across all attempts of a turnId
+const MAX_PROVIDER_CALLS = 11; // 8 loop + 1 wrap-up + 2 extraction attempts (extraction's own retries are internal to the executor)
+const MAX_OUTPUT_TOKENS_PER_CALL = 2048;
+const MAX_OUTPUT_TOKENS_PER_TURN = 8192;
+const WRAP_UP_RESERVE_TOKENS = 512;
+const MAX_INPUT_TOKENS_PER_CALL = 32_000;
+const MAX_INPUT_TOKENS_PER_TURN = 128_000;
+const TURN_WATCHDOG_MS = 120_000;
+const TOOL_TIMEOUT_MS = 30_000;
+const EXTRACTION_TIMEOUT_MS = 60_000;
+const MAX_TOOL_RESULT_BYTES = 32 * 1024;
+const CONTEXT_TURN_LIMIT = 20; // last 20 whole turns
+
+const STATE_BOUND_TOOLS = new Set<ToolName>(["setValues", "extractFromDrawing", "previewCandidates", "calculate", "selectCandidates"]);
+const RESULT_TOOLS = new Set<ToolName>(["searchSimilar", "getDocHistory", "previewCandidates"]);
+
+// ---- Structural types owned by this package (no apps/server imports) ----
+
+/** Mirrors apps/server's `ExtractFileZ` inference (see extraction.ts) without importing it. */
+export type ExtractFile = { name: string; mimeType: string; dataBase64: string };
+
+/** Mirrors `Awaited<ReturnType<typeof loadModel>>`'s field the engine actually needs. */
+export type ModelLike = { definition: ModelDef };
+
+export type Working = { entries: Entries; batches: number[]; projectVersion: string; workingRevision: number };
+
+/** Mirrors apps/server's real `ExecutorCtx` (executors.ts) structurally; `working` is mutated
+ *  in place by the executors (setValues/calculate), the loop reads it back after each call. */
+export type ExecutorCtx = {
+  tenantId: string; projectId: string; userId: string;
+  turnId: string; userMessageId: string; userMessage: string; conversationId: string;
+  leaseToken: string;
+  model: ModelLike; lookups: ResolvedLookups;
+  working: Working;
+  file?: ExtractFile;
+  signal: AbortSignal;
+};
+
+/** Each tool executor as `(input, tx, signal) => Promise<result>` — `tx` threads the operation's
+ *  own transaction through (see `runToolOperation`'s two-transaction design in turns.ts) so the
+ *  domain write and the tool_execution completion row land atomically; `signal` is the per-call
+ *  30s/60s timeout raced with the turn's own abort, for executors that call out (agent/B1,
+ *  Gemini extraction). NOTE: the currently-shipped executors.ts (Tasks 10-11) does NOT accept
+ *  either param yet — its functions manage their own persistence (module-level `db`, or their
+ *  own `db.transaction` for selectCandidates) and read `ctx.signal` from the closed-over context
+ *  instead. Task 14 (which wires `makeExecutors` in apps/server) will need to thread a tx (and
+ *  swap the closed-over signal for the per-call one) through those call sites to fully honor
+ *  this contract; see this task's report for detail. */
+export type Executors = {
+  state: { frozen: boolean; lastRun?: { runId: string; candidates: unknown[] } };
+} & { [K in ToolName]: (input: unknown, tx: Db, signal: AbortSignal) => Promise<unknown> };
+
+export type ToolDecl = { name: ToolName; kind: "read" | "write"; label: string; description: string; input: z.ZodType; output: z.ZodType };
+
+/** What the loop needs from a provider: one streamed model call. */
+export type ChatAdapter = (req: {
+  system: string; messages: unknown[]; tools: ToolDecl[] | null; // null = wrap-up (no tools)
+  maxOutputTokens: number; signal: AbortSignal;
+}) => AsyncIterable<
+  | { kind: "text"; text: string }
+  | { kind: "toolCall"; id: string; name: string; args: unknown }
+  | { kind: "usage"; inputTokens: number; outputTokens: number }
+>;
+
+export type AssistantDeps = {
+  db: Db;
+  fileSchema: z.ZodType<ExtractFile>; // server's ExtractFileZ, injected to avoid a package cycle
+  loadProject(tenantId: string, projectId: string): Promise<{
+    id: string; updatedAt: Date; entries: Entries; batches: number[];
+    customer: { cardCode: string; cardName: string } | null; status: string; modelId: string;
+  } | null>;
+  loadModelAndLookups(tenantId: string, modelId: string): Promise<{ model: ModelLike; lookups: ResolvedLookups }>;
+  makeExecutors(ctx: ExecutorCtx): Executors; // Tasks 10-11, closed over server context
+  policy: { checkTurnStart(tenantId: string, userId: string): void; chargeTokens(tenantId: string, n: number): void };
+  makeChatAdapter(provider: Provider): ChatAdapter; // Task 14; the seam that isolates TanStack AI
+  validateFile(file: ExtractFile): void; // Task 14 - signature/MIME/page/pixel checks
+  audit(line: Record<string, unknown>): void; // Task 14 - redacted structured log
+};
+
+const ResumeZ = z.strictObject({
+  lastAppliedSeq: z.number().int().min(-1),
+  touchedEntryKeys: z.array(z.string().max(200)).max(200),
+  batchesTouched: z.boolean(),
+});
+export const EntriesValZ = z.union([z.number(), z.string(), z.boolean(), z.null(), z.array(z.string())]);
+const EntriesZLocal = z.record(z.string(), EntriesValZ);
+
+export const makeAssistChatInputZ = (fileSchema: z.ZodType<ExtractFile>) => z.strictObject({
+  projectId: z.uuid(), conversationId: z.uuid().optional(), turnId: z.uuid(),
+  provider: z.enum(["gemini", "anthropic", "openai"]).optional(),
+  entries: EntriesZLocal, batches: z.array(z.number().int().min(1)).max(50),
+  projectVersion: z.string().max(40),
+  message: z.string().min(1).max(4000),
+  file: fileSchema.optional(),
+  resume: ResumeZ.optional(),
+});
+export type AssistChatInput = z.infer<ReturnType<typeof makeAssistChatInputZ>>;
+
+// ---- Small named helpers (per the brief) ----
+
+/** Stamp the SSE event id `{turnId}:{seq}` — a non-enumerable meta field, invisible to
+ *  AssistantEventZ's strict output validation. */
+function eventFor(e: AssistantEvent): AssistantEvent {
+  return withEventMeta(e, { id: `${e.turnId}:${e.seq}` });
+}
+
+function canonicalJson(v: unknown): string {
+  if (v === undefined) return "null";
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  const obj = v as Record<string, unknown>;
+  return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(",")}}`;
+}
+const sha256Hex = (s: string) => createHash("sha256").update(s).digest("hex");
+const byteSize = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
+const estimateTokens = (s: string) => Math.ceil(s.length / 4);
+
+/** `name:sha256(args):relevant` — relevant is the fencing dimension a tool's own input doesn't
+ *  already capture: the attachment hash for extraction, the run for selections, the observed
+ *  project version for the two agent-backed read tools, and the working revision otherwise
+ *  (setValues/previewCandidates/calculate/suggestFollowUps all read/write the working copy). */
+function operationKeyFor(
+  name: ToolName, args: unknown, workingRevision: number, projectVersion: string,
+  runId: string | undefined, attachmentSha256: string | undefined,
+): string {
+  const argsHash = sha256Hex(canonicalJson(args));
+  const relevant =
+    name === "extractFromDrawing" ? `file:${attachmentSha256 ?? "none"}`
+    : name === "selectCandidates" ? `run:${runId ?? "none"}`
+    : (name === "getDocHistory" || name === "searchSimilar") ? `pv:${projectVersion}`
+    : `rev:${workingRevision}`;
+  return `${name}:${argsHash}:${relevant}`;
+}
+
+// ---- Provider-neutral message shape, owned by this package (see report re: makeChatAdapter's
+// `messages: unknown[]` being deliberately opaque — Task 14 maps this to TanStack AI's own
+// per-provider native format). ----
+type ModelPart =
+  | { type: "text"; text: string }
+  | { type: "toolCall"; id: string; name: string; args: unknown }
+  | { type: "toolResult"; id: string; name: string; result: unknown };
+type Msg = { role: "user"; text: string } | { role: "assistant"; parts: ModelPart[] };
+
+function summarizeReadResult(result: unknown): unknown {
+  if (!result || typeof result !== "object" || (result as { ok?: unknown }).ok !== true) return result;
+  const r = result as Record<string, unknown>;
+  const rows = Array.isArray(r.rows) ? r.rows.length : undefined;
+  const observedAt = typeof r.observedAt === "string" ? r.observedAt
+    : typeof r.observedProjectVersion === "string" ? r.observedProjectVersion : undefined;
+  return { ok: true, stale: false, summary: rows !== undefined ? `${rows} rows observed earlier` : "observed earlier", observedAt };
+}
+
+function staleProjectPart(p: ModelPart, observedVersion: string): ModelPart {
+  if (p.type !== "toolResult") return p;
+  if (STATE_BOUND_TOOLS.has(p.name as ToolName)) {
+    const orig = p.result as Record<string, unknown> | null;
+    const ov = orig && typeof orig === "object" && typeof orig.observedProjectVersion === "string" ? orig.observedProjectVersion
+      : orig && typeof orig === "object" && typeof orig.projectVersion === "string" ? orig.projectVersion : observedVersion;
+    return { ...p, result: staleResult(ov) };
+  }
+  return { ...p, result: summarizeReadResult(p.result) };
+}
+function capPart(p: ModelPart): ModelPart {
+  if (p.type !== "toolResult" || byteSize(p.result) <= MAX_TOOL_RESULT_BYTES) return p;
+  return { ...p, result: { truncated: true, note: "result omitted from context: too large" } };
+}
+
+/** Builds the `[{user},{assistant}]` groups for the last N whole turns, oldest-first. Only the
+ *  newest prior turn's tool results are kept complete (capped defensively); everything older is
+ *  stale-projected: state-bound results collapse to `staleResult(...)`, the two read tools get a
+ *  bounded summary with ids stripped (never split a call/result pair either way). */
+function projectTranscript(rows: { userText: string; parts: ModelPart[] }[], observedVersion: string): Msg[][] {
+  return rows.map((r, i) => {
+    const isNewest = i === rows.length - 1;
+    const parts = r.parts.map((p) => (isNewest ? capPart(p) : staleProjectPart(p, observedVersion)));
+    return [{ role: "user" as const, text: r.userText }, { role: "assistant" as const, parts }];
+  });
+}
+
+function toolDeclsFor(model: ModelDef): ToolDecl[] {
+  const keys = model.parameters.map((p) => p.key);
+  return (Object.keys(TOOLS) as ToolName[]).map((name) => {
+    const t = TOOLS[name];
+    return {
+      name, kind: t.kind, label: t.label, description: t.description,
+      input: name === "setValues" ? makeSetValuesInputZ(keys) : t.input,
+      output: t.output,
+    };
+  });
+}
+
+function toChangeRow(c: UiChange): ChangeRow {
+  return { key: c.key, from: c.from as ChangeRow["from"], to: c.to as ChangeRow["to"], evidence: c.evidence, provenance: c.provenance, valid: c.valid, reason: c.reason };
+}
+
+/** Zips the tool RESULT's per-key change rows (no provenance — that lives on the call's input)
+ *  back together with the ORIGINAL setValues input's structured evidence, by key. */
+function buildChangeRows(
+  inputValues: { key: string; value: Val; evidence: Evidence }[],
+  resultChanges: { key: string; from?: Val; to: Val; evidence: string; valid: boolean; reason?: string }[],
+): UiChange[] {
+  const provOf = new Map(inputValues.map((v) => [v.key, v.evidence]));
+  return resultChanges.map((c) => ({
+    key: c.key, from: c.from, to: c.to, evidence: c.evidence, valid: c.valid, reason: c.reason,
+    provenance: provOf.get(c.key) ?? { source: "user", detail: c.evidence },
+  }));
+}
+
+function validateEntries(model: ModelDef, lookups: ResolvedLookups, entries: Entries): void {
+  for (const [key, v] of Object.entries(entries)) {
+    const p = model.parameters.find((pp) => pp.key === key);
+    if (!p) throw new ORPCError("BAD_REQUEST", { message: `Unknown parameter: ${key}` });
+    if (p.ui === "multicombo") {
+      if (!Array.isArray(v) || v.some((x) => typeof x !== "string"))
+        throw new ORPCError("BAD_REQUEST", { message: `${key} must be a list of strings` });
+      continue;
+    }
+    if (Array.isArray(v) || (v !== null && typeof v !== p.type))
+      throw new ORPCError("BAD_REQUEST", { message: `${key} has the wrong type` });
+    if (v !== null && v !== undefined) {
+      const domain = domainOf(model, lookups, key);
+      if (domain.length && !domain.some((o) => o.value === v))
+        throw new ORPCError("BAD_REQUEST", { message: `${key} is not one of the allowed values` });
+    }
+  }
+}
+
+function attachmentOf(file: ExtractFile | undefined) {
+  if (!file) return undefined;
+  return { name: file.name, mime: file.mimeType, sha256: createHash("sha256").update(Buffer.from(file.dataBase64, "base64")).digest("hex") };
+}
+
+function snapshotEvent(turn: TurnRow, seq: number, ui: MessageContent["ui"] | undefined, status: "running" | "partial" | "complete" | "failed"): AssistantEvent {
+  return {
+    type: "snapshot", turnId: turn.id, seq,
+    text: ui?.text ?? "", changes: (ui?.changes ?? []).map(toChangeRow),
+    results: ui?.results ?? [],
+    suggestions: ui?.suggestions, status, projectVersion: turn.latestProjectVersion.toISOString(),
+  };
+}
+
+// NOTE: `setValues` is deliberately NOT handled here — its "changes" event needs the ORIGINAL
+// call's structured per-key evidence (source: user/drawing/similar/document) to build correct
+// provenance, which `buildChangeRows` already resolves at the call site; reconstructing a
+// generic `{source:"user"}` here (as an earlier draft of this function did) would silently
+// discard drawing/similar/document provenance on the WIRE EVENT while the persisted UI
+// projection (built from the same `buildChangeRows` call) stayed correct — a real
+// provenance-integrity bug, not a style choice. See the setValues branch in the main loop.
+function domainEventFor(name: ToolName, turnId: string, seq: number, out: Record<string, unknown>): AssistantEvent | null {
+  if (out.ok !== true || out.stale === true) return null;
+  switch (name) {
+    case "searchSimilar": case "getDocHistory": case "previewCandidates":
+      return { type: "result", turnId, seq, tool: name, resultId: out.resultId as string, observedProjectVersion: out.observedProjectVersion as string, data: out };
+    case "calculate":
+      return { type: "candidates", turnId, seq, runId: out.runId as string, projectVersion: out.projectVersion as string, selectionVersion: out.selectionVersion as number, candidateCount: out.candidateCount as number, top: out.top as { candidateId: string; label: string; keyFigure?: string }[] };
+    case "selectCandidates":
+      return { type: "selection", turnId, seq, runId: out.runId as string, selectionVersion: out.selectionVersion as number, selections: out.selections as { candidateId: string; batchQty: number }[] };
+    default:
+      return null; // extractFromDrawing (fed back to the model only) / suggestFollowUps (stashed for `done`)
+  }
+}
+
+// ---- The engine ----
+
+export async function* runTurn(
+  deps: AssistantDeps, ctx: { tenantId: string; userId: string }, input: AssistChatInput, signal: AbortSignal,
+): AsyncGenerator<AssistantEvent> {
+  const { tenantId, userId } = ctx;
+
+  // ============ STEP 1: pre-stream (typed ORPCErrors, nothing persisted yet) ============
+  deps.policy.checkTurnStart(tenantId, userId);
+  if (input.file) deps.validateFile(input.file as ExtractFile);
+
+  const project = await deps.loadProject(tenantId, input.projectId);
+  if (!project) throw new ORPCError("NOT_FOUND", { message: "Project not found" });
+
+  let conversation: { id: string; provider: Provider } | null = null;
+  if (input.conversationId) {
+    const [c] = await deps.db.select({ id: assistantConversation.id, provider: assistantConversation.provider })
+      .from(assistantConversation)
+      .where(and(
+        eq(assistantConversation.id, input.conversationId),
+        eq(assistantConversation.tenantId, tenantId),
+        eq(assistantConversation.projectId, input.projectId),
+      )).limit(1);
+    if (!c) throw new ORPCError("NOT_FOUND", { message: "Conversation not found" });
+    conversation = c;
+  }
+
+  // Peek the turn row (if any) up front: this both (a) tells us whether this is a genuinely NEW
+  // turnId (gates the STATE_CHANGED pre-check below) and (b) lets a resume/retry reuse the
+  // ALREADY-PINNED provider/model rather than re-deriving it from input/conversation, so
+  // claimTurn's identity check (provider is immutable per turn) can never spuriously mismatch.
+  const [existingTurn] = await deps.db.select().from(assistantTurn).where(eq(assistantTurn.id, input.turnId)).limit(1);
+
+  if (!existingTurn && project.updatedAt.toISOString() !== input.projectVersion)
+    throw new ORPCError("CONFLICT", { message: "STATE_CHANGED" });
+
+  const provider: Provider | undefined = existingTurn?.provider ?? input.provider ?? conversation?.provider;
+  if (!provider) throw new ORPCError("BAD_REQUEST", { message: "provider is required to start a new conversation" });
+  let resolved;
+  try {
+    resolved = resolveProvider(provider);
+  } catch {
+    throw new ORPCError("SERVICE_UNAVAILABLE", { message: `${provider} is not available` });
+  }
+  const modelName = existingTurn?.model ?? resolved.profile.model;
+
+  const { model, lookups } = await deps.loadModelAndLookups(tenantId, project.modelId);
+  validateEntries(model.definition, lookups, input.entries as Entries);
+
+  // ============ STEP 2: claim ============
+  let conversationId = conversation?.id;
+  const attachment = attachmentOf(input.file as ExtractFile | undefined);
+  const claimParams = {
+    turnId: input.turnId, userId, provider, model: modelName,
+    projectVersion: new Date(input.projectVersion), entries: input.entries as Entries, batches: input.batches,
+    userMessage: input.message, attachment,
+  };
+
+  let claim: Awaited<ReturnType<typeof claimTurn>>;
+  let newConversationEvent: AssistantEvent | null = null;
+  if (!conversation) {
+    const title = input.message.slice(0, 80);
+    const [conv] = await deps.db.insert(assistantConversation).values({
+      tenantId, projectId: input.projectId, createdByUserId: userId, provider, model: modelName, title,
+    }).returning();
+    conversationId = conv!.id;
+    claim = await claimTurn(deps.db, { ...claimParams, conversationId: conv!.id });
+    if (claim.kind === "rejected") {
+      // Roll back the orphan conversation row we just created — a rejected claim must leave no trace.
+      await deps.db.delete(assistantConversation).where(eq(assistantConversation.id, conv!.id));
+    } else {
+      const s = await allocSeq(deps.db, claim.turn.id, claim.leaseToken, 1);
+      newConversationEvent = eventFor({ type: "conversation", turnId: input.turnId, seq: s, id: conv!.id, title, provider });
+    }
+  } else {
+    conversationId = conversation.id;
+    if (input.provider && !existingTurn && input.provider !== conversation.provider)
+      await deps.db.update(assistantConversation).set({ provider: input.provider }).where(eq(assistantConversation.id, conversation.id));
+    claim = await claimTurn(deps.db, { ...claimParams, conversationId: conversation.id });
+  }
+
+  if (claim.kind === "rejected")
+    throw new ORPCError("CONFLICT", { message: claim.code });
+
+  const { leaseToken, turn } = claim;
+
+  if (claim.kind === "replay") {
+    const [msg] = await deps.db.select().from(assistantMessage)
+      .where(and(eq(assistantMessage.turnId, turn.id), eq(assistantMessage.role, "assistant"))).limit(1);
+    const s = await allocSeq(deps.db, turn.id, leaseToken, 2);
+    yield eventFor(snapshotEvent(turn, s, msg?.content.ui, "complete"));
+    yield eventFor({ type: "done", turnId: turn.id, seq: s + 1, suggestions: msg?.content.ui.suggestions ?? [], usage: { inputTokens: turn.inputTokens, outputTokens: turn.outputTokens } });
+    return; // zero adapter calls, nothing else to clean up
+  }
+
+  if (newConversationEvent) yield newConversationEvent;
+
+  // ============ From here on: "new" or "resume" — lease renewal + watchdog + finalize ============
+  const turnAbort = new AbortController();
+  const onExternalAbort = () => turnAbort.abort();
+  signal.addEventListener("abort", onExternalAbort);
+  const renewTimer = setInterval(() => {
+    renewLease(deps.db, turn.id, leaseToken).then((ok) => { if (!ok) turnAbort.abort(); }).catch(() => turnAbort.abort());
+  }, LEASE_RENEW_MS);
+  const watchdog = setTimeout(() => turnAbort.abort(), TURN_WATCHDOG_MS);
+
+  let finalStatus: "complete" | "partial" | "failed" = "partial";
+  let finalErrorCode: string | undefined;
+  const acc: { text: string; changes: UiChange[]; results: { tool: string; resultId: string; data: unknown }[] } = { text: "", changes: [], results: [] };
+  let suggestions: string[] | undefined;
+  let modelParts: ModelPart[] = [];
+  let lastCounters = {
+    iterationCount: turn.iterationCount, emittedToolCallCount: turn.emittedToolCallCount,
+    executedToolCallCount: turn.executedToolCallCount, providerCallCount: turn.providerCallCount,
+    inputTokens: turn.inputTokens, outputTokens: turn.outputTokens,
+  };
+
+  try {
+    // -------- resume reconciliation --------
+    let working: Working = { entries: turn.workingEntries, batches: turn.workingBatches, projectVersion: turn.latestProjectVersion.toISOString(), workingRevision: turn.workingRevision };
+    if (claim.kind === "resume" && input.resume) {
+      const touched = new Set(input.resume.touchedEntryKeys);
+      const nextEntries = { ...working.entries };
+      let changed = false;
+      for (const k of touched) {
+        const v = (input.entries as Entries)[k];
+        if (JSON.stringify(v) !== JSON.stringify(nextEntries[k])) {
+          if (v === undefined) delete nextEntries[k]; else nextEntries[k] = v;
+          changed = true;
+        }
+      }
+      let nextBatches = working.batches;
+      if (input.resume.batchesTouched && JSON.stringify(input.batches) !== JSON.stringify(working.batches)) {
+        nextBatches = input.batches;
+        changed = true;
+      }
+      if (turn.calculatedRunId && changed) {
+        const [msg] = await deps.db.select().from(assistantMessage)
+          .where(and(eq(assistantMessage.turnId, turn.id), eq(assistantMessage.role, "assistant"))).limit(1);
+        const s = await allocSeq(deps.db, turn.id, leaseToken, 2);
+        yield eventFor(snapshotEvent(turn, s, msg?.content.ui, "running"));
+        yield eventFor({ type: "error", turnId: turn.id, seq: s + 1, code: "STATE_CHANGED", message: "The project changed since this turn started; start a new message", retryable: false });
+        finalStatus = "partial"; finalErrorCode = "STATE_CHANGED";
+        return;
+      }
+      if (changed) {
+        const ok = await updateWorking(deps.db, turn.id, leaseToken, { entries: nextEntries, batches: nextBatches, revision: working.workingRevision + 1 });
+        if (!ok) throw new Error("LEASE_LOST");
+        working = { ...working, entries: nextEntries, batches: nextBatches, workingRevision: working.workingRevision + 1 };
+      }
+    }
+
+    // ============ STEP 3: context ============
+    const [userMsg] = await deps.db.select({ id: assistantMessage.id }).from(assistantMessage)
+      .where(and(eq(assistantMessage.turnId, turn.id), eq(assistantMessage.role, "user"))).limit(1);
+    const userMessageId = userMsg?.id ?? turn.id;
+
+    const execCtx: ExecutorCtx = {
+      tenantId, projectId: input.projectId, userId, turnId: turn.id, userMessageId,
+      userMessage: input.message, conversationId: conversationId!, leaseToken,
+      model, lookups, working: { ...working }, file: input.file as ExtractFile | undefined, signal: turnAbort.signal,
+    };
+    const executors = deps.makeExecutors(execCtx);
+
+    const priorTurnRows = await deps.db.select({ id: assistantTurn.id }).from(assistantTurn)
+      .where(and(eq(assistantTurn.conversationId, conversationId!), ne(assistantTurn.id, turn.id)))
+      .orderBy(desc(assistantTurn.startedAt)).limit(CONTEXT_TURN_LIMIT);
+    const priorIds = priorTurnRows.map((t) => t.id).reverse(); // oldest-first
+    const priorMsgs = priorIds.length
+      ? await deps.db.select().from(assistantMessage).where(inArray(assistantMessage.turnId, priorIds))
+      : [];
+    const rows = priorIds.map((id) => ({
+      userText: priorMsgs.find((m) => m.turnId === id && m.role === "user")?.content.ui.text ?? "",
+      parts: (priorMsgs.find((m) => m.turnId === id && m.role === "assistant")?.content.model ?? []) as ModelPart[],
+    }));
+    let historyGroups = projectTranscript(rows, execCtx.working.projectVersion);
+
+    const propagation = propagate(model.definition, lookups, execCtx.working.entries);
+    const systemPrompt = buildAssistPrompt(model.definition, propagation, {
+      entries: execCtx.working.entries, batches: execCtx.working.batches,
+      projectVersion: execCtx.working.projectVersion, workingRevision: execCtx.working.workingRevision,
+    }, {
+      customer: project.customer, status: project.status,
+      candidateCount: executors.state.lastRun?.candidates.length,
+      attachment: input.file ? { name: (input.file as ExtractFile).name, mimeType: (input.file as ExtractFile).mimeType } : null,
+    });
+    const toolDecls = toolDeclsFor(model.definition);
+
+    const baseEstimate = estimateTokens(systemPrompt) + estimateTokens(JSON.stringify(toolDecls.map((t) => ({ name: t.name, description: t.description }))));
+    if (baseEstimate > MAX_INPUT_TOKENS_PER_CALL) {
+      const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+      yield eventFor({ type: "error", turnId: turn.id, seq: s, code: "CONTEXT_TOO_LARGE", message: "This configuration is too large for the assistant to process in one turn.", retryable: true });
+      finalStatus = "partial"; finalErrorCode = "CONTEXT_TOO_LARGE";
+      return;
+    }
+
+    // ============ STEP 4: provider loop ============
+    const adapter = deps.makeChatAdapter(provider);
+    let liveMessages: Msg[] = [{ role: "user", text: input.message }];
+    let doneNaturally = false;
+    let toolBudgetExceeded = false;
+
+    while (!doneNaturally && !toolBudgetExceeded) {
+      const counters = await bumpCounters(deps.db, turn.id, leaseToken, { iterationCount: 1, providerCallCount: 1 });
+      lastCounters = counters;
+      if (counters.iterationCount > MAX_ITERATIONS || counters.providerCallCount > MAX_PROVIDER_CALLS) break;
+      const outputBudgetLeft = MAX_OUTPUT_TOKENS_PER_TURN - WRAP_UP_RESERVE_TOKENS - counters.outputTokens;
+      if (outputBudgetLeft <= 0) break;
+      if (counters.inputTokens >= MAX_INPUT_TOKENS_PER_TURN) break;
+      const maxOutputTokens = Math.min(MAX_OUTPUT_TOKENS_PER_CALL, outputBudgetLeft);
+
+      let messages: unknown[] = [...historyGroups.flat(), ...liveMessages];
+      while (estimateTokens(systemPrompt) + estimateTokens(JSON.stringify(messages)) > MAX_INPUT_TOKENS_PER_CALL && historyGroups.length > 0) {
+        historyGroups = historyGroups.slice(1);
+        messages = [...historyGroups.flat(), ...liveMessages];
+      }
+      if (estimateTokens(systemPrompt) + estimateTokens(JSON.stringify(messages)) > MAX_INPUT_TOKENS_PER_CALL) {
+        const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+        yield eventFor({ type: "error", turnId: turn.id, seq: s, code: "CONTEXT_TOO_LARGE", message: "This conversation is too large for the assistant to process.", retryable: true });
+        finalStatus = "partial"; finalErrorCode = "CONTEXT_TOO_LARGE";
+        return;
+      }
+
+      let sawToolCall = false;
+      let usageReceived = false;
+      let iterationText = "";
+      let textBuf = "";
+      let lastFlush = Date.now();
+      const iterationParts: ModelPart[] = [];
+
+      const flushText = async function* (): AsyncGenerator<AssistantEvent> {
+        if (!textBuf) return;
+        const flushed = textBuf; textBuf = ""; lastFlush = Date.now();
+        const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+        acc.text += flushed;
+        yield eventFor({ type: "delta", turnId: turn.id, seq: s, text: flushed });
+      };
+
+      for await (const chunk of adapter({ system: systemPrompt, messages, tools: toolDecls, maxOutputTokens, signal: turnAbort.signal })) {
+        if (chunk.kind === "text") {
+          textBuf += chunk.text;
+          iterationText += chunk.text;
+          if (textBuf.length >= 256 || Date.now() - lastFlush >= 50) yield* flushText();
+        } else if (chunk.kind === "usage") {
+          usageReceived = true;
+          const bumped = await bumpCounters(deps.db, turn.id, leaseToken, { inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens });
+          lastCounters = bumped;
+          deps.policy.chargeTokens(tenantId, chunk.inputTokens + chunk.outputTokens);
+        } else if (chunk.kind === "toolCall") {
+          const emitted = await bumpCounters(deps.db, turn.id, leaseToken, { emittedToolCallCount: 1 });
+          lastCounters = emitted;
+          const name = chunk.name as ToolName;
+
+          if (sawToolCall || !(name in TOOLS)) {
+            const errRes = sawToolCall
+              ? { ok: false, code: "TOOL_ORDER", message: "one tool per turn", retryable: true }
+              : { ok: false, code: "UNKNOWN_TOOL", message: `Unknown tool ${chunk.name}`, retryable: true };
+            iterationParts.push({ type: "toolCall", id: chunk.id, name: chunk.name, args: chunk.args });
+            iterationParts.push({ type: "toolResult", id: chunk.id, name: chunk.name, result: errRes });
+            continue;
+          }
+          sawToolCall = true;
+
+          const s1 = await allocSeq(deps.db, turn.id, leaseToken, 1);
+          yield eventFor({ type: "tool", turnId: turn.id, seq: s1, name, label: TOOLS[name].label });
+
+          const inputSchema = name === "setValues" ? makeSetValuesInputZ(model.definition.parameters.map((p) => p.key)) : TOOLS[name].input;
+          const parsedArgs = inputSchema.safeParse(chunk.args);
+          iterationParts.push({ type: "toolCall", id: chunk.id, name, args: chunk.args });
+
+          if (!parsedArgs.success) {
+            const errRes = { ok: false, code: "INVALID_ARGUMENTS", message: parsedArgs.error.issues.map((i) => i.message).join("; ").slice(0, 2000), retryable: true };
+            iterationParts.push({ type: "toolResult", id: chunk.id, name, result: errRes });
+            continue;
+          }
+
+          const executed = await bumpCounters(deps.db, turn.id, leaseToken, { executedToolCallCount: 1 });
+          lastCounters = executed;
+          if (executed.executedToolCallCount > MAX_TOOL_CALLS) {
+            const errRes = { ok: false, code: "TOOL_LIMIT", message: "Tool call limit reached for this turn", retryable: true };
+            iterationParts.push({ type: "toolResult", id: chunk.id, name, result: errRes });
+            toolBudgetExceeded = true;
+            continue;
+          }
+
+          const runIdArg = (parsedArgs.data as { runId?: string }).runId;
+          const opKey = operationKeyFor(name, parsedArgs.data, execCtx.working.workingRevision, execCtx.working.projectVersion, runIdArg, attachment?.sha256);
+          const toolTimeoutMs = name === "extractFromDrawing" ? EXTRACTION_TIMEOUT_MS : TOOL_TIMEOUT_MS;
+          const opSignal = AbortSignal.any([turnAbort.signal, AbortSignal.timeout(toolTimeoutMs)]);
+
+          const domainSeq = await allocSeq(deps.db, turn.id, leaseToken, 1);
+          const opResult = await runToolOperation(deps.db, {
+            turnId: turn.id, leaseToken, toolCallId: chunk.id, name, operationKey: opKey, input: parsedArgs.data,
+            exec: async (tx) => {
+              const result = await executors[name](parsedArgs.data, tx, opSignal);
+              const r = result as Record<string, unknown>;
+              const runId = typeof r.runId === "string" ? r.runId : undefined;
+              const affectedProjectVersion = typeof r.projectVersion === "string" ? new Date(r.projectVersion) : undefined;
+              return { result, runId, affectedProjectVersion, eventSeq: domainSeq };
+            },
+          });
+          const effectiveSeq = opResult.eventSeq ?? domainSeq;
+          const rawResult = opResult.result;
+
+          const parsedOut = TOOLS[name].output.safeParse(rawResult);
+          if (!parsedOut.success) {
+            deps.audit({ event: "assist_tool_output_invalid", turnId: turn.id, tenantId, name, issues: parsedOut.error.issues });
+            finalStatus = "failed"; finalErrorCode = "INVALID_TOOL_OUTPUT";
+            const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+            yield eventFor({ type: "error", turnId: turn.id, seq: s, code: "INVALID_TOOL_OUTPUT", message: "The assistant produced an invalid tool result.", retryable: false });
+            return;
+          }
+          const out = parsedOut.data as Record<string, unknown>;
+          iterationParts.push({ type: "toolResult", id: chunk.id, name, result: out });
+
+          if (!opResult.replayed) {
+            if (name === "setValues" && out.ok === true && out.stale !== true) {
+              await updateWorking(deps.db, turn.id, leaseToken, { entries: execCtx.working.entries, batches: execCtx.working.batches, revision: execCtx.working.workingRevision });
+            } else if (name === "calculate" && out.ok === true && out.stale !== true) {
+              await updateWorking(deps.db, turn.id, leaseToken, {
+                entries: execCtx.working.entries, batches: execCtx.working.batches, revision: execCtx.working.workingRevision,
+                latestProjectVersion: new Date(execCtx.working.projectVersion), calculatedRunId: out.runId as string,
+              });
+            }
+          }
+
+          if (name === "setValues" && out.ok === true && out.stale !== true) {
+            const rows2 = buildChangeRows((parsedArgs.data as unknown as { values: { key: string; value: Val; evidence: Evidence }[] }).values, out.changes as { key: string; from?: Val; to: Val; evidence: string; valid: boolean; reason?: string }[]);
+            acc.changes.push(...rows2);
+            if (rows2.length)
+              yield eventFor({ type: "changes", turnId: turn.id, seq: effectiveSeq, workingRevision: out.workingRevision as number, changes: rows2.map(toChangeRow) });
+          } else {
+            if (RESULT_TOOLS.has(name) && out.ok === true && out.stale !== true) {
+              acc.results.push({ tool: name, resultId: out.resultId as string, data: out });
+            } else if (name === "suggestFollowUps" && out.ok === true) {
+              suggestions = out.accepted as string[];
+            }
+            const domainEvent = domainEventFor(name, turn.id, effectiveSeq, out);
+            if (domainEvent) yield eventFor(domainEvent);
+          }
+        }
+      }
+      yield* flushText();
+      if (iterationText) iterationParts.unshift({ type: "text", text: iterationText });
+
+      if (!usageReceived) {
+        const estIn = estimateTokens(systemPrompt) + estimateTokens(JSON.stringify(messages));
+        const estOut = estimateTokens(iterationText);
+        lastCounters = await bumpCounters(deps.db, turn.id, leaseToken, { inputTokens: estIn, outputTokens: estOut });
+        deps.policy.chargeTokens(tenantId, estIn + estOut);
+      }
+
+      modelParts.push(...iterationParts);
+      if (sawToolCall && !toolBudgetExceeded) {
+        liveMessages = [...liveMessages, { role: "assistant", parts: iterationParts }];
+      } else if (!sawToolCall) {
+        doneNaturally = true;
+      }
+    }
+
+    // ============ STEP 5: wrap-up ============
+    if (!doneNaturally) {
+      const winnerRow = await deps.db.update(assistantTurn)
+        .set({ wrapUpAttempted: true })
+        .where(and(eq(assistantTurn.id, turn.id), eq(assistantTurn.leaseToken, leaseToken), eq(assistantTurn.wrapUpAttempted, false)))
+        .returning({ id: assistantTurn.id });
+      const isWinner = winnerRow.length > 0;
+      const wrapUpBudget = MAX_OUTPUT_TOKENS_PER_TURN - lastCounters.outputTokens;
+      const canCallProvider = isWinner && lastCounters.providerCallCount < MAX_PROVIDER_CALLS && wrapUpBudget > 0;
+
+      if (canCallProvider) {
+        const counters = await bumpCounters(deps.db, turn.id, leaseToken, { providerCallCount: 1, iterationCount: 1 });
+        lastCounters = counters;
+        const messages: unknown[] = [...historyGroups.flat(), ...liveMessages];
+        let textBuf = ""; let lastFlush = Date.now(); let wrapText = "";
+        let usageReceived = false;
+        for await (const chunk of adapter({ system: systemPrompt, messages, tools: null, maxOutputTokens: WRAP_UP_RESERVE_TOKENS, signal: turnAbort.signal })) {
+          if (chunk.kind === "text") {
+            textBuf += chunk.text; wrapText += chunk.text;
+            if (textBuf.length >= 256 || Date.now() - lastFlush >= 50) {
+              const flushed = textBuf; textBuf = ""; lastFlush = Date.now();
+              const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+              acc.text += flushed;
+              yield eventFor({ type: "delta", turnId: turn.id, seq: s, text: flushed });
+            }
+          } else if (chunk.kind === "usage") {
+            usageReceived = true;
+            lastCounters = await bumpCounters(deps.db, turn.id, leaseToken, { inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens });
+            deps.policy.chargeTokens(tenantId, chunk.inputTokens + chunk.outputTokens);
+          }
+        }
+        if (textBuf) {
+          const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+          acc.text += textBuf;
+          yield eventFor({ type: "delta", turnId: turn.id, seq: s, text: textBuf });
+        }
+        if (!usageReceived) {
+          const estIn = estimateTokens(systemPrompt) + estimateTokens(JSON.stringify(messages));
+          const estOut = estimateTokens(wrapText);
+          lastCounters = await bumpCounters(deps.db, turn.id, leaseToken, { inputTokens: estIn, outputTokens: estOut });
+          deps.policy.chargeTokens(tenantId, estIn + estOut);
+        }
+        if (wrapText) modelParts.push({ type: "text", text: wrapText });
+      } else {
+        const limitMsg = "I've reached my limit for this turn. Please continue in a new message.";
+        const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+        acc.text += limitMsg;
+        modelParts.push({ type: "text", text: limitMsg });
+        yield eventFor({ type: "delta", turnId: turn.id, seq: s, text: limitMsg });
+      }
+    }
+
+    // ============ STEP 6: done ============
+    const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+    yield eventFor({ type: "done", turnId: turn.id, seq: s, suggestions: suggestions ?? [], usage: { inputTokens: lastCounters.inputTokens, outputTokens: lastCounters.outputTokens } });
+    finalStatus = "complete";
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    finalStatus = "partial"; finalErrorCode = message;
+    deps.audit({ event: "assist_turn_error", turnId: turn.id, tenantId, message });
+    try {
+      const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+      yield eventFor({ type: "error", turnId: turn.id, seq: s, code: message.slice(0, 50), message: "Something went wrong; you can retry.", retryable: true });
+    } catch { /* lease lost or transport gone: best-effort only */ }
+  } finally {
+    clearInterval(renewTimer);
+    clearTimeout(watchdog);
+    signal.removeEventListener("abort", onExternalAbort);
+    await finalizeTurn(deps.db, {
+      turnId: turn.id, leaseToken, status: finalStatus, errorCode: finalErrorCode,
+      assistantUi: {
+        text: acc.text, changes: acc.changes.filter((c) => c.valid), invalid: acc.changes.filter((c) => !c.valid),
+        results: acc.results, ...(input.file ? { fileName: (input.file as ExtractFile).name } : {}),
+      },
+      assistantModel: modelParts, conversationId: conversationId!, suggestions,
+    });
+  }
+}
+
+// Re-exported so router.ts (and any future caller) can validate a chat handler's declared
+// output against the exact same schema this engine yields.
+export { AssistantEventZ };
