@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { db, configProject } from "@hera/db";
+import { db, configProject, configRun } from "@hera/db";
 import type { AssistantDeps, Executors, ExecutorCtx, ModelLike } from "@hera/assistant";
 import { ExtractFileZ } from "../orpc/routers/extraction.ts";
 import { loadModel, cachedLookups } from "../orpc/routers/configs.ts";
@@ -30,6 +30,17 @@ async function loadModelAndLookups(tenantId: string, modelId: string) {
   const model = await loadModel(tenantId, modelId);
   const lookups = await cachedLookups(tenantId, model);
   return { model: model as ModelLike, lookups };
+}
+
+/** The frozen run of a resumed turn (by `assistantTurn.calculatedRunId`) — re-hydrates the
+ *  executor's `state.lastRun` so the prompt's candidate count is accurate after a crash. */
+async function loadRun(tenantId: string, runId: string) {
+  const [r] = await db
+    .select({ id: configRun.id, candidates: configRun.candidates })
+    .from(configRun)
+    .where(and(eq(configRun.id, runId), eq(configRun.tenantId, tenantId)))
+    .limit(1);
+  return r ? { runId: r.id, candidates: r.candidates } : null;
 }
 
 /** Wraps a Task 10-11 executor (`(input) => Promise<result>`, managing its own persistence —
@@ -91,6 +102,7 @@ export const assistantDeps: AssistantDeps = {
   fileSchema: ExtractFileZ,
   loadProject,
   loadModelAndLookups,
+  loadRun,
   makeExecutors,
   policy: makePolicy(),
   makeChatAdapter,

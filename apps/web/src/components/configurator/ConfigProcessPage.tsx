@@ -127,6 +127,10 @@ export function ConfigProcessPage({ id }: { id: string }) {
     const next = { ...entries };
     const nextMarks = new Map(aiMarks);
     for (const c of changes) {
+      // `to === null` means "delete this key" (a revert of an originally-unset key). This relies on
+      // apps/server/src/extraction.ts's validateSuggestionSet filtering null-valued suggestions out
+      // before they ever become a forward ChangeRow — so a null `to` here can only be a revert, never
+      // a genuine AI-set value. Revisit this delete-convention if that filter ever changes.
       if (c.to === null || c.to === undefined) delete next[c.key];
       else next[c.key] = c.to as Val;
       if (c.reverted) nextMarks.delete(c.key);

@@ -2,7 +2,10 @@
 // line to stdout — deliberately not a DB table or external sink for this milestone; ids, error
 // codes, timings and usage are the intended payload, never raw content.
 
-const REDACT_KEYS = new Set(["dataBase64", "apiKey", "authorization", "prompt", "messages"]);
+// `message` (singular) joins the list because a raw Error.message can carry arbitrary content
+// (DB driver / provider SDK internals); the loop now logs a stable `code` instead, and this keeps
+// any stray message field from ever reaching the log. The only other audit call site logs `issues`.
+const REDACT_KEYS = new Set(["dataBase64", "apiKey", "authorization", "prompt", "messages", "message"]);
 
 function redact(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redact);

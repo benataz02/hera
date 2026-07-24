@@ -106,6 +106,11 @@ export type AssistantDeps = {
     customer: { cardCode: string; cardName: string } | null; status: string; modelId: string;
   } | null>;
   loadModelAndLookups(tenantId: string, modelId: string): Promise<{ model: ModelLike; lookups: ResolvedLookups }>;
+  /** The frozen run a prior attempt of this turn already computed (by `assistantTurn.calculatedRunId`).
+   *  Used only to re-hydrate `state.lastRun` on resume so the prompt's candidate count stays accurate
+   *  and `selectCandidates` evidence keeps resolving — the durable freeze itself comes from the
+   *  `calculatedRunId` column, not this lookup. */
+  loadRun(tenantId: string, runId: string): Promise<{ runId: string; candidates: unknown[] } | null>;
   makeExecutors(ctx: ExecutorCtx): Executors; // Tasks 10-11, closed over server context
   policy: { checkTurnStart(tenantId: string, userId: string): void; chargeTokens(tenantId: string, n: number): void };
   makeChatAdapter(provider: Provider): ChatAdapter; // Task 14; the seam that isolates TanStack AI
@@ -150,6 +155,21 @@ function canonicalJson(v: unknown): string {
 const sha256Hex = (s: string) => createHash("sha256").update(s).digest("hex");
 const byteSize = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
 const estimateTokens = (s: string) => Math.ceil(s.length / 4);
+
+// Stable error codes this engine throws internally (turns.ts fences, resolveProvider, the
+// resume-divergence guard). Anything outside this set — a DB driver error, a provider SDK error —
+// is arbitrary content that must NOT reach the audit log, the persisted `turn.errorCode`, or the
+// wire, so it collapses to a generic INTERNAL_ERROR. oRPC errors keep their own stable `code`
+// enum (never their free-form message).
+const KNOWN_ERROR_CODES = new Set([
+  "LEASE_LOST", "OPERATION_IN_FLIGHT", "MAX_ATTEMPTS", "PROVIDER_UNAVAILABLE",
+  "STATE_CHANGED", "CONTEXT_TOO_LARGE", "INVALID_TOOL_OUTPUT",
+]);
+function classifyTurnError(e: unknown): string {
+  if (e instanceof ORPCError) return e.code;
+  const msg = e instanceof Error ? e.message : String(e);
+  return KNOWN_ERROR_CODES.has(msg) ? msg : "INTERNAL_ERROR";
+}
 
 /** `name:sha256(args):relevant` — relevant is the fencing dimension a tool's own input doesn't
  *  already capture: the attachment hash for extraction, the run for selections, the observed
@@ -428,45 +448,75 @@ export async function* runTurn(
     inputTokens: turn.inputTokens, outputTokens: turn.outputTokens,
   };
 
+  // Pre-crash assistant transcript parts of THIS turn, spliced into the live model context below
+  // so a resumed model sees what it already did (empty for `new`, or a hard crash before finalize).
+  let resumeParts: ModelPart[] = [];
+
   try {
-    // -------- resume reconciliation --------
+    // -------- resume continuation --------
     let working: Working = { entries: turn.workingEntries, batches: turn.workingBatches, projectVersion: turn.latestProjectVersion.toISOString(), workingRevision: turn.workingRevision };
-    if (claim.kind === "resume" && input.resume) {
-      const touched = new Set(input.resume.touchedEntryKeys);
-      const nextEntries = { ...working.entries };
-      let changed = false;
-      for (const k of touched) {
-        const v = (input.entries as Entries)[k];
-        if (JSON.stringify(v) !== JSON.stringify(nextEntries[k])) {
-          if (v === undefined) delete nextEntries[k]; else nextEntries[k] = v;
+    if (claim.kind === "resume") {
+      // The pre-crash assistant message (if `finalizeTurn` ran before the crash): its `ui` is what
+      // the window already rendered; its `model` is the tool-call/result transcript this turn
+      // already produced. Both are needed to CONTINUE the turn rather than restart the model cold.
+      const [priorAssistant] = await deps.db.select().from(assistantMessage)
+        .where(and(eq(assistantMessage.turnId, turn.id), eq(assistantMessage.role, "assistant"))).limit(1);
+      const priorUi = priorAssistant?.content.ui;
+
+      // (3) Always yield the snapshot first on resume (plan Task 13). The client's `snapshot`
+      // reducer case replaces its stale partial text/changes with this authoritative projection
+      // and re-fires onApplyValues for the persisted valid changes, before any new delta arrives.
+      const snapSeq = await allocSeq(deps.db, turn.id, leaseToken, 1);
+      yield eventFor(snapshotEvent(turn, snapSeq, priorUi, "running"));
+
+      // (2) Re-seed the server-side accumulators + model transcript from the pre-crash message, so
+      // both the finalized message and the model's own context continue the turn instead of losing
+      // (persisted) or re-deriving (context) the work done before the crash.
+      if (priorAssistant) {
+        acc.text = priorUi?.text ?? "";
+        acc.changes = [...(priorUi?.changes ?? []), ...(priorUi?.invalid ?? [])];
+        acc.results = priorUi?.results ?? [];
+        if (priorUi?.suggestions?.length) suggestions = priorUi.suggestions;
+        resumeParts = (priorAssistant.content.model ?? []) as ModelPart[];
+        modelParts = [...resumeParts];
+      }
+
+      // -------- overlay reconciliation (the form edits the user made while the turn was down) --------
+      if (input.resume) {
+        const touched = new Set(input.resume.touchedEntryKeys);
+        const nextEntries = { ...working.entries };
+        let changed = false;
+        for (const k of touched) {
+          const v = (input.entries as Entries)[k];
+          if (JSON.stringify(v) !== JSON.stringify(nextEntries[k])) {
+            if (v === undefined) delete nextEntries[k]; else nextEntries[k] = v;
+            changed = true;
+          }
+        }
+        let nextBatches = working.batches;
+        if (input.resume.batchesTouched && JSON.stringify(input.batches) !== JSON.stringify(working.batches)) {
+          nextBatches = input.batches;
           changed = true;
         }
-      }
-      let nextBatches = working.batches;
-      if (input.resume.batchesTouched && JSON.stringify(input.batches) !== JSON.stringify(working.batches)) {
-        nextBatches = input.batches;
-        changed = true;
-      }
-      // Divergence-from-"that run's snapshot" check: `AssistantDeps` has no accessor for a
-      // `configRun` row, so this reads the turn's own `workingEntries`/`workingBatches` AT CLAIM
-      // TIME as already BEING the frozen run's snapshot — `calculate` sets `state.frozen = true`,
-      // blocking any further `setValues`, so nothing else can move those columns once
-      // `calculatedRunId` is set. Divergence is therefore just: the resume overlay would actually
-      // change entries/batches while `calculatedRunId` is set (see loop.ts:325-328 and the
-      // report's judgment call #2 for the same reasoning applied to provider-on-resume).
-      if (turn.calculatedRunId && changed) {
-        const [msg] = await deps.db.select().from(assistantMessage)
-          .where(and(eq(assistantMessage.turnId, turn.id), eq(assistantMessage.role, "assistant"))).limit(1);
-        const s = await allocSeq(deps.db, turn.id, leaseToken, 2);
-        yield eventFor(snapshotEvent(turn, s, msg?.content.ui, "running"));
-        yield eventFor({ type: "error", turnId: turn.id, seq: s + 1, code: "STATE_CHANGED", message: "The project changed since this turn started; start a new message", retryable: false });
-        finalStatus = "partial"; finalErrorCode = "STATE_CHANGED";
-        return;
-      }
-      if (changed) {
-        const ok = await updateWorking(deps.db, turn.id, leaseToken, { entries: nextEntries, batches: nextBatches, revision: working.workingRevision + 1 });
-        if (!ok) throw new Error("LEASE_LOST");
-        working = { ...working, entries: nextEntries, batches: nextBatches, workingRevision: working.workingRevision + 1 };
+        // Divergence-from-"that run's snapshot" check: `AssistantDeps` has no accessor for a
+        // `configRun` row, so this reads the turn's own `workingEntries`/`workingBatches` AT CLAIM
+        // TIME as already BEING the frozen run's snapshot — `calculate` sets `state.frozen = true`,
+        // blocking any further `setValues`, so nothing else can move those columns once
+        // `calculatedRunId` is set. Divergence is therefore just: the resume overlay would actually
+        // change entries/batches while `calculatedRunId` is set (see loop.ts:325-328 and the
+        // report's judgment call #2 for the same reasoning applied to provider-on-resume). The
+        // leading snapshot was already yielded above, so this branch only needs the error event.
+        if (turn.calculatedRunId && changed) {
+          const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+          yield eventFor({ type: "error", turnId: turn.id, seq: s, code: "STATE_CHANGED", message: "The project changed since this turn started; start a new message", retryable: false });
+          finalStatus = "partial"; finalErrorCode = "STATE_CHANGED";
+          return;
+        }
+        if (changed) {
+          const ok = await updateWorking(deps.db, turn.id, leaseToken, { entries: nextEntries, batches: nextBatches, revision: working.workingRevision + 1 });
+          if (!ok) throw new Error("LEASE_LOST");
+          working = { ...working, entries: nextEntries, batches: nextBatches, workingRevision: working.workingRevision + 1 };
+        }
       }
     }
 
@@ -481,6 +531,18 @@ export async function* runTurn(
       model, lookups, working: { ...working }, file: input.file as ExtractFile | undefined, signal: turnAbort.signal,
     };
     const executors = deps.makeExecutors(execCtx);
+
+    // (1) Restore the frozen state if a prior attempt of this turn already ran `calculate`. The
+    // durable source of truth is the `calculatedRunId` column (persisted in its own committed
+    // update the moment calculate succeeded), so this holds even on a hard crash with no assistant
+    // message. Without it, `makeExecutors` hands back `frozen: false` and a resumed model could run
+    // setValues again — advancing `workingRevision` off the value the original `calculate`'s
+    // operationKey was computed from, which would let a genuinely NEW config_run row be inserted.
+    if (turn.calculatedRunId) {
+      executors.state.frozen = true;
+      const run = await deps.loadRun(tenantId, turn.calculatedRunId);
+      if (run) executors.state.lastRun = run;
+    }
 
     const priorTurnRows = await deps.db.select({ id: assistantTurn.id }).from(assistantTurn)
       .where(and(eq(assistantTurn.conversationId, conversationId), ne(assistantTurn.id, turn.id)))
@@ -516,7 +578,11 @@ export async function* runTurn(
 
     // ============ STEP 4: provider loop ============
     const adapter = deps.makeChatAdapter(provider);
-    let liveMessages: Msg[] = [{ role: "user", text: input.message }];
+    // On resume, splice the current turn's pre-crash assistant transcript after the user message so
+    // the model sees its own earlier setValues/calculate calls and continues instead of redoing them.
+    const liveHead: Msg[] = [{ role: "user", text: input.message }];
+    if (resumeParts.length) liveHead.push({ role: "assistant", parts: resumeParts });
+    let liveMessages: Msg[] = liveHead;
     let doneNaturally = false;
     let toolBudgetExceeded = false;
 
@@ -731,12 +797,15 @@ export async function* runTurn(
     yield eventFor({ type: "done", turnId: turn.id, seq: s, suggestions: suggestions ?? [], usage: { inputTokens: lastCounters.inputTokens, outputTokens: lastCounters.outputTokens } });
     finalStatus = "complete";
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    finalStatus = "partial"; finalErrorCode = message;
-    deps.audit({ event: "assist_turn_error", turnId: turn.id, tenantId, message });
+    // A raw Error.message can be arbitrary (DB driver / provider SDK) content — never let it reach
+    // the log, the persisted errorCode, or the wire. Collapse to a stable code; the user-facing
+    // `message` text stays generic.
+    const code = classifyTurnError(e);
+    finalStatus = "partial"; finalErrorCode = code;
+    deps.audit({ event: "assist_turn_error", turnId: turn.id, tenantId, code });
     try {
       const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
-      yield eventFor({ type: "error", turnId: turn.id, seq: s, code: message.slice(0, 50), message: "Something went wrong; you can retry.", retryable: true });
+      yield eventFor({ type: "error", turnId: turn.id, seq: s, code, message: "Something went wrong; you can retry.", retryable: true });
     } catch { /* lease lost or transport gone: best-effort only */ }
   } finally {
     clearInterval(renewTimer);
