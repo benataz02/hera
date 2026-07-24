@@ -190,7 +190,7 @@ export function AssistantWindow({
   const [stopping, setStopping] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
-  const lastTurnRef = useRef<{ turnId: string; message: string; file?: Attachment } | null>(null);
+  const lastTurnRef = useRef<{ turnId: string; message: string; file?: Attachment; provider: Provider | undefined } | null>(null);
   const prevEntriesRef = useRef(entries);
   const prevBatchesRef = useRef(batches);
 
@@ -228,7 +228,7 @@ export function AssistantWindow({
   const applyOpts = { onApplyValues: onApply, onCandidates, onSelection, onConversation: setConversationId };
 
   async function runStream(params: {
-    turnId: string; message: string; file?: Attachment;
+    turnId: string; message: string; file?: Attachment; provider: Provider | undefined;
     resume?: { lastAppliedSeq: number; touchedEntryKeys: string[]; batchesTouched: boolean };
   }) {
     const ac = new AbortController();
@@ -236,7 +236,7 @@ export function AssistantWindow({
     onBusyChange(true);
     try {
       const input: AssistChatInput = {
-        projectId, turnId: params.turnId, conversationId, provider,
+        projectId, turnId: params.turnId, conversationId, provider: params.provider,
         entries, batches, projectVersion, message: params.message,
         file: params.file, resume: params.resume,
       };
@@ -255,6 +255,11 @@ export function AssistantWindow({
       abortRef.current = null;
       setStopping(false);
       onBusyChange(false);
+      // Unconditional: the abort path above skips the synthetic `error` event (the only other
+      // thing that flips this off), so without this, closing the window mid-turn leaves
+      // state.busy stuck true for the rest of the mounted lifetime. Harmless no-op otherwise —
+      // `done`/`error` events already set busy:false before this runs.
+      setState((s) => (s.busy ? { ...s, busy: false } : s));
     }
   }
 
@@ -273,9 +278,9 @@ export function AssistantWindow({
     setFileError(null);
     setPromptValue("");
     const turnId = crypto.randomUUID();
-    lastTurnRef.current = { turnId, message: trimmed, file: attachment };
+    lastTurnRef.current = { turnId, message: trimmed, file: attachment, provider };
     setState((s) => startTurn(s, turnId, trimmed, attachment?.name));
-    await runStream({ turnId, message: trimmed, file: attachment });
+    await runStream({ turnId, message: trimmed, file: attachment, provider });
   }
 
   function retry(turnId: string) {
@@ -290,7 +295,11 @@ export function AssistantWindow({
       ...s, busy: true,
       messages: s.messages.map((m) => (m.role === "assistant" && m.turnId === turnId ? { ...m, error: undefined } : m)),
     }));
-    void runStream({ turnId, message: last.message, file: last.file, resume });
+    // Pin the provider captured at send time, not the live `provider` state — the user may have
+    // switched providers since the turn errored (the Select only locks on state.busy), and the
+    // server rejects a reused turnId whose provider doesn't match the original with
+    // TURN_IDENTITY_MISMATCH instead of resuming it.
+    void runStream({ turnId, message: last.message, file: last.file, provider: last.provider, resume });
   }
 
   function requestClose() {
@@ -369,7 +378,7 @@ export function AssistantWindow({
       <div style={headerStyle}>
         {view === "chat" ? (
           <Button design="Transparent" icon="navigation-left-arrow" tooltip="Conversations"
-            onClick={() => setView("conversations")} />
+            disabled={state.busy} onClick={() => setView("conversations")} />
         ) : null}
         <Title level="H5" style={{ color: "white", flex: 1 }}>Chati</Title>
         <Select disabled={state.busy} value={provider ?? ""} style={{ width: "7.5rem" }}
@@ -391,7 +400,7 @@ export function AssistantWindow({
           <BusyIndicator active delay={0} text="Stopping…" />
         </div>
       ) : view === "conversations" ? (
-        <ConversationsList projectId={projectId} onPick={pickConversation} onNew={newChat} />
+        <ConversationsList projectId={projectId} onPick={pickConversation} onNew={newChat} busy={state.busy} />
       ) : logMessages.length === 0 ? (
         <Welcome firstName={firstName} onChip={(t) => void send(t)} />
       ) : (
@@ -538,8 +547,8 @@ function Bubble({
   );
 }
 
-function ConversationsList({ projectId, onPick, onNew }: {
-  projectId: string; onPick: (id: string, provider: Provider) => void; onNew: () => void;
+function ConversationsList({ projectId, onPick, onNew, busy }: {
+  projectId: string; onPick: (id: string, provider: Provider) => void; onNew: () => void; busy: boolean;
 }) {
   const qc = useQueryClient();
   const q = useQuery(orpc.assist.list.queryOptions({ input: { projectId } }));
@@ -557,21 +566,22 @@ function ConversationsList({ projectId, onPick, onNew }: {
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0.75rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-      <Button design="Emphasized" icon="add" onClick={onNew} style={{ alignSelf: "flex-start" }}>New chat</Button>
+      <Button design="Emphasized" icon="add" disabled={busy} onClick={onNew} style={{ alignSelf: "flex-start" }}>New chat</Button>
       {q.isPending ? <BusyIndicator active delay={0} /> : null}
       {q.error ? <MessageStrip design="Negative" hideCloseButton>{q.error.message}</MessageStrip> : null}
       {del.error ? <MessageStrip design="Negative" hideCloseButton>{del.error.message}</MessageStrip> : null}
       {q.data && q.data.items.length === 0 ? <Text>No conversations yet.</Text> : null}
       {(q.data?.items ?? []).map((c) => (
-        <div key={c.id} onClick={() => onPick(c.id, c.provider)} style={{
-          display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer",
+        <div key={c.id} onClick={() => { if (!busy) onPick(c.id, c.provider); }} style={{
+          display: "flex", alignItems: "center", gap: "0.5rem", cursor: busy ? "default" : "pointer",
           padding: "0.4rem 0.5rem", borderRadius: "0.5rem", border: "1px solid var(--sapList_BorderColor)",
+          opacity: busy ? 0.6 : 1,
         }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <Text style={{ fontWeight: "bold", display: "block" }}>{c.title}</Text>
             <Text style={{ fontSize: "0.75rem", opacity: 0.65 }}>{relativeTime(new Date(c.updatedAt))}</Text>
           </div>
-          <Button design="Transparent" icon="delete" disabled={del.isPending}
+          <Button design="Transparent" icon="delete" disabled={del.isPending || busy}
             onClick={(e) => { e.stopPropagation(); void onDelete(c.id, c.title); }} />
         </div>
       ))}
