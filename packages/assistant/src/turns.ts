@@ -47,46 +47,80 @@ function isUniqueViolation(e: unknown): boolean {
   return false;
 }
 
+// The actual claim logic, factored out so it can run either inside `claimTurn`'s own transaction
+// (the resume/replay/existing-conversation case) or inside `claimTurnWithNewConversation`'s
+// transaction, sharing the just-inserted conversation row (the atomic new-conversation case).
+// `tx` is typed as `Db` rather than the concrete transaction class — see `RunToolOperationParams.exec`
+// in this file for the same precedent (a `NodePgTransaction` satisfies `Db` structurally).
+async function claimInTx(tx: Db, p: ClaimParams): Promise<ClaimResult> {
+  // 1. Expire dead owners that would block the partial-unique indexes.
+  await tx.update(assistantTurn).set({ status: "partial", leaseToken: null })
+    .where(and(eq(assistantTurn.status, "running"), lt(assistantTurn.leaseExpiresAt, new Date()),
+      sql`(${assistantTurn.conversationId} = ${p.conversationId} or ${assistantTurn.userId} = ${p.userId})`));
+
+  const [existing] = await tx.select().from(assistantTurn).where(eq(assistantTurn.id, p.turnId)).limit(1);
+  const leaseToken = crypto.randomUUID();
+  if (existing) {
+    // Immutable identity check: conversation, user, message, provider, attachment hash.
+    if (existing.conversationId !== p.conversationId || existing.userId !== p.userId
+      || existing.userMessage !== p.userMessage || existing.provider !== p.provider
+      || (existing.attachmentSha256 ?? null) !== (p.attachment?.sha256 ?? null))
+      return { kind: "rejected" as const, code: "TURN_IDENTITY_MISMATCH" as const };
+    if (existing.status === "running" && existing.leaseExpiresAt && existing.leaseExpiresAt > new Date())
+      return { kind: "rejected" as const, code: "TURN_IN_PROGRESS" as const };
+    const [turn] = await tx.update(assistantTurn)
+      .set({ leaseToken, leaseExpiresAt: leaseExpiry(), updatedAt: new Date(),
+        status: existing.status === "complete" ? "complete" : "running" })
+      .where(eq(assistantTurn.id, p.turnId)).returning();
+    return { kind: existing.status === "complete" ? "replay" as const : "resume" as const, leaseToken, turn: turn! };
+  }
+  // New turn. STATE_CHANGED is checked by the caller against the live project BEFORE claim;
+  // here we only record the version the turn started from. (When called from
+  // `claimTurnWithNewConversation`, `p.conversationId` is a row inserted earlier in this SAME
+  // transaction, so `existing` above can never reference it — this branch always runs.)
+  const [turn] = await tx.insert(assistantTurn).values({
+    id: p.turnId, conversationId: p.conversationId, userId: p.userId,
+    provider: p.provider, model: p.model,
+    initialProjectVersion: p.projectVersion, latestProjectVersion: p.projectVersion,
+    initialEntries: p.entries, initialBatches: p.batches,
+    workingEntries: p.entries, workingBatches: p.batches,
+    userMessage: p.userMessage, leaseToken, leaseExpiresAt: leaseExpiry(),
+    attachmentName: p.attachment?.name, attachmentMime: p.attachment?.mime, attachmentSha256: p.attachment?.sha256,
+  }).returning();
+  await tx.insert(assistantMessage).values({
+    conversationId: p.conversationId, turnId: p.turnId, role: "user", createdByUserId: p.userId,
+    content: { ui: { text: p.userMessage, ...(p.attachment ? { fileName: p.attachment.name } : {}) }, model: [] },
+  });
+  return { kind: "new" as const, leaseToken, turn: turn! };
+}
+
 export async function claimTurn(db: Db, p: ClaimParams): Promise<ClaimResult> {
   try {
-    return await db.transaction(async (tx) => {
-      // 1. Expire dead owners that would block the partial-unique indexes.
-      await tx.update(assistantTurn).set({ status: "partial", leaseToken: null })
-        .where(and(eq(assistantTurn.status, "running"), lt(assistantTurn.leaseExpiresAt, new Date()),
-          sql`(${assistantTurn.conversationId} = ${p.conversationId} or ${assistantTurn.userId} = ${p.userId})`));
+    return await db.transaction((tx) => claimInTx(tx, p));
+  } catch (e) {
+    if (isUniqueViolation(e)) return { kind: "rejected", code: "TURN_IN_PROGRESS" };
+    throw e;
+  }
+}
 
-      const [existing] = await tx.select().from(assistantTurn).where(eq(assistantTurn.id, p.turnId)).limit(1);
-      const leaseToken = crypto.randomUUID();
-      if (existing) {
-        // Immutable identity check: conversation, user, message, provider, attachment hash.
-        if (existing.conversationId !== p.conversationId || existing.userId !== p.userId
-          || existing.userMessage !== p.userMessage || existing.provider !== p.provider
-          || (existing.attachmentSha256 ?? null) !== (p.attachment?.sha256 ?? null))
-          return { kind: "rejected" as const, code: "TURN_IDENTITY_MISMATCH" as const };
-        if (existing.status === "running" && existing.leaseExpiresAt && existing.leaseExpiresAt > new Date())
-          return { kind: "rejected" as const, code: "TURN_IN_PROGRESS" as const };
-        const [turn] = await tx.update(assistantTurn)
-          .set({ leaseToken, leaseExpiresAt: leaseExpiry(), updatedAt: new Date(),
-            status: existing.status === "complete" ? "complete" : "running" })
-          .where(eq(assistantTurn.id, p.turnId)).returning();
-        return { kind: existing.status === "complete" ? "replay" as const : "resume" as const, leaseToken, turn: turn! };
-      }
-      // New turn. STATE_CHANGED is checked by the caller against the live project BEFORE claim;
-      // here we only record the version the turn started from.
-      const [turn] = await tx.insert(assistantTurn).values({
-        id: p.turnId, conversationId: p.conversationId, userId: p.userId,
-        provider: p.provider, model: p.model,
-        initialProjectVersion: p.projectVersion, latestProjectVersion: p.projectVersion,
-        initialEntries: p.entries, initialBatches: p.batches,
-        workingEntries: p.entries, workingBatches: p.batches,
-        userMessage: p.userMessage, leaseToken, leaseExpiresAt: leaseExpiry(),
-        attachmentName: p.attachment?.name, attachmentMime: p.attachment?.mime, attachmentSha256: p.attachment?.sha256,
+export type NewConversationParams = {
+  tenantId: string; projectId: string; createdByUserId: string; provider: Provider; model: string; title: string;
+};
+
+/** Same claim as `claimTurn`, but for the "no conversationId in the input" path: the conversation
+ *  INSERT and the claim run in ONE transaction, so a rejected claim (or a genuine mid-claim DB
+ *  error) rolls back the conversation row too — no orphan empty conversation can ever be left
+ *  behind, whether the failure is a clean rejection or a thrown error. */
+export async function claimTurnWithNewConversation(
+  db: Db, conv: NewConversationParams, p: Omit<ClaimParams, "conversationId">,
+): Promise<ClaimResult> {
+  try {
+    return await db.transaction(async (tx) => {
+      const [row] = await tx.insert(assistantConversation).values({
+        tenantId: conv.tenantId, projectId: conv.projectId, createdByUserId: conv.createdByUserId,
+        provider: conv.provider, model: conv.model, title: conv.title,
       }).returning();
-      await tx.insert(assistantMessage).values({
-        conversationId: p.conversationId, turnId: p.turnId, role: "user", createdByUserId: p.userId,
-        content: { ui: { text: p.userMessage, ...(p.attachment ? { fileName: p.attachment.name } : {}) }, model: [] },
-      });
-      return { kind: "new" as const, leaseToken, turn: turn! };
+      return claimInTx(tx, { ...p, conversationId: row!.id });
     });
   } catch (e) {
     if (isUniqueViolation(e)) return { kind: "rejected", code: "TURN_IN_PROGRESS" };
@@ -99,6 +133,18 @@ export async function renewLease(db: Db, turnId: string, leaseToken: string): Pr
   const updated = await db.update(assistantTurn)
     .set({ leaseExpiresAt: leaseExpiry(), updatedAt: new Date() })
     .where(and(eq(assistantTurn.id, turnId), eq(assistantTurn.leaseToken, leaseToken)))
+    .returning({ id: assistantTurn.id });
+  return updated.length > 0;
+}
+
+/** Fenced compare-and-set that picks exactly one winner across all resume attempts of a turn's
+ *  wrap-up step: `WHERE ... AND wrapUpAttempted = false`, same shape as `renewLease`. True = this
+ *  caller won (and is now the only one that may make the wrap-up provider call); false = someone
+ *  else already attempted (or won) it, or the lease is gone. */
+export async function claimWrapUp(db: Db, turnId: string, leaseToken: string): Promise<boolean> {
+  const updated = await db.update(assistantTurn)
+    .set({ wrapUpAttempted: true })
+    .where(and(eq(assistantTurn.id, turnId), eq(assistantTurn.leaseToken, leaseToken), eq(assistantTurn.wrapUpAttempted, false)))
     .returning({ id: assistantTurn.id });
   return updated.length > 0;
 }

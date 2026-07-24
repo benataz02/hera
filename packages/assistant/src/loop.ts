@@ -11,7 +11,8 @@ import { AssistantEventZ, type AssistantEvent, type ChangeRow } from "./events.t
 import { TOOLS, staleResult, makeSetValuesInputZ, type Evidence, type ToolName } from "./tools.ts";
 import { resolveProvider } from "./provider.ts";
 import {
-  allocSeq, bumpCounters, claimTurn, finalizeTurn, renewLease, runToolOperation, updateWorking,
+  allocSeq, bumpCounters, claimTurn, claimTurnWithNewConversation, claimWrapUp, finalizeTurn,
+  renewLease, runToolOperation, updateWorking,
   LEASE_RENEW_MS, type Db, type TurnRow,
 } from "./turns.ts";
 import {
@@ -333,19 +334,34 @@ export async function* runTurn(
 
   const provider: Provider | undefined = existingTurn?.provider ?? input.provider ?? conversation?.provider;
   if (!provider) throw new ORPCError("BAD_REQUEST", { message: "provider is required to start a new conversation" });
-  let resolved;
-  try {
-    resolved = resolveProvider(provider);
-  } catch {
-    throw new ORPCError("SERVICE_UNAVAILABLE", { message: `${provider} is not available` });
+
+  // A turn whose row already exists AND is "complete" can only ever come back from `claimTurn`
+  // as `replay` (zero adapter calls, see the branch below) or `rejected` (identity mismatch) —
+  // neither needs the provider to be resolved/available, so skip that check entirely here. This
+  // is what lets a completed turn be replayed even if its provider later became unavailable
+  // (e.g. an API key was removed). `existingTurn.model` is already durable in that case, so no
+  // resolved profile is needed to fill in a model name either. A genuinely new turn still needs
+  // to resolve the provider before `claimTurn`, since `provider`/`model` are required insert
+  // columns; a resume needs it too (it WILL make adapter calls), using the already-pinned
+  // `existingTurn.provider` above so `claimTurn`'s immutable-identity check can never mismatch.
+  const isProspectiveReplay = existingTurn?.status === "complete";
+  let modelName: string;
+  if (isProspectiveReplay) {
+    modelName = existingTurn!.model;
+  } else {
+    let resolved;
+    try {
+      resolved = resolveProvider(provider);
+    } catch {
+      throw new ORPCError("SERVICE_UNAVAILABLE", { message: `${provider} is not available` });
+    }
+    modelName = existingTurn?.model ?? resolved.profile.model;
   }
-  const modelName = existingTurn?.model ?? resolved.profile.model;
 
   const { model, lookups } = await deps.loadModelAndLookups(tenantId, project.modelId);
   validateEntries(model.definition, lookups, input.entries as Entries);
 
   // ============ STEP 2: claim ============
-  let conversationId = conversation?.id;
   const attachment = attachmentOf(input.file as ExtractFile | undefined);
   const claimParams = {
     turnId: input.turnId, userId, provider, model: modelName,
@@ -354,23 +370,17 @@ export async function* runTurn(
   };
 
   let claim: Awaited<ReturnType<typeof claimTurn>>;
-  let newConversationEvent: AssistantEvent | null = null;
+  const isNewConversation = !conversation;
+  const title = input.message.slice(0, 80);
   if (!conversation) {
-    const title = input.message.slice(0, 80);
-    const [conv] = await deps.db.insert(assistantConversation).values({
-      tenantId, projectId: input.projectId, createdByUserId: userId, provider, model: modelName, title,
-    }).returning();
-    conversationId = conv!.id;
-    claim = await claimTurn(deps.db, { ...claimParams, conversationId: conv!.id });
-    if (claim.kind === "rejected") {
-      // Roll back the orphan conversation row we just created — a rejected claim must leave no trace.
-      await deps.db.delete(assistantConversation).where(eq(assistantConversation.id, conv!.id));
-    } else {
-      const s = await allocSeq(deps.db, claim.turn.id, claim.leaseToken, 1);
-      newConversationEvent = eventFor({ type: "conversation", turnId: input.turnId, seq: s, id: conv!.id, title, provider });
-    }
+    // Conversation INSERT + claim are ONE transaction (see `claimTurnWithNewConversation`) — a
+    // rejected claim, or a genuine DB error mid-claim, rolls back the conversation row too. No
+    // orphan conversation can ever be left behind.
+    claim = await claimTurnWithNewConversation(
+      deps.db, { tenantId, projectId: input.projectId, createdByUserId: userId, provider, model: modelName, title },
+      claimParams,
+    );
   } else {
-    conversationId = conversation.id;
     if (input.provider && !existingTurn && input.provider !== conversation.provider)
       await deps.db.update(assistantConversation).set({ provider: input.provider }).where(eq(assistantConversation.id, conversation.id));
     claim = await claimTurn(deps.db, { ...claimParams, conversationId: conversation.id });
@@ -380,6 +390,7 @@ export async function* runTurn(
     throw new ORPCError("CONFLICT", { message: claim.code });
 
   const { leaseToken, turn } = claim;
+  const conversationId = turn.conversationId;
 
   if (claim.kind === "replay") {
     const [msg] = await deps.db.select().from(assistantMessage)
@@ -390,7 +401,12 @@ export async function* runTurn(
     return; // zero adapter calls, nothing else to clean up
   }
 
-  if (newConversationEvent) yield newConversationEvent;
+  if (isNewConversation) {
+    // claim.kind is necessarily "new" here: "replay" already returned above, and "resume"
+    // requires an existing turn, which requires an existing (not new) conversation.
+    const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+    yield eventFor({ type: "conversation", turnId: input.turnId, seq: s, id: conversationId, title, provider });
+  }
 
   // ============ From here on: "new" or "resume" — lease renewal + watchdog + finalize ============
   const turnAbort = new AbortController();
@@ -431,6 +447,13 @@ export async function* runTurn(
         nextBatches = input.batches;
         changed = true;
       }
+      // Divergence-from-"that run's snapshot" check: `AssistantDeps` has no accessor for a
+      // `configRun` row, so this reads the turn's own `workingEntries`/`workingBatches` AT CLAIM
+      // TIME as already BEING the frozen run's snapshot — `calculate` sets `state.frozen = true`,
+      // blocking any further `setValues`, so nothing else can move those columns once
+      // `calculatedRunId` is set. Divergence is therefore just: the resume overlay would actually
+      // change entries/batches while `calculatedRunId` is set (see loop.ts:325-328 and the
+      // report's judgment call #2 for the same reasoning applied to provider-on-resume).
       if (turn.calculatedRunId && changed) {
         const [msg] = await deps.db.select().from(assistantMessage)
           .where(and(eq(assistantMessage.turnId, turn.id), eq(assistantMessage.role, "assistant"))).limit(1);
@@ -454,13 +477,13 @@ export async function* runTurn(
 
     const execCtx: ExecutorCtx = {
       tenantId, projectId: input.projectId, userId, turnId: turn.id, userMessageId,
-      userMessage: input.message, conversationId: conversationId!, leaseToken,
+      userMessage: input.message, conversationId, leaseToken,
       model, lookups, working: { ...working }, file: input.file as ExtractFile | undefined, signal: turnAbort.signal,
     };
     const executors = deps.makeExecutors(execCtx);
 
     const priorTurnRows = await deps.db.select({ id: assistantTurn.id }).from(assistantTurn)
-      .where(and(eq(assistantTurn.conversationId, conversationId!), ne(assistantTurn.id, turn.id)))
+      .where(and(eq(assistantTurn.conversationId, conversationId), ne(assistantTurn.id, turn.id)))
       .orderBy(desc(assistantTurn.startedAt)).limit(CONTEXT_TURN_LIMIT);
     const priorIds = priorTurnRows.map((t) => t.id).reverse(); // oldest-first
     const priorMsgs = priorIds.length
@@ -657,11 +680,7 @@ export async function* runTurn(
 
     // ============ STEP 5: wrap-up ============
     if (!doneNaturally) {
-      const winnerRow = await deps.db.update(assistantTurn)
-        .set({ wrapUpAttempted: true })
-        .where(and(eq(assistantTurn.id, turn.id), eq(assistantTurn.leaseToken, leaseToken), eq(assistantTurn.wrapUpAttempted, false)))
-        .returning({ id: assistantTurn.id });
-      const isWinner = winnerRow.length > 0;
+      const isWinner = await claimWrapUp(deps.db, turn.id, leaseToken);
       const wrapUpBudget = MAX_OUTPUT_TOKENS_PER_TURN - lastCounters.outputTokens;
       const canCallProvider = isWinner && lastCounters.providerCallCount < MAX_PROVIDER_CALLS && wrapUpBudget > 0;
 
@@ -729,7 +748,7 @@ export async function* runTurn(
         text: acc.text, changes: acc.changes.filter((c) => c.valid), invalid: acc.changes.filter((c) => !c.valid),
         results: acc.results, ...(input.file ? { fileName: (input.file as ExtractFile).name } : {}),
       },
-      assistantModel: modelParts, conversationId: conversationId!, suggestions,
+      assistantModel: modelParts, conversationId, suggestions,
     });
   }
 }
