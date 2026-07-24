@@ -23,13 +23,14 @@ function extraOf(ref: LookupRef, t: ResolvedTable | undefined, val: Val): string
 
 // Value-help input for a query-sourced param. Local `typed` state lets you filter as you type
 // without committing; on blur/Enter an unknown value is rejected (reverts to the last valid one).
-function QueryValueInput({ p, refDef, dom, value, table, onCommit }: {
+function QueryValueInput({ p, refDef, dom, value, table, onCommit, disabled }: {
   p: Param;
   refDef: LookupRef;
   dom: DomainOption[];
   value: Val | undefined;
   table: ResolvedTable | undefined;
   onCommit: (v: Val | undefined) => void;
+  disabled?: boolean;
 }) {
   const [typed, setTyped] = useState<string | null>(null);
   const [vhOpen, setVhOpen] = useState(false);
@@ -52,7 +53,7 @@ function QueryValueInput({ p, refDef, dom, value, table, onCommit }: {
   return (
     <>
       <Input showSuggestions filter="None" value={shown} placeholder="Type or pick…" showClearIcon
-        style={{ width: "100%" }}
+        style={{ width: "100%" }} disabled={disabled}
         icon={<Icon name="value-help" style={{ cursor: "pointer" }} onClick={() => setVhOpen(true)} />}
         onInput={(e) => setTyped(e.target.value ?? "")}
         onChange={(e) => commit(e.target.value ?? "")}>
@@ -95,7 +96,7 @@ export function ConsistencyStatus({ model, lookups, entries }: {
 // labelSpan 12 everywhere = labels on top of their fields (natively left-aligned), field takes the full column.
 const FORM_PROPS = { labelSpan: "S12 M12 L12 XL12", layout: "S1 M2 L2 XL2", headerLevel: "H5" } as const;
 
-export function ConfiguratorForm({ model, lookups, entries, onChange, loading, batch, section }: {
+export function ConfiguratorForm({ model, lookups, entries, onChange, loading, batch, section, aiMarks, disabled }: {
   model: ModelDef;
   lookups?: ResolvedLookups;
   entries: Entries;
@@ -105,6 +106,10 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
   batch?: ComponentProps<typeof BatchEditor>;
   /** render only this section, without its own Form header — the caller shows the title (e.g. an ObjectPageSection) */
   section?: string;
+  /** paramKey → evidence tooltip, for values Chati just set — renders an "AI" chip next to the field */
+  aiMarks?: Map<string, string>;
+  /** disables every control while Chati is running a turn; manual edits stay blocked until it settles */
+  disabled?: boolean;
 }) {
   const lk = useMemo(() => lookups ?? clientBaseLookups(model), [lookups, model]);
   const prop = useMemo(() => propagate(model, lk, entries), [model, lk, entries]);
@@ -132,7 +137,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem 1rem" }}>
           {dom.map((o, i) => (
             <RadioButton key={i} name={`cfg-${key}`} text={o.label} checked={v === o.value}
-              disabled={!!o.eliminatedBy}
+              disabled={disabled || !!o.eliminatedBy}
               // tooltip is a runtime ui5 prop the React typing omits (like Option's disabled).
               {...(o.eliminatedBy ? ({ tooltip: `Unavailable: ${o.eliminatedBy}` } as Record<string, unknown>) : {})}
               onChange={() => set(key, o.value)} />
@@ -143,7 +148,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
     if (p.ui === "checkbox" || (p.type === "boolean" && p.ui !== "select"))
       return (
         <CheckBox checked={v === true}
-          disabled={!!dom.find((o) => o.value === (v !== true))?.eliminatedBy}
+          disabled={disabled || !!dom.find((o) => o.value === (v !== true))?.eliminatedBy}
           {...(() => {
             const t = dom.find((o) => !!o.eliminatedBy)?.eliminatedBy;
             return t ? ({ tooltip: t } as Record<string, unknown>) : {};
@@ -154,7 +159,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
     if (p.ui === "multicombo")
       return (
         // MultiComboBoxItem has no disabled prop -> eliminated options are filtered out.
-        <MultiComboBox style={{ width: "100%" }}
+        <MultiComboBox style={{ width: "100%" }} disabled={disabled}
           onSelectionChange={(e) => {
             const texts = e.detail.items.map((i) => (i as HTMLElement).getAttribute("text")!);
             set(key, texts.length ? texts : undefined);
@@ -169,7 +174,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
       const r = p.domain?.kind === "range" ? p.domain : undefined;
       return (
         <StepInput value={typeof v === "number" ? v : undefined} min={r?.min} max={r?.max} step={r?.step ?? 1}
-          style={{ width: "100%" }}
+          style={{ width: "100%" }} disabled={disabled}
           onChange={(e) => set(key, e.target.value ?? undefined)} />
       );
     }
@@ -178,7 +183,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
       // ponytail: every option is rendered as a suggestion child and filtered natively;
       // cap or virtualize if a query ever returns thousands of rows.
       return (
-        <QueryValueInput p={p} refDef={p.domain.ref} dom={dom} value={v}
+        <QueryValueInput p={p} refDef={p.domain.ref} dom={dom} value={v} disabled={disabled}
           table={lk.tables[p.domain.ref.table]} onCommit={(nv) => set(key, nv)} />
       );
     }
@@ -187,7 +192,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
       const tref = p.domain?.kind === "options" && p.domain.ref.source === "table" ? p.domain.ref : undefined;
       const tbl = tref ? lk.tables[tref.table] : undefined;
       return (
-        <Select value={v === undefined ? "" : JSON.stringify(v)} style={{ width: "100%" }}
+        <Select value={v === undefined ? "" : JSON.stringify(v)} style={{ width: "100%" }} disabled={disabled}
           onChange={(e) => {
             const j = (e.detail.selectedOption as HTMLElement).dataset.j;
             set(key, j === undefined || j === "" ? undefined : (JSON.parse(j) as Val));
@@ -208,7 +213,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
 
     return (
       <Input type={p.type === "number" ? "Number" : "Text"} value={v === undefined || v === null ? "" : String(v)}
-        style={{ width: "100%" }}
+        style={{ width: "100%" }} disabled={disabled}
         onChange={(e) => {
           const raw = e.target.value ?? "";
           set(key, raw === "" ? undefined : p.type === "number" ? Number(raw) : raw);
@@ -243,6 +248,9 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.125rem", width: "100%" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", width: "100%" }}>
                         {control(k)}
+                        {aiMarks?.has(k) ? (
+                          <ObjectStatus state="Information" icon="ai" title={aiMarks.get(k)}>AI</ObjectStatus>
+                        ) : null}
                         {prop.defaulted.has(k) ? <ObjectStatus state="Information">auto</ObjectStatus> : null}
                       </div>
                       {showEliminatedNote ? (

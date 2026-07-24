@@ -11,9 +11,10 @@ import { orpc } from "../../orpc.ts";
 import { toast } from "../toast.ts";
 import { cleanOverrides, statusUi, toggleSelection, type Sel } from "./runView.ts";
 import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
-import { ExtractPanel } from "./ExtractPanel.tsx";
 import { StepCandidatesReview } from "./StepCandidatesReview.tsx";
 import { HistoryPane } from "./HistoryPane.tsx";
+import { AssistantWindow } from "./AssistantWindow.tsx";
+import type { ChatChange } from "./assistantState.ts";
 import { ToBeDone } from "../Boundaries.tsx";
 import {
   buildCalculationUpdate, CONFIG_PROCESS_STEP_IDS, initialConfigProcessStep, POST_RUN_STEP,
@@ -45,6 +46,15 @@ export function ConfigProcessPage({ id }: { id: string }) {
   // Slide the help pane like the builder preview: open by default only when the model asks for it.
   const [paneOverride, setPaneOverride] = useState<boolean | null>(null);
   const [animating, setAnimating] = useState(false);
+  // Chati: the floating assistant window is always mounted (so its conversation survives close)
+  // and toggled via `chatOpen`. `aiMarks` drives the "AI" chip in ConfiguratorForm; `assistantBusy`
+  // gates form/batches/Calculate/Save-selection while a turn is in flight; `assistantProjectVersion`
+  // tracks the project version Chati last observed (from its own `candidates` events) so a stale
+  // browser tab doesn't reuse a version that predates the run it just triggered.
+  const [chatOpen, setChatOpen] = useState(false);
+  const [assistantBusy, setAssistantBusy] = useState(false);
+  const [aiMarks, setAiMarks] = useState<Map<string, string>>(new Map());
+  const [assistantProjectVersion, setAssistantProjectVersion] = useState<string | null>(null);
 
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: orpc.configs.get.queryOptions({ input: { id } }).queryKey });
@@ -87,6 +97,43 @@ export function ConfigProcessPage({ id }: { id: string }) {
       if ((cur === undefined || cur === null || cur === "") && v !== null && v !== undefined) next[k] = v;
     }
     setEntries(next); // fills only empty params; ConfiguratorForm's propagate() takes it from here
+  };
+
+  // ConfiguratorForm's onChange, wrapped: a manual edit to a key Chati just set means that AI
+  // value no longer describes what's on screen, so its "AI" chip must go — diff old vs. next and
+  // drop the mark for any key the user actually changed by hand.
+  const changeEntries = (next: Entries) => {
+    if (aiMarks.size) {
+      const touched = Object.keys({ ...entries, ...next }).filter(
+        (k) => JSON.stringify(entries[k]) !== JSON.stringify(next[k]),
+      );
+      if (touched.length) {
+        const nextMarks = new Map(aiMarks);
+        for (const k of touched) nextMarks.delete(k);
+        setAiMarks(nextMarks);
+      }
+    }
+    setEntries(next);
+  };
+
+  // Chati's onApply: reused for both a forward AI-set value and a revert (ChatChange.reverted).
+  // Forward rows merge `to` into entries and mark the key with its evidence; revert rows merge the
+  // restore target and clear the mark instead (the value is going back to what it was, not being
+  // freshly AI-set). `to` is a real Val on every row (never omitted — see ChangeRowZ); a revert
+  // that restores an originally-unset key encodes that as `to: null` (AssistantWindow's
+  // toRevertPayload), which we read as "delete the key", matching how the rest of this form
+  // treats an absent/null value as unset.
+  const applyAssistantChanges = (changes: ChatChange[]) => {
+    const next = { ...entries };
+    const nextMarks = new Map(aiMarks);
+    for (const c of changes) {
+      if (c.to === null || c.to === undefined) delete next[c.key];
+      else next[c.key] = c.to as Val;
+      if (c.reverted) nextMarks.delete(c.key);
+      else nextMarks.set(c.key, c.evidence);
+    }
+    setEntries(next);
+    setAiMarks(nextMarks);
   };
 
   // ConsistencyStatus renders the message; prop here only gates Calculate/navigation.
@@ -134,7 +181,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
       }
       endContent={
         <Button design="Emphasized"
-          disabled={conflicted || lookups.isPending || batches.length === 0 || calcBusy}
+          disabled={conflicted || lookups.isPending || batches.length === 0 || calcBusy || assistantBusy}
           onClick={() => void calculate()}>
           {calcBusy ? "Calculating…" : "Calculate"}
         </Button>
@@ -149,7 +196,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
         </Text>
       }
       endContent={
-        <Button design="Emphasized" disabled={select.isPending || selection.length === 0} onClick={saveSelection}>
+        <Button design="Emphasized" disabled={select.isPending || selection.length === 0 || assistantBusy} onClick={saveSelection}>
           {select.isPending ? "Saving…" : "Save selection"}
         </Button>
       } />
@@ -177,9 +224,6 @@ export function ConfigProcessPage({ id }: { id: string }) {
           <MessageStrip design="Negative" hideCloseButton>
             {update.error?.message ?? run.error?.message}
           </MessageStrip>
-        ) : null}
-        {step === 0 ? (
-          <ExtractPanel modelId={project.modelId} model={model.definition} entries={entries} onChange={setEntries} />
         ) : null}
       </div>
     </ObjectPageHeader>
@@ -213,6 +257,9 @@ export function ConfigProcessPage({ id }: { id: string }) {
                   onClick={() => { setAnimating(true); setPaneOverride(!paneOpen); }}>
                   History
                 </ToggleButton>
+                <ToggleButton icon="ai" pressed={chatOpen} onClick={() => setChatOpen(!chatOpen)}>
+                  Chati
+                </ToggleButton>
               </Toolbar>
             }
           />
@@ -228,7 +275,9 @@ export function ConfigProcessPage({ id }: { id: string }) {
           {model.definition.structure.sections.map((s) => (
             <ObjectPageSubSection key={s.key} id={s.key} titleText={s.title}>
               <ConfiguratorForm section={s.key} model={model.definition} lookups={lookups.data} entries={entries}
-                onChange={setEntries} loading={lookups.isFetching} batch={{ batches, onChange: setBatches }} />
+                onChange={changeEntries} loading={lookups.isFetching}
+                batch={{ batches, onChange: setBatches, disabled: assistantBusy }}
+                aiMarks={aiMarks} disabled={assistantBusy} />
             </ObjectPageSubSection>
           ))}
         </ObjectPageSection>
@@ -272,6 +321,14 @@ export function ConfigProcessPage({ id }: { id: string }) {
           <TextArea id="reject-note" rows={4} value={note} onInput={(e) => setNote(e.target.value)} />
         </div>
       </Dialog>
+
+      <AssistantWindow open={chatOpen} onClose={() => setChatOpen(false)}
+        projectId={id} projectVersion={assistantProjectVersion ?? project.updatedAt.toISOString()}
+        model={model.definition} lookups={lookups.data} entries={entries} batches={batches}
+        onApply={applyAssistantChanges}
+        onCandidates={(e) => { invalidate(); setSel([]); setStep(POST_RUN_STEP); setAssistantProjectVersion(e.projectVersion); }}
+        onSelection={() => { invalidate(); setSel(null); }}
+        onBusyChange={setAssistantBusy} />
     </div>
     </SplitterElement>
     <SplitterElement size={paneOpen ? "38%" : "0%"} minSize={paneOpen ? 320 : 0} resizable={paneOpen}

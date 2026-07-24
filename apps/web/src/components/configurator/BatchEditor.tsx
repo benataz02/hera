@@ -2,9 +2,10 @@ import { useState } from "react";
 import { Button, Label, StepInput, Text, Token, Tokenizer } from "@ui5/webcomponents-react";
 
 // The batch-quantity list editor shared by the internal Configure step and the portal wizard.
-export function BatchEditor({ batches, onChange }: {
+export function BatchEditor({ batches, onChange, disabled }: {
   batches: number[];
   onChange: (next: number[]) => void;
+  disabled?: boolean;
 }) {
   const [qty, setQty] = useState(1);
   const add = () => {
@@ -12,7 +13,7 @@ export function BatchEditor({ batches, onChange }: {
   };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", width: "100%" }}>
-      <Tokenizer accessibleName="Batch quantities"
+      <Tokenizer accessibleName="Batch quantities" disabled={disabled}
         onTokenDelete={(e) => {
           const gone = new Set(e.detail.tokens.map((t) => Number((t as HTMLElement).getAttribute("text"))));
           onChange(batches.filter((b) => !gone.has(b)));
@@ -23,9 +24,9 @@ export function BatchEditor({ batches, onChange }: {
       <div style={{ display: "flex", alignItems: "flex-end", gap: "0.5rem" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
           <Label for="new-batch-qty">Quantity</Label>
-          <StepInput id="new-batch-qty" min={1} value={qty} onChange={(e) => setQty(e.target.value ?? 1)} />
+          <StepInput id="new-batch-qty" min={1} value={qty} disabled={disabled} onChange={(e) => setQty(e.target.value ?? 1)} />
         </div>
-        <Button icon="add" onClick={add}>Add quantity</Button>
+        <Button icon="add" disabled={disabled} onClick={add}>Add quantity</Button>
       </div>
     </div>
   );
