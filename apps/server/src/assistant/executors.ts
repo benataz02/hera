@@ -1,6 +1,6 @@
 import { ORPCError } from "@orpc/server";
-import { and, eq, inArray } from "drizzle-orm";
-import { db, type RunCandidate } from "@hera/db";
+import { and, desc, eq, inArray } from "drizzle-orm";
+import { db, configRun, type RunCandidate, type RunSelection } from "@hera/db";
 import {
   propagate, enumerate, computeOutputs,
   type Entries, type ResolvedLookups, type Val, type Outputs,
@@ -8,7 +8,11 @@ import {
 import { assistantToolExecution, assistantTurn, type Evidence } from "@hera/assistant";
 import { validateSuggestionSet } from "../extraction.ts";
 import { callExtraction as realCallExtraction, type ExtractFile } from "../orpc/routers/extraction.ts";
-import { searchSimilarRows as realSimilar, fetchDocHistory as realDocs, loadModel } from "../orpc/routers/configs.ts";
+import {
+  searchSimilarRows as realSimilar, fetchDocHistory as realDocs, loadModel,
+  executeRunFromSnapshot, applySelection,
+} from "../orpc/routers/configs.ts";
+import { agentFetcher } from "../orpc/routers/models.ts";
 import type { DocRow } from "../doc-history.ts";
 
 // Tool executors: the server-side implementations closed over one turn's context. Each returns
@@ -178,6 +182,91 @@ export function createExecutors(
     async suggestFollowUps(input: { suggestions: string[] }) {
       const accepted = [...new Set(input.suggestions.map((s) => s.trim()).filter(Boolean))].slice(0, 3).map((s) => s.slice(0, 120));
       return { ok: true as const, stale: false as const, accepted };
+    },
+
+    async calculate(_: Record<string, never>) {
+      const prop = propagate(ctx.model.definition, ctx.lookups, ctx.working.entries);
+      if (prop.conflicts.length) return err("CONFLICTS", prop.conflicts.map((c) => c.message).join("; "));
+      if (!ctx.working.batches.length) return err("INVALID_ARGUMENTS", "Add at least one batch quantity");
+      try {
+        const r = await executeRunFromSnapshot(
+          ctx.tenantId, ctx.projectId, ctx.working.entries, ctx.working.batches,
+          new Date(ctx.working.projectVersion), agentFetcher(ctx.tenantId),
+        );
+        state.frozen = true;
+        state.lastRun = { runId: r.runId, candidates: r.candidates };
+        ctx.working.projectVersion = r.projectVersion;
+        const batchQty = ctx.working.batches[0] ?? 1;
+        const top = r.candidates.slice(0, 5).map((cand, idx) => {
+          const perBatch = cand.perBatch.find((b) => b.batchQty === batchQty) ?? cand.perBatch[0]!;
+          return { candidateId: `c${idx}`, label: summarize(cand.assignment), keyFigure: keyFigureOf(perBatch.outputs) };
+        });
+        return {
+          ok: true as const, stale: false as const, runId: r.runId, projectVersion: r.projectVersion,
+          selectionVersion: r.selectionVersion, reused: r.reused, candidateCount: r.candidateCount, top,
+        };
+      } catch (e) {
+        if (e instanceof ORPCError && e.code === "CONFLICT")
+          return err("STATE_CHANGED", "The project changed since this turn started; refresh and try again");
+        return mapInfra(e);
+      }
+    },
+
+    async selectCandidates(input: {
+      runId: string; expectedSelectionVersion: number;
+      selections: { candidateId: string; batchQty: number }[]; mode: "add" | "replace";
+    }) {
+      return db.transaction(async (tx) => {
+        const [run] = await tx.select().from(configRun)
+          .where(and(eq(configRun.id, input.runId), eq(configRun.tenantId, ctx.tenantId)))
+          .for("update");
+        if (!run) return err("INVALID_ARGUMENTS", "Run not found");
+
+        const [latest] = await tx.select({ id: configRun.id }).from(configRun)
+          .where(and(eq(configRun.projectId, run.projectId), eq(configRun.tenantId, ctx.tenantId)))
+          .orderBy(desc(configRun.createdAt)).limit(1);
+        if (latest?.id !== run.id || JSON.stringify(run.entries) !== JSON.stringify(ctx.working.entries))
+          return err("STALE_RUN", "This run is no longer the project's current configuration; recalculate");
+
+        if (run.selectionVersion !== input.expectedSelectionVersion)
+          return err("SELECTION_CHANGED", "Selection changed since expectedSelectionVersion; reload and retry");
+
+        const validBatchQtys = new Set(run.candidates[0]?.perBatch.map((b) => b.batchQty) ?? []);
+        const parsed: { candidateIdx: number; batchQty: number }[] = [];
+        for (const s of input.selections) {
+          const m = /^c(\d+)$/.exec(s.candidateId);
+          const idx = m ? Number(m[1]) : NaN;
+          if (!m || !run.candidates[idx]) return err("INVALID_ARGUMENTS", `Unknown candidateId ${s.candidateId}`);
+          if (!validBatchQtys.has(s.batchQty))
+            return err("INVALID_ARGUMENTS", `batchQty ${s.batchQty} is not one of this run's batches`);
+          parsed.push({ candidateIdx: idx, batchQty: s.batchQty });
+        }
+
+        const key = (s: { candidateIdx: number; batchQty: number }) => `${s.candidateIdx}:${s.batchQty}`;
+        let next: RunSelection[];
+        if (input.mode === "replace") {
+          next = parsed.map((p) => ({ candidateIdx: p.candidateIdx, batchQty: p.batchQty }));
+        } else {
+          const merged = new Map((run.selection ?? []).map((s) => [key(s), s]));
+          for (const p of parsed) merged.set(key(p), { candidateIdx: p.candidateIdx, batchQty: p.batchQty });
+          next = [...merged.values()];
+        }
+
+        try {
+          applySelection(run, next);
+        } catch (e) {
+          return mapInfra(e);
+        }
+
+        const selectionVersion = input.expectedSelectionVersion + 1;
+        await tx.update(configRun).set({ selection: next, selectionVersion })
+          .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, ctx.tenantId)));
+
+        return {
+          ok: true as const, stale: false as const, runId: run.id, selectionVersion,
+          selections: next.map((s) => ({ candidateId: `c${s.candidateIdx}`, batchQty: s.batchQty })),
+        };
+      });
     },
   };
 }
