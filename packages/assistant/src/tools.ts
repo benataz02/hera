@@ -9,7 +9,7 @@ export const EvidenceZ = z.strictObject({
   source: z.enum(["user", "drawing", "similar", "document"]).describe("where this value came from"),
   detail: z.string().min(1).max(2000).describe("the exact words/callout/row that state the value"),
   sourceRef: z.strictObject({
-    toolCallId: z.string().max(100), resultId: z.string().max(100),
+    toolCallId: z.string().min(1).max(100), resultId: z.string().min(1).max(100),
     rowId: z.string().max(100).optional(), paramKey: z.string().max(200).optional(),
   }).optional().describe("required for drawing/similar/document: the exact ids that tool returned"),
 });

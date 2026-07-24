@@ -94,7 +94,7 @@ export function createExecutors(
     ));
     const match = rows.find((r) =>
       (r.toolCallId === ev.sourceRef!.toolCallId || r.replayToolCallIds.includes(ev.sourceRef!.toolCallId)) &&
-      JSON.stringify(r.result ?? {}).includes(`"${ev.sourceRef!.resultId}"`));
+      (r.result as { resultId?: string } | null)?.resultId === ev.sourceRef!.resultId);
     if (!match) return { error: err("INVALID_PROVENANCE", "sourceRef does not resolve to a tool result in this conversation") };
     return { evidence: `${ev.detail} (${ev.source})` };
   }
