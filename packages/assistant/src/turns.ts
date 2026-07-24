@@ -35,6 +35,16 @@ export type ClaimResult =
   | { kind: "new" | "resume" | "replay"; leaseToken: string; turn: TurnRow }
   | { kind: "rejected"; code: "TURN_IN_PROGRESS" | "TURN_IDENTITY_MISMATCH" };
 
+// drizzle's `db.transaction(cb)` commits whenever `cb` returns normally — only a THROW rolls
+// back. `claimInTx` signals a rejected claim by RETURNING a plain object (not throwing), which
+// is correct for `claimTurn` (nothing to roll back there) but wrong for
+// `claimTurnWithNewConversation`, which must roll back its conversation INSERT on a rejection
+// too. This sentinel lets that one call site force a rollback via throw while still handing the
+// verdict back to ITS OWN caller as a normal return value, not an escaped exception.
+class ClaimRejectedInTx extends Error {
+  constructor(public verdict: Extract<ClaimResult, { kind: "rejected" }>) { super(verdict.code); }
+}
+
 // Unique-violation code lives on the immediate error in some drivers, on `.cause` in others
 // (node-postgres errors get wrapped as they cross the pool/transaction boundary) — walk the
 // cause chain rather than trusting either shape alone.
@@ -110,7 +120,12 @@ export type NewConversationParams = {
 /** Same claim as `claimTurn`, but for the "no conversationId in the input" path: the conversation
  *  INSERT and the claim run in ONE transaction, so a rejected claim (or a genuine mid-claim DB
  *  error) rolls back the conversation row too — no orphan empty conversation can ever be left
- *  behind, whether the failure is a clean rejection or a thrown error. */
+ *  behind, whether the failure is a clean rejection or a thrown error. This holds because a
+ *  `rejected` verdict from `claimInTx` is deliberately re-thrown here as `ClaimRejectedInTx`
+ *  (return-normally would otherwise COMMIT the conversation insert with drizzle's transaction
+ *  API) — the outer `catch` unwraps it back into the plain `{kind:"rejected",...}` verdict this
+ *  function's own caller expects, after the whole transaction (conversation insert included) has
+ *  already rolled back. */
 export async function claimTurnWithNewConversation(
   db: Db, conv: NewConversationParams, p: Omit<ClaimParams, "conversationId">,
 ): Promise<ClaimResult> {
@@ -120,9 +135,12 @@ export async function claimTurnWithNewConversation(
         tenantId: conv.tenantId, projectId: conv.projectId, createdByUserId: conv.createdByUserId,
         provider: conv.provider, model: conv.model, title: conv.title,
       }).returning();
-      return claimInTx(tx, { ...p, conversationId: row!.id });
+      const result = await claimInTx(tx, { ...p, conversationId: row!.id });
+      if (result.kind === "rejected") throw new ClaimRejectedInTx(result);
+      return result;
     });
   } catch (e) {
+    if (e instanceof ClaimRejectedInTx) return e.verdict;
     if (isUniqueViolation(e)) return { kind: "rejected", code: "TURN_IN_PROGRESS" };
     throw e;
   }
