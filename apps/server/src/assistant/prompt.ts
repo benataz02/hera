@@ -70,10 +70,11 @@ export function buildAssistPrompt(model: ModelDef, propagated: Propagated, worki
     "  form — the user is looking at it.",
     "- Reply in the user's language. Be brief; short sentences over lists when a few",
     "  values are involved.",
-    "- Before your final reply of a turn, call suggestFollowUps with up to 3 short",
-    '  next-step prompts phrased in the user\'s voice ("Fill the remaining 3',
-    '  parameters", "Calculate candidates" — the latter only when no conflicts',
-    "  remain). Skip suggestions that don't apply.",
+    "- End the turn by writing your reply AND calling suggestFollowUps in the SAME",
+    "  response — up to 3 short next-step prompts in the user's voice (\"Fill the",
+    '  remaining 3 parameters", "Calculate candidates" — the latter only when no',
+    "  conflicts remain). Skip suggestions that don't apply. Doing both together ends",
+    "  the turn; calling suggestFollowUps alone just costs a wasted round trip.",
   );
   return s.join("\n");
 }

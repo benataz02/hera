@@ -5,7 +5,9 @@ import {
   propagate, enumerate, computeOutputs,
   type Entries, type ResolvedLookups, type Val, type Outputs,
 } from "@hera/config-engine";
-import { assistantToolExecution, assistantTurn, type Evidence } from "@hera/assistant";
+import {
+  assistantToolExecution, assistantTurn, byteSize, MAX_TOOL_RESULT_BYTES, type Evidence,
+} from "@hera/assistant";
 import { validateSuggestionSet } from "../extraction.ts";
 import { callExtraction as realCallExtraction, type ExtractFile } from "../orpc/routers/extraction.ts";
 import {
@@ -39,9 +41,6 @@ export type ExecutorDeps = {
 };
 
 const err = (code: string, message: string, retryable = false) => ({ ok: false as const, code, message, retryable });
-const MAX_TOOL_RESULT_BYTES = 32 * 1024;
-
-const byteSize = (v: unknown): number => new TextEncoder().encode(JSON.stringify(v)).length;
 
 /** Halves an array until its serialized size fits the cap (or one item remains). Used for the
  *  read tools' bounded row/param arrays so a pathological result can't blow the model context. */

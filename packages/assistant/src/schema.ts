@@ -64,7 +64,6 @@ export const assistantTurn = pgTable(
     workingRevision: integer("working_revision").notNull().default(0),
     nextSeq: integer("next_seq").notNull().default(0),
     iterationCount: integer("iteration_count").notNull().default(0),
-    emittedToolCallCount: integer("emitted_tool_call_count").notNull().default(0),
     executedToolCallCount: integer("executed_tool_call_count").notNull().default(0),
     providerCallCount: integer("provider_call_count").notNull().default(0),
     wrapUpAttempted: boolean("wrap_up_attempted").notNull().default(false),

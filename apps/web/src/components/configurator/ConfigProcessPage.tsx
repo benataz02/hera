@@ -8,6 +8,7 @@ import {
 import { propagate, type Entries } from "@hera/config-engine";
 import type { Val } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
+import { useSectionParam } from "../../sectionParam.ts";
 import { toast } from "../toast.ts";
 import { cleanOverrides, statusUi, toggleSelection, type Sel } from "./runView.ts";
 import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
@@ -17,7 +18,7 @@ import { AssistantWindow } from "./AssistantWindow.tsx";
 import type { ChatChange } from "./assistantState.ts";
 import { ToBeDone } from "../Boundaries.tsx";
 import {
-  buildCalculationUpdate, CONFIG_PROCESS_STEP_IDS, initialConfigProcessStep, POST_RUN_STEP,
+  buildCalculationUpdate, CONFIG_PROCESS_STEP_IDS, POST_RUN_STEP, stepFromSection,
 } from "./configProcessState.ts";
 
 // The configuration process as an ObjectPage in IconTabBar mode: each step (
@@ -36,7 +37,9 @@ export function ConfigProcessPage({ id }: { id: string }) {
     retry: false, // agent-offline should show its message, not spin
   });
 
-  const [stepOverride, setStep] = useState<number | null>(null);
+  // The current step is the ObjectPage section, and it lives in `?section=` (see useSectionParam).
+  const [section, setSection] = useSectionParam();
+  const gotoStep = (i: number) => setSection(CONFIG_PROCESS_STEP_IDS[i]!);
   const [entriesOverride, setEntries] = useState<Entries | null>(null);
   const [batchesOverride, setBatches] = useState<number[] | null>(null);
   const [selOverride, setSel] = useState<Sel[] | null>(null);
@@ -68,7 +71,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
         setRunMeta({ capped: r.capped, widest: r.widest });
         setSel([]); // a new run invalidates any previous candidate picks
         invalidate();
-        setStep(POST_RUN_STEP);
+        gotoStep(POST_RUN_STEP);
         toast(`${r.candidateCount} candidate${r.candidateCount === 1 ? "" : "s"} calculated`);
       },
     }),
@@ -86,7 +89,6 @@ export function ConfigProcessPage({ id }: { id: string }) {
   const batches = batchesOverride ?? project.batches;
   const selection = selOverride ?? latestRun?.selection ?? [];
   const runReady = !!latestRun && project.status !== "draft";
-  const step = stepOverride ?? initialConfigProcessStep(project.status);
 
   const paneOpen = paneOverride ?? !!model.definition.history;
   const PANE_ANIM = "flex-basis 0.28s cubic-bezier(0.2, 0, 0, 1)";
@@ -151,7 +153,13 @@ export function ConfigProcessPage({ id }: { id: string }) {
   // so the only navigation the user can trigger here is back to Configure — which needs no save.
   // Forward motion goes exclusively through Calculate (which awaits the update), so we never
   // fire-and-forget a save that would flip status to "draft" and blank the step just landed on.
-  const goto = (i: number) => setStep(i);
+  //
+  // A URL can still point at a locked step (bookmark to ?section=candidates on a since-reset
+  // project), so stepFromSection clamps it. Exception: while a refetch is in flight the lock
+  // verdict rests on stale data — right after Calculate the fresh run hasn't landed yet — so
+  // don't count it as locked, or the user gets bounced off Candidates and back a moment later.
+  const candidatesLocked = (!runReady || staleRun) && !q.isFetching;
+  const step = stepFromSection(section, project.status, candidatesLocked);
   const calculate = async (calculationEntries: Entries = entries) => {
     try {
       const updateInput = buildCalculationUpdate(
@@ -245,7 +253,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
         mode="IconTabBar"
         style={{ flex: 1, minHeight: 0 }}
         selectedSectionId={CONFIG_PROCESS_STEP_IDS[step]}
-        onSelectedSectionChange={(e) => goto(e.detail.selectedSectionIndex)}
+        onSelectedSectionChange={(e) => setSection(e.detail.selectedSectionId)}
         titleArea={
           <ObjectPageTitle
             header={<Title level="H5">{project.name}</Title>}
@@ -330,7 +338,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
         projectId={id} projectVersion={assistantProjectVersion ?? project.updatedAt.toISOString()}
         model={model.definition} lookups={lookups.data} entries={entries} batches={batches}
         onApply={applyAssistantChanges}
-        onCandidates={(e) => { invalidate(); setSel([]); setStep(POST_RUN_STEP); setAssistantProjectVersion(e.projectVersion); }}
+        onCandidates={(e) => { invalidate(); setSel([]); gotoStep(POST_RUN_STEP); setAssistantProjectVersion(e.projectVersion); }}
         onSelection={() => { invalidate(); setSel(null); }}
         onBusyChange={setAssistantBusy} />
     </div>

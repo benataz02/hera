@@ -3,9 +3,10 @@ import { and, eq, lt, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Entries } from "@hera/config-engine";
 import {
+  canonicalJson,
   assistantConversation, assistantMessage, assistantToolExecution, assistantTurn,
   type MessageContent, type Provider,
-} from "./schema.ts";
+} from "@hera/assistant";
 
 // The durable heart of the turn loop. Every write here is fenced on `leaseToken` matching
 // the turn's CURRENT lease so a stale/lost-lease owner can never silently overwrite a newer
@@ -180,11 +181,11 @@ export async function allocSeq(db: Db, turnId: string, leaseToken: string, n = 1
 }
 
 export type CounterDelta = Partial<{
-  iterationCount: number; emittedToolCallCount: number; executedToolCallCount: number;
+  iterationCount: number; executedToolCallCount: number;
   providerCallCount: number; inputTokens: number; outputTokens: number;
 }>;
 export type TurnCounters = {
-  iterationCount: number; emittedToolCallCount: number; executedToolCallCount: number;
+  iterationCount: number; executedToolCallCount: number;
   providerCallCount: number; inputTokens: number; outputTokens: number;
 };
 
@@ -194,7 +195,6 @@ export type TurnCounters = {
 export async function bumpCounters(db: Db, turnId: string, leaseToken: string, delta: CounterDelta): Promise<TurnCounters> {
   const set: Record<string, unknown> = { updatedAt: new Date() };
   if (delta.iterationCount) set.iterationCount = sql`${assistantTurn.iterationCount} + ${delta.iterationCount}`;
-  if (delta.emittedToolCallCount) set.emittedToolCallCount = sql`${assistantTurn.emittedToolCallCount} + ${delta.emittedToolCallCount}`;
   if (delta.executedToolCallCount) set.executedToolCallCount = sql`${assistantTurn.executedToolCallCount} + ${delta.executedToolCallCount}`;
   if (delta.providerCallCount) set.providerCallCount = sql`${assistantTurn.providerCallCount} + ${delta.providerCallCount}`;
   if (delta.inputTokens) set.inputTokens = sql`${assistantTurn.inputTokens} + ${delta.inputTokens}`;
@@ -203,7 +203,7 @@ export async function bumpCounters(db: Db, turnId: string, leaseToken: string, d
   const [row] = await db.update(assistantTurn).set(set)
     .where(and(eq(assistantTurn.id, turnId), eq(assistantTurn.leaseToken, leaseToken)))
     .returning({
-      iterationCount: assistantTurn.iterationCount, emittedToolCallCount: assistantTurn.emittedToolCallCount,
+      iterationCount: assistantTurn.iterationCount,
       executedToolCallCount: assistantTurn.executedToolCallCount, providerCallCount: assistantTurn.providerCallCount,
       inputTokens: assistantTurn.inputTokens, outputTokens: assistantTurn.outputTokens,
     });
@@ -231,18 +231,7 @@ export async function updateWorking(
   return updated.length > 0;
 }
 
-// Canonical (sorted-key) JSON stringify, so semantically-identical input objects with
-// different key order hash identically. Only used for the stored `inputHash` audit column —
-// `operationKey` (computed by the caller) is the actual idempotency key.
-function canonicalStringify(v: unknown): string {
-  if (v === undefined) return "null";
-  if (v === null || typeof v !== "object") return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map(canonicalStringify).join(",")}]`;
-  const obj = v as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalStringify(obj[k])}`).join(",")}}`;
-}
-const inputHash = (input: unknown) => createHash("sha256").update(canonicalStringify(input)).digest("hex");
+const inputHash = (input: unknown) => createHash("sha256").update(canonicalJson(input)).digest("hex");
 
 export type RunToolOperationParams = {
   turnId: string;

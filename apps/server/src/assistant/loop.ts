@@ -2,30 +2,37 @@ import { createHash } from "node:crypto";
 import { ORPCError, withEventMeta } from "@orpc/server";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
+import { db, configProject, configRun } from "@hera/db";
 import {
   domainOf, propagate,
   type Entries, type ModelDef, type ResolvedLookups, type Val,
 } from "@hera/config-engine";
-import { buildAssistPrompt } from "./prompt.ts";
-import { AssistantEventZ, type AssistantEvent, type ChangeRow } from "./events.ts";
 import {
-  TOOLS, staleResult, makeSetValuesInputZ, makePreviewCandidatesInputZ,
-  type Evidence, type ToolName,
-} from "./tools.ts";
+  AssistantEventZ, TOOLS, byteSize, canonicalJson, staleResult,
+  makeSetValuesInputZ, makePreviewCandidatesInputZ,
+  assistantConversation, assistantMessage, assistantTurn,
+  MAX_TOOL_RESULT_BYTES,
+  type AssistantEvent, type AssistChatInput, type ChangeRow, type Evidence, type ExtractFile,
+  type MessageContent, type Provider, type ToolName, type UiChange,
+} from "@hera/assistant";
+import { loadModel, cachedLookups } from "../orpc/routers/configs.ts";
+import { buildAssistPrompt } from "./prompt.ts";
 import { ProviderApiError, resolveProvider } from "./provider.ts";
+import { createExecutors, type ExecutorCtx, type Working } from "./executors.ts";
+import { makeChatAdapter, type ToolDecl } from "./adapter.ts";
+import { makePolicy } from "./policy.ts";
+import { validateFile } from "./validate-file.ts";
+import { auditLine as audit } from "./audit.ts";
 import {
   allocSeq, bumpCounters, claimTurn, claimTurnWithNewConversation, claimWrapUp, finalizeTurn,
   renewLease, runToolOperation, updateWorking,
-  LEASE_RENEW_MS, type Db, type TurnRow,
+  LEASE_RENEW_MS, type TurnRow,
 } from "./turns.ts";
-import {
-  assistantConversation, assistantMessage, assistantTurn,
-  type MessageContent, type Provider, type UiChange,
-} from "./schema.ts";
 
-// The turn engine (Task 13). Pure `packages/assistant` — no import from apps/server anywhere in
-// this file. Every server-specific behavior (file validation, the real model adapter, tool
-// executors, project/model loading, usage policy, audit) arrives through `AssistantDeps`.
+// The turn engine. Everything it needs is imported directly — `db`, the project/model loaders,
+// the executors, the provider adapter, policy and audit. There is no injected `AssistantDeps`
+// seam: this module and its collaborators all live in apps/server, and the one genuinely shared
+// surface (tables, wire events, tool declarations, the chat input contract) is @hera/assistant.
 //
 // oRPC findings (orpc skill, confirmed against the installed @orpc/server types before writing
 // `chat` in router.ts): `eventIterator` from "@orpc/server" wraps an output zod schema for a
@@ -38,7 +45,7 @@ import {
 // ---- Global constants (plan's "Global Constraints" section, copied verbatim) ----
 const MAX_ITERATIONS = 8;
 const MAX_TOOL_CALLS = 8; // executedToolCallCount ceiling, across all attempts of a turnId
-const MAX_PROVIDER_CALLS = 11; // 8 loop + 1 wrap-up + 2 extraction attempts (extraction's own retries are internal to the executor)
+const MAX_PROVIDER_CALLS = 9; // 8 loop + 1 wrap-up. Extraction retries live inside the executor and never reach bumpCounters.
 const MAX_OUTPUT_TOKENS_PER_CALL = 2048;
 const MAX_OUTPUT_TOKENS_PER_TURN = 8192;
 const WRAP_UP_RESERVE_TOKENS = 512;
@@ -47,99 +54,39 @@ const MAX_INPUT_TOKENS_PER_TURN = 128_000;
 const TURN_WATCHDOG_MS = 120_000;
 const TOOL_TIMEOUT_MS = 30_000;
 const EXTRACTION_TIMEOUT_MS = 60_000;
-const MAX_TOOL_RESULT_BYTES = 32 * 1024;
 const CONTEXT_TURN_LIMIT = 20; // last 20 whole turns
 
 const STATE_BOUND_TOOLS = new Set<ToolName>(["setValues", "extractFromDrawing", "previewCandidates", "calculate", "selectCandidates"]);
 const RESULT_TOOLS = new Set<ToolName>(["searchSimilar", "getDocHistory", "previewCandidates"]);
 
-// ---- Structural types owned by this package (no apps/server imports) ----
+const policy = makePolicy();
 
-/** Mirrors apps/server's `ExtractFileZ` inference (see extraction.ts) without importing it. */
-export type ExtractFile = { name: string; mimeType: string; dataBase64: string };
+/** The project fields the engine reads. */
+async function loadProject(tenantId: string, projectId: string) {
+  const [p] = await db
+    .select({
+      id: configProject.id, updatedAt: configProject.updatedAt, entries: configProject.entries,
+      batches: configProject.batches, customer: configProject.customer, status: configProject.status,
+      modelId: configProject.modelId,
+    })
+    .from(configProject)
+    .where(and(eq(configProject.id, projectId), eq(configProject.tenantId, tenantId)))
+    .limit(1);
+  return p ?? null;
+}
 
-/** Mirrors `Awaited<ReturnType<typeof loadModel>>`'s field the engine actually needs. */
-export type ModelLike = { definition: ModelDef };
-
-export type Working = { entries: Entries; batches: number[]; projectVersion: string; workingRevision: number };
-
-/** Mirrors apps/server's real `ExecutorCtx` (executors.ts) structurally; `working` is mutated
- *  in place by the executors (setValues/calculate), the loop reads it back after each call. */
-export type ExecutorCtx = {
-  tenantId: string; projectId: string; userId: string;
-  turnId: string; userMessageId: string; userMessage: string; conversationId: string;
-  leaseToken: string;
-  model: ModelLike; lookups: ResolvedLookups;
-  working: Working;
-  file?: ExtractFile;
-  signal: AbortSignal;
-};
-
-/** Each tool executor as `(input, tx, signal) => Promise<result>` — `tx` threads the operation's
- *  own transaction through (see `runToolOperation`'s two-transaction design in turns.ts) so the
- *  domain write and the tool_execution completion row land atomically; `signal` is the per-call
- *  30s/60s timeout raced with the turn's own abort, for executors that call out (agent/B1,
- *  Gemini extraction). NOTE: the currently-shipped executors.ts (Tasks 10-11) does NOT accept
- *  either param yet — its functions manage their own persistence (module-level `db`, or their
- *  own `db.transaction` for selectCandidates) and read `ctx.signal` from the closed-over context
- *  instead. Task 14 (which wires `makeExecutors` in apps/server) will need to thread a tx (and
- *  swap the closed-over signal for the per-call one) through those call sites to fully honor
- *  this contract; see this task's report for detail. */
-export type Executors = {
-  state: { frozen: boolean; lastRun?: { runId: string; candidates: unknown[] } };
-} & { [K in ToolName]: (input: unknown, tx: Db, signal: AbortSignal) => Promise<unknown> };
-
-export type ToolDecl = { name: ToolName; kind: "read" | "write"; label: string; description: string; input: z.ZodType; output: z.ZodType };
-
-/** What the loop needs from a provider: one streamed model call. */
-export type ChatAdapter = (req: {
-  system: string; messages: unknown[]; tools: ToolDecl[] | null; // null = wrap-up (no tools)
-  maxOutputTokens: number; signal: AbortSignal;
-}) => AsyncIterable<
-  | { kind: "text"; text: string }
-  | { kind: "toolCall"; id: string; name: string; args: unknown; metadata?: unknown }
-  | { kind: "usage"; inputTokens: number; outputTokens: number }
->;
-
-export type AssistantDeps = {
-  db: Db;
-  fileSchema: z.ZodType<ExtractFile>; // server's ExtractFileZ, injected to avoid a package cycle
-  loadProject(tenantId: string, projectId: string): Promise<{
-    id: string; updatedAt: Date; entries: Entries; batches: number[];
-    customer: { cardCode: string; cardName: string } | null; status: string; modelId: string;
-  } | null>;
-  loadModelAndLookups(tenantId: string, modelId: string): Promise<{ model: ModelLike; lookups: ResolvedLookups }>;
-  /** The frozen run a prior attempt of this turn already computed (by `assistantTurn.calculatedRunId`).
-   *  Used only to re-hydrate `state.lastRun` on resume so the prompt's candidate count stays accurate
-   *  and `selectCandidates` evidence keeps resolving — the durable freeze itself comes from the
-   *  `calculatedRunId` column, not this lookup. */
-  loadRun(tenantId: string, runId: string): Promise<{ runId: string; candidates: unknown[] } | null>;
-  makeExecutors(ctx: ExecutorCtx): Executors; // Tasks 10-11, closed over server context
-  policy: { checkTurnStart(tenantId: string, userId: string): void; chargeTokens(tenantId: string, n: number): void };
-  makeChatAdapter(provider: Provider, model: string): ChatAdapter; // Task 14; the seam that isolates TanStack AI
-  validateFile(file: ExtractFile): void; // Task 14 - signature/MIME/page/pixel checks
-  audit(line: Record<string, unknown>): void; // Task 14 - redacted structured log
-};
-
-const ResumeZ = z.strictObject({
-  lastAppliedSeq: z.number().int().min(-1),
-  touchedEntryKeys: z.array(z.string().max(200)).max(200),
-  batchesTouched: z.boolean(),
-});
-export const EntriesValZ = z.union([z.number(), z.string(), z.boolean(), z.null(), z.array(z.string())]);
-const EntriesZLocal = z.record(z.string(), EntriesValZ);
-
-export const makeAssistChatInputZ = (fileSchema: z.ZodType<ExtractFile>) => z.strictObject({
-  projectId: z.uuid(), conversationId: z.uuid().optional(), turnId: z.uuid(),
-  provider: z.enum(["gemini", "anthropic", "openai"]).optional(),
-  model: z.string().min(1).max(200).optional(),
-  entries: EntriesZLocal, batches: z.array(z.number().int().min(1)).max(50),
-  projectVersion: z.string().max(40),
-  message: z.string().min(1).max(4000),
-  file: fileSchema.optional(),
-  resume: ResumeZ.optional(),
-});
-export type AssistChatInput = z.infer<ReturnType<typeof makeAssistChatInputZ>>;
+/** The frozen run a prior attempt of this turn already computed (by `assistantTurn.calculatedRunId`).
+ *  Re-hydrates `state.lastRun` on resume so the prompt's candidate count stays accurate and
+ *  `selectCandidates` evidence keeps resolving — the durable freeze itself comes from the
+ *  `calculatedRunId` column, not this lookup. */
+async function loadRun(tenantId: string, runId: string) {
+  const [r] = await db
+    .select({ id: configRun.id, candidates: configRun.candidates })
+    .from(configRun)
+    .where(and(eq(configRun.id, runId), eq(configRun.tenantId, tenantId)))
+    .limit(1);
+  return r ? { runId: r.id, candidates: r.candidates } : null;
+}
 
 // ---- Small named helpers (per the brief) ----
 
@@ -149,15 +96,7 @@ function eventFor(e: AssistantEvent): AssistantEvent {
   return withEventMeta(e, { id: `${e.turnId}:${e.seq}` });
 }
 
-function canonicalJson(v: unknown): string {
-  if (v === undefined) return "null";
-  if (v === null || typeof v !== "object") return JSON.stringify(v);
-  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
-  const obj = v as Record<string, unknown>;
-  return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(",")}}`;
-}
 const sha256Hex = (s: string) => createHash("sha256").update(s).digest("hex");
-const byteSize = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
 const estimateTokens = (s: string) => Math.ceil(s.length / 4);
 
 // Stable error codes this engine throws internally (turns.ts fences, resolveProvider, the
@@ -196,11 +135,11 @@ function operationKeyFor(
 // ---- Provider-neutral message shape, owned by this package (see report re: makeChatAdapter's
 // `messages: unknown[]` being deliberately opaque — Task 14 maps this to TanStack AI's own
 // per-provider native format). ----
-type ModelPart =
+export type ModelPart =
   | { type: "text"; text: string }
   | { type: "toolCall"; id: string; name: string; args: unknown; metadata?: unknown }
   | { type: "toolResult"; id: string; name: string; result: unknown };
-type Msg = { role: "user"; text: string } | { role: "assistant"; parts: ModelPart[] };
+export type Msg = { role: "user"; text: string } | { role: "assistant"; parts: ModelPart[] };
 
 function summarizeReadResult(result: unknown): unknown {
   if (!result || typeof result !== "object" || (result as { ok?: unknown }).ok !== true) return result;
@@ -326,20 +265,27 @@ function domainEventFor(name: ToolName, turnId: string, seq: number, out: Record
 // ---- The engine ----
 
 export async function* runTurn(
-  deps: AssistantDeps, ctx: { tenantId: string; userId: string }, input: AssistChatInput, signal: AbortSignal,
+  ctx: { tenantId: string; userId: string }, input: AssistChatInput, signal: AbortSignal,
 ): AsyncGenerator<AssistantEvent> {
   const { tenantId, userId } = ctx;
 
-  // ============ STEP 1: pre-stream (typed ORPCErrors, nothing persisted yet) ============
-  deps.policy.checkTurnStart(tenantId, userId);
-  if (input.file) deps.validateFile(input.file as ExtractFile);
+  // Phase timings for "why is the first token slow". One audit line per turn, emitted at the
+  // first chunk of the first provider call. ponytail: console timings; a real tracer only if
+  // these stop being enough to localize a regression.
+  const t0 = Date.now();
+  const marks: Record<string, number> = {};
+  const mark = (k: string) => { marks[k] = Date.now() - t0; };
 
-  const project = await deps.loadProject(tenantId, input.projectId);
+  // ============ STEP 1: pre-stream (typed ORPCErrors, nothing persisted yet) ============
+  policy.checkTurnStart(tenantId, userId);
+  if (input.file) validateFile(input.file as ExtractFile);
+
+  const project = await loadProject(tenantId, input.projectId);
   if (!project) throw new ORPCError("NOT_FOUND", { message: "Project not found" });
 
   let conversation: { id: string; provider: Provider; model: string } | null = null;
   if (input.conversationId) {
-    const [c] = await deps.db.select({
+    const [c] = await db.select({
       id: assistantConversation.id,
       provider: assistantConversation.provider,
       model: assistantConversation.model,
@@ -358,7 +304,7 @@ export async function* runTurn(
   // turnId (gates the STATE_CHANGED pre-check below) and (b) lets a resume/retry reuse the
   // ALREADY-PINNED provider/model rather than re-deriving it from input/conversation, so
   // claimTurn's identity check (provider is immutable per turn) can never spuriously mismatch.
-  const [existingTurn] = await deps.db.select().from(assistantTurn).where(eq(assistantTurn.id, input.turnId)).limit(1);
+  const [existingTurn] = await db.select().from(assistantTurn).where(eq(assistantTurn.id, input.turnId)).limit(1);
 
   if (!existingTurn && project.updatedAt.toISOString() !== input.projectVersion)
     throw new ORPCError("CONFLICT", { message: "STATE_CHANGED" });
@@ -391,8 +337,10 @@ export async function* runTurn(
     modelName = existingTurn?.model ?? resolved.profile.model;
   }
 
-  const { model, lookups } = await deps.loadModelAndLookups(tenantId, project.modelId);
+  const model = await loadModel(tenantId, project.modelId);
+  const lookups = await cachedLookups(tenantId, model);
   validateEntries(model.definition, lookups, input.entries as Entries);
+  mark("prep"); // project + conversation + turn peek + model + lookups (agent/B1 hop on a cache miss)
 
   // ============ STEP 2: claim ============
   const attachment = attachmentOf(input.file as ExtractFile | undefined);
@@ -410,13 +358,13 @@ export async function* runTurn(
     // rejected claim, or a genuine DB error mid-claim, rolls back the conversation row too. No
     // orphan conversation can ever be left behind.
     claim = await claimTurnWithNewConversation(
-      deps.db, { tenantId, projectId: input.projectId, createdByUserId: userId, provider, model: modelName, title },
+      db, { tenantId, projectId: input.projectId, createdByUserId: userId, provider, model: modelName, title },
       claimParams,
     );
   } else {
     if (!existingTurn && (provider !== conversation.provider || modelName !== conversation.model))
-      await deps.db.update(assistantConversation).set({ provider, model: modelName }).where(eq(assistantConversation.id, conversation.id));
-    claim = await claimTurn(deps.db, { ...claimParams, conversationId: conversation.id });
+      await db.update(assistantConversation).set({ provider, model: modelName }).where(eq(assistantConversation.id, conversation.id));
+    claim = await claimTurn(db, { ...claimParams, conversationId: conversation.id });
   }
 
   if (claim.kind === "rejected")
@@ -424,11 +372,12 @@ export async function* runTurn(
 
   const { leaseToken, turn } = claim;
   const conversationId = turn.conversationId;
+  mark("claim");
 
   if (claim.kind === "replay") {
-    const [msg] = await deps.db.select().from(assistantMessage)
+    const [msg] = await db.select().from(assistantMessage)
       .where(and(eq(assistantMessage.turnId, turn.id), eq(assistantMessage.role, "assistant"))).limit(1);
-    const s = await allocSeq(deps.db, turn.id, leaseToken, 2);
+    const s = await allocSeq(db, turn.id, leaseToken, 2);
     yield eventFor(snapshotEvent(turn, s, msg?.content.ui, "complete"));
     yield eventFor({ type: "done", turnId: turn.id, seq: s + 1, suggestions: msg?.content.ui.suggestions ?? [], usage: { inputTokens: turn.inputTokens, outputTokens: turn.outputTokens } });
     return; // zero adapter calls, nothing else to clean up
@@ -437,7 +386,7 @@ export async function* runTurn(
   if (isNewConversation) {
     // claim.kind is necessarily "new" here: "replay" already returned above, and "resume"
     // requires an existing turn, which requires an existing (not new) conversation.
-    const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+    const s = await allocSeq(db, turn.id, leaseToken, 1);
     yield eventFor({ type: "conversation", turnId: input.turnId, seq: s, id: conversationId, title, provider });
   }
 
@@ -446,7 +395,7 @@ export async function* runTurn(
   const onExternalAbort = () => turnAbort.abort();
   signal.addEventListener("abort", onExternalAbort);
   const renewTimer = setInterval(() => {
-    renewLease(deps.db, turn.id, leaseToken).then((ok) => { if (!ok) turnAbort.abort(); }).catch(() => turnAbort.abort());
+    renewLease(db, turn.id, leaseToken).then((ok) => { if (!ok) turnAbort.abort(); }).catch(() => turnAbort.abort());
   }, LEASE_RENEW_MS);
   const watchdog = setTimeout(() => turnAbort.abort(), TURN_WATCHDOG_MS);
 
@@ -456,7 +405,7 @@ export async function* runTurn(
   let suggestions: string[] | undefined;
   let modelParts: ModelPart[] = [];
   let lastCounters = {
-    iterationCount: turn.iterationCount, emittedToolCallCount: turn.emittedToolCallCount,
+    iterationCount: turn.iterationCount,
     executedToolCallCount: turn.executedToolCallCount, providerCallCount: turn.providerCallCount,
     inputTokens: turn.inputTokens, outputTokens: turn.outputTokens,
   };
@@ -472,14 +421,14 @@ export async function* runTurn(
       // The pre-crash assistant message (if `finalizeTurn` ran before the crash): its `ui` is what
       // the window already rendered; its `model` is the tool-call/result transcript this turn
       // already produced. Both are needed to CONTINUE the turn rather than restart the model cold.
-      const [priorAssistant] = await deps.db.select().from(assistantMessage)
+      const [priorAssistant] = await db.select().from(assistantMessage)
         .where(and(eq(assistantMessage.turnId, turn.id), eq(assistantMessage.role, "assistant"))).limit(1);
       const priorUi = priorAssistant?.content.ui;
 
       // (3) Always yield the snapshot first on resume (plan Task 13). The client's `snapshot`
       // reducer case replaces its stale partial text/changes with this authoritative projection
       // and re-fires onApplyValues for the persisted valid changes, before any new delta arrives.
-      const snapSeq = await allocSeq(deps.db, turn.id, leaseToken, 1);
+      const snapSeq = await allocSeq(db, turn.id, leaseToken, 1);
       yield eventFor(snapshotEvent(turn, snapSeq, priorUi, "running"));
 
       // (2) Re-seed the server-side accumulators + model transcript from the pre-crash message, so
@@ -520,13 +469,13 @@ export async function* runTurn(
         // report's judgment call #2 for the same reasoning applied to provider-on-resume). The
         // leading snapshot was already yielded above, so this branch only needs the error event.
         if (turn.calculatedRunId && changed) {
-          const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+          const s = await allocSeq(db, turn.id, leaseToken, 1);
           yield eventFor({ type: "error", turnId: turn.id, seq: s, code: "STATE_CHANGED", message: "The project changed since this turn started; start a new message", retryable: false });
           finalStatus = "partial"; finalErrorCode = "STATE_CHANGED";
           return;
         }
         if (changed) {
-          const ok = await updateWorking(deps.db, turn.id, leaseToken, { entries: nextEntries, batches: nextBatches, revision: working.workingRevision + 1 });
+          const ok = await updateWorking(db, turn.id, leaseToken, { entries: nextEntries, batches: nextBatches, revision: working.workingRevision + 1 });
           if (!ok) throw new Error("LEASE_LOST");
           working = { ...working, entries: nextEntries, batches: nextBatches, workingRevision: working.workingRevision + 1 };
         }
@@ -534,7 +483,7 @@ export async function* runTurn(
     }
 
     // ============ STEP 3: context ============
-    const [userMsg] = await deps.db.select({ id: assistantMessage.id }).from(assistantMessage)
+    const [userMsg] = await db.select({ id: assistantMessage.id }).from(assistantMessage)
       .where(and(eq(assistantMessage.turnId, turn.id), eq(assistantMessage.role, "user"))).limit(1);
     const userMessageId = userMsg?.id ?? turn.id;
 
@@ -543,7 +492,7 @@ export async function* runTurn(
       userMessage: input.message, conversationId, leaseToken,
       model, lookups, working: { ...working }, file: input.file as ExtractFile | undefined, signal: turnAbort.signal,
     };
-    const executors = deps.makeExecutors(execCtx);
+    const executors = createExecutors(execCtx);
 
     // (1) Restore the frozen state if a prior attempt of this turn already ran `calculate`. The
     // durable source of truth is the `calculatedRunId` column (persisted in its own committed
@@ -553,16 +502,16 @@ export async function* runTurn(
     // operationKey was computed from, which would let a genuinely NEW config_run row be inserted.
     if (turn.calculatedRunId) {
       executors.state.frozen = true;
-      const run = await deps.loadRun(tenantId, turn.calculatedRunId);
+      const run = await loadRun(tenantId, turn.calculatedRunId);
       if (run) executors.state.lastRun = run;
     }
 
-    const priorTurnRows = await deps.db.select({ id: assistantTurn.id }).from(assistantTurn)
+    const priorTurnRows = await db.select({ id: assistantTurn.id }).from(assistantTurn)
       .where(and(eq(assistantTurn.conversationId, conversationId), ne(assistantTurn.id, turn.id)))
       .orderBy(desc(assistantTurn.startedAt)).limit(CONTEXT_TURN_LIMIT);
     const priorIds = priorTurnRows.map((t) => t.id).reverse(); // oldest-first
     const priorMsgs = priorIds.length
-      ? await deps.db.select().from(assistantMessage).where(inArray(assistantMessage.turnId, priorIds))
+      ? await db.select().from(assistantMessage).where(inArray(assistantMessage.turnId, priorIds))
       : [];
     const rows = priorIds.map((id) => ({
       userText: priorMsgs.find((m) => m.turnId === id && m.role === "user")?.content.ui.text ?? "",
@@ -580,17 +529,18 @@ export async function* runTurn(
       attachment: input.file ? { name: (input.file as ExtractFile).name, mimeType: (input.file as ExtractFile).mimeType } : null,
     });
     const toolDecls = toolDeclsFor(model.definition);
+    mark("context"); // prior-turn transcript load + propagate() + system prompt + tool decls
 
     const baseEstimate = estimateTokens(systemPrompt) + estimateTokens(JSON.stringify(toolDecls.map((t) => ({ name: t.name, description: t.description }))));
     if (baseEstimate > MAX_INPUT_TOKENS_PER_CALL) {
-      const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+      const s = await allocSeq(db, turn.id, leaseToken, 1);
       yield eventFor({ type: "error", turnId: turn.id, seq: s, code: "CONTEXT_TOO_LARGE", message: "This configuration is too large for the assistant to process in one turn.", retryable: true });
       finalStatus = "partial"; finalErrorCode = "CONTEXT_TOO_LARGE";
       return;
     }
 
     // ============ STEP 4: provider loop ============
-    const adapter = deps.makeChatAdapter(provider, modelName);
+    const adapter = makeChatAdapter(provider, modelName);
     // On resume, splice the current turn's pre-crash assistant transcript after the user message so
     // the model sees its own earlier setValues/calculate calls and continues instead of redoing them.
     const liveHead: Msg[] = [{ role: "user", text: input.message }];
@@ -598,9 +548,10 @@ export async function* runTurn(
     let liveMessages: Msg[] = liveHead;
     let doneNaturally = false;
     let toolBudgetExceeded = false;
+    let firstTokenLogged = false;
 
     while (!doneNaturally && !toolBudgetExceeded) {
-      const counters = await bumpCounters(deps.db, turn.id, leaseToken, { iterationCount: 1, providerCallCount: 1 });
+      const counters = await bumpCounters(db, turn.id, leaseToken, { iterationCount: 1, providerCallCount: 1 });
       lastCounters = counters;
       if (counters.iterationCount > MAX_ITERATIONS || counters.providerCallCount > MAX_PROVIDER_CALLS) break;
       const outputBudgetLeft = MAX_OUTPUT_TOKENS_PER_TURN - WRAP_UP_RESERVE_TOKENS - counters.outputTokens;
@@ -614,13 +565,14 @@ export async function* runTurn(
         messages = [...historyGroups.flat(), ...liveMessages];
       }
       if (estimateTokens(systemPrompt) + estimateTokens(JSON.stringify(messages)) > MAX_INPUT_TOKENS_PER_CALL) {
-        const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+        const s = await allocSeq(db, turn.id, leaseToken, 1);
         yield eventFor({ type: "error", turnId: turn.id, seq: s, code: "CONTEXT_TOO_LARGE", message: "This conversation is too large for the assistant to process.", retryable: true });
         finalStatus = "partial"; finalErrorCode = "CONTEXT_TOO_LARGE";
         return;
       }
 
       let sawToolCall = false;
+      let sawSuggestions = false;
       let usageReceived = false;
       let iterationText = "";
       let textBuf = "";
@@ -630,24 +582,32 @@ export async function* runTurn(
       const flushText = async function* (): AsyncGenerator<AssistantEvent> {
         if (!textBuf) return;
         const flushed = textBuf; textBuf = ""; lastFlush = Date.now();
-        const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+        const s = await allocSeq(db, turn.id, leaseToken, 1);
         acc.text += flushed;
         yield eventFor({ type: "delta", turnId: turn.id, seq: s, text: flushed });
       };
 
+      const callAt = Date.now();
       for await (const chunk of adapter({ system: systemPrompt, messages, tools: toolDecls, maxOutputTokens, signal: turnAbort.signal })) {
+        if (!firstTokenLogged) {
+          firstTokenLogged = true;
+          audit({
+            event: "assist_first_token", turnId: turn.id, tenantId, resumed: claim.kind === "resume",
+            ...marks, callAt: callAt - t0, ttftMs: Date.now() - callAt,
+            systemChars: systemPrompt.length, historyChars: JSON.stringify(messages).length,
+            historyTurns: historyGroups.length, toolCount: toolDecls.length,
+          });
+        }
         if (chunk.kind === "text") {
           textBuf += chunk.text;
           iterationText += chunk.text;
           if (textBuf.length >= 256 || Date.now() - lastFlush >= 50) yield* flushText();
         } else if (chunk.kind === "usage") {
           usageReceived = true;
-          const bumped = await bumpCounters(deps.db, turn.id, leaseToken, { inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens });
+          const bumped = await bumpCounters(db, turn.id, leaseToken, { inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens });
           lastCounters = bumped;
-          deps.policy.chargeTokens(tenantId, chunk.inputTokens + chunk.outputTokens);
+          policy.chargeTokens(tenantId, chunk.inputTokens + chunk.outputTokens);
         } else if (chunk.kind === "toolCall") {
-          const emitted = await bumpCounters(deps.db, turn.id, leaseToken, { emittedToolCallCount: 1 });
-          lastCounters = emitted;
           const name = chunk.name as ToolName;
 
           if (sawToolCall || !(name in TOOLS)) {
@@ -663,7 +623,7 @@ export async function* runTurn(
           }
           sawToolCall = true;
 
-          const s1 = await allocSeq(deps.db, turn.id, leaseToken, 1);
+          const s1 = await allocSeq(db, turn.id, leaseToken, 1);
           yield eventFor({ type: "tool", turnId: turn.id, seq: s1, name, label: TOOLS[name].label });
 
           const paramKeys = model.definition.parameters.map((p) => p.key);
@@ -682,7 +642,7 @@ export async function* runTurn(
             continue;
           }
 
-          const executed = await bumpCounters(deps.db, turn.id, leaseToken, { executedToolCallCount: 1 });
+          const executed = await bumpCounters(db, turn.id, leaseToken, { executedToolCallCount: 1 });
           lastCounters = executed;
           if (executed.executedToolCallCount > MAX_TOOL_CALLS) {
             const errRes = { ok: false, code: "TOOL_LIMIT", message: "Tool call limit reached for this turn", retryable: true };
@@ -696,11 +656,19 @@ export async function* runTurn(
           const toolTimeoutMs = name === "extractFromDrawing" ? EXTRACTION_TIMEOUT_MS : TOOL_TIMEOUT_MS;
           const opSignal = AbortSignal.any([turnAbort.signal, AbortSignal.timeout(toolTimeoutMs)]);
 
-          const domainSeq = await allocSeq(deps.db, turn.id, leaseToken, 1);
-          const opResult = await runToolOperation(deps.db, {
+          const domainSeq = await allocSeq(db, turn.id, leaseToken, 1);
+          const opResult = await runToolOperation(db, {
             turnId: turn.id, leaseToken, toolCallId: chunk.id, name, operationKey: opKey, input: parsedArgs.data,
-            exec: async (tx) => {
-              const result = await executors[name](parsedArgs.data, tx, opSignal);
+            // Executors manage their own persistence (module-level `db`, or their own
+            // `db.transaction` for selectCandidates), so `runToolOperation`'s tx isn't threaded
+            // in — see the reuse/CAS reasoning on `executeRunFromSnapshot` and
+            // `selectCandidates`. `opSignal` is honored best-effort: the agent-backed reads take
+            // no AbortSignal, so a call that has already started can't be cancelled; the turn's
+            // 120s watchdog is the hard backstop.
+            exec: async () => {
+              if (opSignal.aborted) throw new Error("Turn aborted before this tool call started");
+              const run = executors[name] as (i: unknown) => Promise<unknown>;
+              const result = await run(parsedArgs.data);
               const r = result as Record<string, unknown>;
               const runId = typeof r.runId === "string" ? r.runId : undefined;
               const affectedProjectVersion = typeof r.projectVersion === "string" ? new Date(r.projectVersion) : undefined;
@@ -712,9 +680,9 @@ export async function* runTurn(
 
           const parsedOut = TOOLS[name].output.safeParse(rawResult);
           if (!parsedOut.success) {
-            deps.audit({ event: "assist_tool_output_invalid", turnId: turn.id, tenantId, name, issues: parsedOut.error.issues });
+            audit({ event: "assist_tool_output_invalid", turnId: turn.id, tenantId, name, issues: parsedOut.error.issues });
             finalStatus = "failed"; finalErrorCode = "INVALID_TOOL_OUTPUT";
-            const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+            const s = await allocSeq(db, turn.id, leaseToken, 1);
             yield eventFor({ type: "error", turnId: turn.id, seq: s, code: "INVALID_TOOL_OUTPUT", message: "The assistant produced an invalid tool result.", retryable: false });
             return;
           }
@@ -723,9 +691,9 @@ export async function* runTurn(
 
           if (!opResult.replayed) {
             if (name === "setValues" && out.ok === true && out.stale !== true) {
-              await updateWorking(deps.db, turn.id, leaseToken, { entries: execCtx.working.entries, batches: execCtx.working.batches, revision: execCtx.working.workingRevision });
+              await updateWorking(db, turn.id, leaseToken, { entries: execCtx.working.entries, batches: execCtx.working.batches, revision: execCtx.working.workingRevision });
             } else if (name === "calculate" && out.ok === true && out.stale !== true) {
-              await updateWorking(deps.db, turn.id, leaseToken, {
+              await updateWorking(db, turn.id, leaseToken, {
                 entries: execCtx.working.entries, batches: execCtx.working.batches, revision: execCtx.working.workingRevision,
                 latestProjectVersion: new Date(execCtx.working.projectVersion), calculatedRunId: out.runId as string,
               });
@@ -742,6 +710,7 @@ export async function* runTurn(
               acc.results.push({ tool: name, resultId: out.resultId as string, data: out });
             } else if (name === "suggestFollowUps" && out.ok === true) {
               suggestions = out.accepted as string[];
+              sawSuggestions = true;
             }
             const domainEvent = domainEventFor(name, turn.id, effectiveSeq, out);
             if (domainEvent) yield eventFor(domainEvent);
@@ -754,12 +723,18 @@ export async function* runTurn(
       if (!usageReceived) {
         const estIn = estimateTokens(systemPrompt) + estimateTokens(JSON.stringify(messages));
         const estOut = estimateTokens(iterationText);
-        lastCounters = await bumpCounters(deps.db, turn.id, leaseToken, { inputTokens: estIn, outputTokens: estOut });
-        deps.policy.chargeTokens(tenantId, estIn + estOut);
+        lastCounters = await bumpCounters(db, turn.id, leaseToken, { inputTokens: estIn, outputTokens: estOut });
+        policy.chargeTokens(tenantId, estIn + estOut);
       }
 
       modelParts.push(...iterationParts);
-      if (sawToolCall && !toolBudgetExceeded) {
+      // suggestFollowUps emitted ALONGSIDE prose is the final reply — the model has said its
+      // piece and picked its chips. Looping again just to have it repeat the answer costs a full
+      // extra provider round trip (measured ~3.3s, half the turn). Prose is the guard: a bare
+      // suggestFollowUps with no text is treated as mid-work and still loops.
+      if (sawSuggestions && iterationText.trim()) {
+        doneNaturally = true;
+      } else if (sawToolCall && !toolBudgetExceeded) {
         liveMessages = [...liveMessages, { role: "assistant", parts: iterationParts }];
       } else if (!sawToolCall) {
         doneNaturally = true;
@@ -768,12 +743,12 @@ export async function* runTurn(
 
     // ============ STEP 5: wrap-up ============
     if (!doneNaturally) {
-      const isWinner = await claimWrapUp(deps.db, turn.id, leaseToken);
+      const isWinner = await claimWrapUp(db, turn.id, leaseToken);
       const wrapUpBudget = MAX_OUTPUT_TOKENS_PER_TURN - lastCounters.outputTokens;
       const canCallProvider = isWinner && lastCounters.providerCallCount < MAX_PROVIDER_CALLS && wrapUpBudget > 0;
 
       if (canCallProvider) {
-        const counters = await bumpCounters(deps.db, turn.id, leaseToken, { providerCallCount: 1, iterationCount: 1 });
+        const counters = await bumpCounters(db, turn.id, leaseToken, { providerCallCount: 1, iterationCount: 1 });
         lastCounters = counters;
         const messages: unknown[] = [...historyGroups.flat(), ...liveMessages];
         let textBuf = ""; let lastFlush = Date.now(); let wrapText = "";
@@ -783,31 +758,31 @@ export async function* runTurn(
             textBuf += chunk.text; wrapText += chunk.text;
             if (textBuf.length >= 256 || Date.now() - lastFlush >= 50) {
               const flushed = textBuf; textBuf = ""; lastFlush = Date.now();
-              const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+              const s = await allocSeq(db, turn.id, leaseToken, 1);
               acc.text += flushed;
               yield eventFor({ type: "delta", turnId: turn.id, seq: s, text: flushed });
             }
           } else if (chunk.kind === "usage") {
             usageReceived = true;
-            lastCounters = await bumpCounters(deps.db, turn.id, leaseToken, { inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens });
-            deps.policy.chargeTokens(tenantId, chunk.inputTokens + chunk.outputTokens);
+            lastCounters = await bumpCounters(db, turn.id, leaseToken, { inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens });
+            policy.chargeTokens(tenantId, chunk.inputTokens + chunk.outputTokens);
           }
         }
         if (textBuf) {
-          const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+          const s = await allocSeq(db, turn.id, leaseToken, 1);
           acc.text += textBuf;
           yield eventFor({ type: "delta", turnId: turn.id, seq: s, text: textBuf });
         }
         if (!usageReceived) {
           const estIn = estimateTokens(systemPrompt) + estimateTokens(JSON.stringify(messages));
           const estOut = estimateTokens(wrapText);
-          lastCounters = await bumpCounters(deps.db, turn.id, leaseToken, { inputTokens: estIn, outputTokens: estOut });
-          deps.policy.chargeTokens(tenantId, estIn + estOut);
+          lastCounters = await bumpCounters(db, turn.id, leaseToken, { inputTokens: estIn, outputTokens: estOut });
+          policy.chargeTokens(tenantId, estIn + estOut);
         }
         if (wrapText) modelParts.push({ type: "text", text: wrapText });
       } else {
         const limitMsg = "I've reached my limit for this turn. Please continue in a new message.";
-        const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+        const s = await allocSeq(db, turn.id, leaseToken, 1);
         acc.text += limitMsg;
         modelParts.push({ type: "text", text: limitMsg });
         yield eventFor({ type: "delta", turnId: turn.id, seq: s, text: limitMsg });
@@ -815,7 +790,7 @@ export async function* runTurn(
     }
 
     // ============ STEP 6: done ============
-    const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+    const s = await allocSeq(db, turn.id, leaseToken, 1);
     yield eventFor({ type: "done", turnId: turn.id, seq: s, suggestions: suggestions ?? [], usage: { inputTokens: lastCounters.inputTokens, outputTokens: lastCounters.outputTokens } });
     finalStatus = "complete";
   } catch (e) {
@@ -824,16 +799,16 @@ export async function* runTurn(
     const code = classifyTurnError(e);
     const message = e instanceof ProviderApiError ? e.message : "Something went wrong; you can retry.";
     finalStatus = "partial"; finalErrorCode = code;
-    deps.audit({ event: "assist_turn_error", turnId: turn.id, tenantId, code });
+    audit({ event: "assist_turn_error", turnId: turn.id, tenantId, code });
     try {
-      const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
+      const s = await allocSeq(db, turn.id, leaseToken, 1);
       yield eventFor({ type: "error", turnId: turn.id, seq: s, code, message, retryable: true });
     } catch { /* lease lost or transport gone: best-effort only */ }
   } finally {
     clearInterval(renewTimer);
     clearTimeout(watchdog);
     signal.removeEventListener("abort", onExternalAbort);
-    await finalizeTurn(deps.db, {
+    await finalizeTurn(db, {
       turnId: turn.id, leaseToken, status: finalStatus, errorCode: finalErrorCode,
       assistantUi: {
         text: acc.text, changes: acc.changes.filter((c) => c.valid), invalid: acc.changes.filter((c) => !c.valid),

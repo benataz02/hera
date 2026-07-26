@@ -138,37 +138,3 @@ export const variantsRouter = {
       return { ok: true };
     }),
 };
-
-// Preseed the shared "Standard" view for both pages of an entity, idempotent via isStandard —
-// called once when an admin enables the entity, and from scripts/seed-standard.ts as a backfill.
-export async function ensureStandardVariants(tenantId: string, userId: string, entity: string) {
-  for (const page of ["list", "object"] as const) {
-    const [hit] = await db
-      .select({ id: uiVariant.id })
-      .from(uiVariant)
-      .where(
-        and(
-          eq(uiVariant.tenantId, tenantId),
-          eq(uiVariant.page, page),
-          eq(uiVariant.entity, entity),
-          eq(uiVariant.isStandard, true),
-        ),
-      )
-      .limit(1);
-    if (hit) continue;
-    await db.insert(uiVariant).values({
-      tenantId,
-      userId,
-      page,
-      entity,
-      name: "Standard",
-      isStandard: true,
-      shared: true,
-      isDefault: true,
-      definition:
-        page === "list"
-          ? { select: [], filter: [], orderby: [], filterBar: [] }
-          : { fields: [], sections: [] },
-    });
-  }
-}

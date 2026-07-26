@@ -1,4 +1,4 @@
-import { createAssistantRouter } from "@hera/assistant";
+import { createAssistantRouter } from "../assistant/router.ts";
 import { syncRouter } from "./routers/sync.ts";
 import { entitiesRouter } from "./routers/entities.ts";
 import { variantsRouter } from "./routers/variants.ts";
@@ -7,7 +7,6 @@ import { configsRouter } from "./routers/configs.ts";
 import { extractionRouter } from "./routers/extraction.ts";
 import { portalClientsRouter, portalRouter } from "./routers/portal.ts";
 import { userProcedure } from "./base.ts";
-import { assistantDeps } from "../assistant/deps.ts";
 
 export const router = {
   sync: syncRouter,
@@ -18,7 +17,7 @@ export const router = {
   extraction: extractionRouter,
   portal: portalRouter,
   portalClients: portalClientsRouter,
-  assist: createAssistantRouter(userProcedure, assistantDeps),
+  assist: createAssistantRouter(),
 };
 
 export type AppRouter = typeof router;

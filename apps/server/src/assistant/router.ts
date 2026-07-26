@@ -1,11 +1,14 @@
 import { ORPCError, eventIterator } from "@orpc/server";
-import type { BuilderWithMiddlewares, Context, Schema } from "@orpc/server";
 import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { assistantConversation, assistantMessage, assistantTurn } from "./schema.ts";
+import { db } from "@hera/db";
+import {
+  AssistantEventZ, AssistChatInputZ,
+  assistantConversation, assistantMessage, assistantTurn,
+} from "@hera/assistant";
+import { userProcedure } from "../orpc/base.ts";
 import { listProviderModels } from "./provider.ts";
-import { AssistantEventZ } from "./events.ts";
-import { runTurn, makeAssistChatInputZ, type AssistantDeps } from "./loop.ts";
+import { runTurn } from "./loop.ts";
 
 // CRUD half of the Chati router (conversation providers/list/get/delete) plus the streaming
 // `chat` procedure (Task 13, loop.ts). This package never imports apps/server's `userProcedure`
@@ -22,20 +25,6 @@ import { runTurn, makeAssistChatInputZ, type AssistantDeps } from "./loop.ts";
 // inside `loop.ts`'s `eventFor` helper (`{turnId}:{seq}`), not here — keeps the id right next to
 // the seq allocation that produces it.
 
-export type { AssistantDeps };
-
-/** The minimal context every procedure here needs; the server's real userProcedure context
- *  (which also carries `role`) is a subtype and satisfies this structurally. */
-type AssistantContext = { tenantId: string; userId: string };
-
-/** Matches the shape of `os`-derived builders (like the server's `userProcedure`) after any
- *  number of `.use()` middleware calls: same input/output/error/meta type parameters as `os`
- *  itself, `TInitialContext` left open (it's whatever the server's Hono adapter provides),
- *  only `TCurrentContext` narrowed to what our procedures actually read. */
-type AssistantBase<TInitialContext extends Context, TCurrentContext extends AssistantContext> = BuilderWithMiddlewares<
-  TInitialContext, TCurrentContext, Schema<unknown, unknown>, Schema<unknown, unknown>, Record<never, never>, Record<never, never>
->;
-
 // Opaque keyset cursors: base64("iso|id"). Stable under inserts, never split a turn.
 const btoaCursor = (at: Date, id: string) => Buffer.from(`${at.toISOString()}|${id}`).toString("base64url");
 const atobCursor = (s: string) => {
@@ -45,12 +34,10 @@ const atobCursor = (s: string) => {
   return { updatedAt, id };
 };
 
-export function createAssistantRouter<TInitialContext extends Context, TCurrentContext extends AssistantContext>(
-  base: AssistantBase<TInitialContext, TCurrentContext>,
-  deps: AssistantDeps,
-) {
+export function createAssistantRouter() {
+  const base = userProcedure;
   const scoped = async (tenantId: string, projectId: string, conversationId: string) => {
-    const [c] = await deps.db.select().from(assistantConversation).where(and(
+    const [c] = await db.select().from(assistantConversation).where(and(
       eq(assistantConversation.id, conversationId),
       eq(assistantConversation.tenantId, tenantId),
       eq(assistantConversation.projectId, projectId),
@@ -66,7 +53,7 @@ export function createAssistantRouter<TInitialContext extends Context, TCurrentC
       .input(z.strictObject({ projectId: z.uuid(), cursor: z.string().max(200).optional(), limit: z.number().int().min(1).max(50).default(20) }))
       .handler(async ({ input, context }) => {
         const cur = input.cursor ? atobCursor(input.cursor) : null;
-        const rows = await deps.db.select({
+        const rows = await db.select({
           id: assistantConversation.id, title: assistantConversation.title,
           provider: assistantConversation.provider, model: assistantConversation.model,
           updatedAt: assistantConversation.updatedAt,
@@ -88,14 +75,14 @@ export function createAssistantRouter<TInitialContext extends Context, TCurrentC
       .handler(async ({ input, context }) => {
         const c = await scoped(context.tenantId, input.projectId, input.conversationId);
         const cur = input.beforeTurn ? atobCursor(input.beforeTurn) : null;
-        const turns = await deps.db.select().from(assistantTurn)
+        const turns = await db.select().from(assistantTurn)
           .where(and(eq(assistantTurn.conversationId, c.id),
             ...(cur ? [sql`(${assistantTurn.startedAt}, ${assistantTurn.id}) < (${cur.updatedAt}, ${cur.id})`] : [])))
           .orderBy(desc(assistantTurn.startedAt), desc(assistantTurn.id))
           .limit(input.limit + 1);
         const page = turns.slice(0, input.limit);
         const msgs = page.length
-          ? await deps.db.select().from(assistantMessage)
+          ? await db.select().from(assistantMessage)
               .where(inArray(assistantMessage.turnId, page.map((t) => t.id)))
           : [];
         const uiOf = (turnId: string, role: "user" | "assistant") =>
@@ -114,20 +101,20 @@ export function createAssistantRouter<TInitialContext extends Context, TCurrentC
       .input(z.strictObject({ projectId: z.uuid(), conversationId: z.uuid() }))
       .handler(async ({ input, context }) => {
         const c = await scoped(context.tenantId, input.projectId, input.conversationId);
-        const [live] = await deps.db.select({ id: assistantTurn.id }).from(assistantTurn).where(and(
+        const [live] = await db.select({ id: assistantTurn.id }).from(assistantTurn).where(and(
           eq(assistantTurn.conversationId, c.id), eq(assistantTurn.status, "running"),
           gt(assistantTurn.leaseExpiresAt, new Date()),
         )).limit(1);
         if (live) throw new ORPCError("CONFLICT", { message: "TURN_IN_PROGRESS" });
-        await deps.db.delete(assistantConversation).where(eq(assistantConversation.id, c.id));
+        await db.delete(assistantConversation).where(eq(assistantConversation.id, c.id));
         return { ok: true };
       }),
 
     chat: base
-      .input(makeAssistChatInputZ(deps.fileSchema))
+      .input(AssistChatInputZ)
       .output(eventIterator(AssistantEventZ))
       .handler(async function* ({ input, context, signal }) {
-        yield* runTurn(deps, context, input, signal ?? new AbortController().signal);
+        yield* runTurn(context, input, signal ?? new AbortController().signal);
       }),
   };
 }

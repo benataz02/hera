@@ -8,6 +8,13 @@ export function initialConfigProcessStep(status: string) {
 
 export const POST_RUN_STEP = 1;
 
+// Which step the ObjectPage shows. `?section=` wins, but an unknown id — or a link to Candidates
+// while the wizard has that tab locked — falls back to where the project status says the user belongs.
+export function stepFromSection(section: string | undefined, status: string, candidatesLocked: boolean) {
+  const i = (CONFIG_PROCESS_STEP_IDS as readonly string[]).indexOf(section ?? "");
+  return i < 0 || (i === POST_RUN_STEP && candidatesLocked) ? initialConfigProcessStep(status) : i;
+}
+
 export function buildCalculationUpdate(
   id: string,
   persistedEntries: Entries,

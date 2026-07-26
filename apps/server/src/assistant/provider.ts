@@ -1,7 +1,7 @@
 import { createGeminiChat, GEMINI_MODELS } from "@tanstack/ai-gemini";
 import { ANTHROPIC_MODELS, createAnthropicChat } from "@tanstack/ai-anthropic";
 import { createOpenaiChat, OPENAI_CHAT_MODELS } from "@tanstack/ai-openai";
-import type { Provider } from "./schema.ts";
+import type { Provider } from "@hera/assistant";
 
 // API map: verified against @tanstack/ai@0.42.0, @tanstack/ai-gemini@0.20.1,
 // @tanstack/ai-anthropic@0.16.3, @tanstack/ai-openai@0.17.1 (read from each package's

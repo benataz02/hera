@@ -4,7 +4,7 @@ import { eq, sql } from "drizzle-orm";
 import { db, agentRequest, tenantIntegration, FilterCondZ, type EnabledEntity, type EntitySchema } from "@hera/db";
 import { outboxChannel, requestChannel, waitForNotify } from "@hera/db/listener";
 import { adminProcedure, userProcedure } from "../base.ts";
-import { ensureStandardVariants } from "./variants.ts";
+import { ensureStandardVariants } from "../../seed-variants.ts";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const WAIT_CHUNK_MS = 5_000;

@@ -1,5 +1,23 @@
+import { z } from "zod";
 import { chat, toolDefinition, EventType, type ModelMessage, type StreamChunk } from "@tanstack/ai";
-import { resolveProvider, toProviderApiError, type ChatAdapter, type ToolDecl, type Provider } from "@hera/assistant";
+import type { Provider, ToolName } from "@hera/assistant";
+import { resolveProvider, toProviderApiError } from "./provider.ts";
+import type { ModelPart, Msg } from "./loop.ts";
+
+export type ToolDecl = {
+  name: ToolName; kind: "read" | "write"; label: string; description: string;
+  input: z.ZodType; output: z.ZodType;
+};
+
+/** What the loop needs from a provider: one streamed model call. */
+export type ChatAdapter = (req: {
+  system: string; messages: unknown[]; tools: ToolDecl[] | null; // null = wrap-up (no tools)
+  maxOutputTokens: number; signal: AbortSignal;
+}) => AsyncIterable<
+  | { kind: "text"; text: string }
+  | { kind: "toolCall"; id: string; name: string; args: unknown; metadata?: unknown }
+  | { kind: "usage"; inputTokens: number; outputTokens: number }
+>;
 
 // TanStack AI findings for THIS file (streaming chunk shapes + tool declarations), verified
 // against the installed .d.ts under packages/assistant/node_modules/@tanstack/ai@0.42.0 (the
@@ -46,12 +64,6 @@ import { resolveProvider, toProviderApiError, type ChatAdapter, type ToolDecl, t
 //   anthropic `max_tokens`, openai `max_output_tokens` (verified against each package's own
 //   `text-provider-options.d.ts`).
 
-type ModelPart =
-  | { type: "text"; text: string }
-  | { type: "toolCall"; id: string; name: string; args: unknown; metadata?: unknown }
-  | { type: "toolResult"; id: string; name: string; result: unknown };
-type Msg = { role: "user"; text: string } | { role: "assistant"; parts: ModelPart[] };
-
 /** loop.ts's provider-neutral `Msg[]` -> TanStack AI's `ModelMessage[]`. An assistant "turn" with
  *  a tool call expands to two ModelMessages (assistant call, then the tool's result) since
  *  ModelMessage carries only one role per object. loop.ts enforces one tool call per iteration,
@@ -88,8 +100,16 @@ function toolDefinitionsFor(tools: ToolDecl[]) {
   return tools.map((t) => toolDefinition({ name: t.name, description: t.description, inputSchema: t.input, outputSchema: t.output }));
 }
 
-function modelOptionsFor(provider: Provider, maxOutputTokens: number): Record<string, number> {
-  if (provider === "gemini") return { maxOutputTokens };
+function modelOptionsFor(provider: Provider, model: string, maxOutputTokens: number): Record<string, unknown> {
+  // ponytail: minimal thinking. Measured on gemini-3.5-flash against an ~800-token prompt —
+  // median TTFT 2300ms default vs 1034ms with MINIMAL (n=4/n=4, warm process). The thinking is
+  // invisible to the user anyway: translateStream drops reasoning events, so it reads as a dead
+  // window. This loop dispatches tools, it doesn't reason. Raise if answer quality degrades.
+  if (provider === "gemini")
+    return {
+      maxOutputTokens,
+      thinkingConfig: model.startsWith("gemini-3") ? { thinkingLevel: "MINIMAL" } : { thinkingBudget: 0 },
+    };
   if (provider === "anthropic") return { max_tokens: maxOutputTokens };
   return { max_output_tokens: maxOutputTokens };
 }
@@ -150,7 +170,7 @@ export function makeChatAdapter(provider: Provider, model: string): ChatAdapter 
         // applies here. `modelOptionsFor` above has already chosen the right field name for the
         // actual `provider`; this cast is a type-level formality, not a runtime trust decision
         // (same rationale as provider.ts's own `buildAdapter` cast).
-        modelOptions: modelOptionsFor(provider, req.maxOutputTokens) as never,
+        modelOptions: modelOptionsFor(provider, model, req.maxOutputTokens) as never,
         abortController,
         stream: true,
       });

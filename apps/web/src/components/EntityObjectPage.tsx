@@ -13,6 +13,7 @@ import {
 import type { ButtonDomRef } from "@ui5/webcomponents-react";
 import type { EntityProperty, EntitySchema } from "@hera/db";
 import { orpc } from "../orpc.ts";
+import { useSectionParam } from "../sectionParam.ts";
 import { useVariants, sameDef, truthy, type ObjectVariantDef } from "../variants.ts";
 
 const cell = (v: unknown) => (v == null ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
@@ -101,6 +102,23 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
+
+  // This page scrolls (ObjectPage default mode), so the section the user picked in the anchor bar
+  // goes into `?section=` via onBeforeNavigate — NOT onSelectedSectionChange, which here also fires
+  // from the scroll spy, mid-animation and with a stale "topmost visible section" that overwrites
+  // the pick. Only the mount-time value is fed back as selectedSectionId: a live one would re-enter
+  // the component's scroll-to-section path on later spy updates and yank the scroll.
+  const [section, setSection] = useSectionParam();
+  // ponytail: the deep link is applied on a fixed delay because the section offsets are only
+  // correct once the UI5 tables below have laid out — applying it at mount scrolls to a stale
+  // offset (a few px instead of the real one). Swap for a settle signal if 400ms ever proves short.
+  const target = useRef(section).current;
+  const [deepLinkedSection, setDeepLinkedSection] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!target) return;
+    const t = setTimeout(() => setDeepLinkedSection(target), 400);
+    return () => clearTimeout(t);
+  }, [target]);
 
   // Object "views" personalize layout only: which sections/fields show and in what order. The
   // single-record GET is unchanged. `layout` is the applied view; it drives rendering + dirty marker.
@@ -286,6 +304,8 @@ export function EntityObjectPage({ entity, recordKey }: { entity: string; record
   return (
     <>
     <ObjectPage
+      selectedSectionId={deepLinkedSection}
+      onBeforeNavigate={(e) => setSection(e.detail.sectionId)}
       footerArea={
         editing ? (
           <Bar

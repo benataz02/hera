@@ -4,6 +4,7 @@ import {
   CONFIG_PROCESS_STEP_IDS,
   initialConfigProcessStep,
   POST_RUN_STEP,
+  stepFromSection,
 } from "./configProcessState.ts";
 
 describe("config process navigation", () => {
@@ -17,6 +18,20 @@ describe("config process navigation", () => {
 
   test("a successful run navigates to Candidates", () => {
     expect(CONFIG_PROCESS_STEP_IDS[POST_RUN_STEP]).toBe("candidates");
+  });
+
+  test("?section= wins over the status default", () => {
+    expect(stepFromSection("configure", "calculated", false)).toBe(0);
+    expect(stepFromSection("candidates", "draft", false)).toBe(1);
+  });
+
+  test("an unknown or missing section falls back to the status default", () => {
+    expect(stepFromSection(undefined, "calculated", false)).toBe(1);
+    expect(stepFromSection("renamed-tab", "draft", false)).toBe(0);
+  });
+
+  test("a link to Candidates while that tab is locked falls back", () => {
+    expect(stepFromSection("candidates", "draft", true)).toBe(0);
   });
 });
 

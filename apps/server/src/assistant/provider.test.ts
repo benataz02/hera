@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { listProviders, resolveProvider } from "../src/provider.ts";
+import { listProviders, resolveProvider } from "./provider.ts";
 
 describe("Gemini provider profiles", () => {
   test("allows Gemini 3.5 Flash with its documented capability limits", () => {
@@ -23,7 +23,7 @@ describe("Gemini provider profiles", () => {
 
 describe("provider API errors", () => {
   test("extracts the public message from a nested API error response", async () => {
-    const providerModule = await import("../src/provider.ts");
+    const providerModule = await import("./provider.ts");
     const toProviderApiError = (providerModule as Record<string, unknown>).toProviderApiError as
       | ((error: unknown) => Error & { code: string; retryable: boolean })
       | undefined;
@@ -49,7 +49,7 @@ describe("provider API errors", () => {
   });
 
   test("does not expose an unstructured provider exception", async () => {
-    const providerModule = await import("../src/provider.ts");
+    const providerModule = await import("./provider.ts");
     const toProviderApiError = (providerModule as Record<string, unknown>).toProviderApiError as
       | ((error: unknown) => Error & { code: string; retryable: boolean })
       | undefined;
@@ -59,7 +59,7 @@ describe("provider API errors", () => {
   });
 
   test("extracts the public message from status-prefixed Anthropic JSON", async () => {
-    const providerModule = await import("../src/provider.ts");
+    const providerModule = await import("./provider.ts");
     const toProviderApiError = (providerModule as Record<string, unknown>).toProviderApiError as
       | ((error: unknown) => Error & { code: string; retryable: boolean })
       | undefined;

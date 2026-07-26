@@ -57,15 +57,18 @@ export async function fetchQueryTable(
   return { columns: cols, rows: rows.map((r) => cols.map((c) => asVal(r[c]))) };
 }
 
-/** Fetch each queryTable and add it to `tables` (mutates in place). */
+/** Fetch each queryTable and add it to `tables` (mutates in place). Concurrent: every fetch is an
+ *  agent round trip (insert + notify + B1 GET + ack), so serial cost was N hops on a cache miss.
+ *  `resolveLookups`'s `fetchOnce` still collapses two tables that share one GET. */
 export async function addQueryTables(
   tables: Record<string, ResolvedTable>,
   queryTables: ModelDef["queryTables"],
   fetchQuery: QueryFetcher,
 ): Promise<void> {
-  for (const qt of queryTables) {
-    tables[qt.name] = await fetchQueryTable(fetchQuery, qt.target, qt.path, qt.columns);
-  }
+  const fetched = await Promise.all(
+    queryTables.map((qt) => fetchQueryTable(fetchQuery, qt.target, qt.path, qt.columns)),
+  );
+  queryTables.forEach((qt, i) => { tables[qt.name] = fetched[i]!; });
 }
 
 export async function resolveLookups(
