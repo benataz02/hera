@@ -8,8 +8,11 @@ import {
 } from "@hera/config-engine";
 import { buildAssistPrompt } from "./prompt.ts";
 import { AssistantEventZ, type AssistantEvent, type ChangeRow } from "./events.ts";
-import { TOOLS, staleResult, makeSetValuesInputZ, type Evidence, type ToolName } from "./tools.ts";
-import { resolveProvider } from "./provider.ts";
+import {
+  TOOLS, staleResult, makeSetValuesInputZ, makePreviewCandidatesInputZ,
+  type Evidence, type ToolName,
+} from "./tools.ts";
+import { ProviderApiError, resolveProvider } from "./provider.ts";
 import {
   allocSeq, bumpCounters, claimTurn, claimTurnWithNewConversation, claimWrapUp, finalizeTurn,
   renewLease, runToolOperation, updateWorking,
@@ -94,7 +97,7 @@ export type ChatAdapter = (req: {
   maxOutputTokens: number; signal: AbortSignal;
 }) => AsyncIterable<
   | { kind: "text"; text: string }
-  | { kind: "toolCall"; id: string; name: string; args: unknown }
+  | { kind: "toolCall"; id: string; name: string; args: unknown; metadata?: unknown }
   | { kind: "usage"; inputTokens: number; outputTokens: number }
 >;
 
@@ -113,7 +116,7 @@ export type AssistantDeps = {
   loadRun(tenantId: string, runId: string): Promise<{ runId: string; candidates: unknown[] } | null>;
   makeExecutors(ctx: ExecutorCtx): Executors; // Tasks 10-11, closed over server context
   policy: { checkTurnStart(tenantId: string, userId: string): void; chargeTokens(tenantId: string, n: number): void };
-  makeChatAdapter(provider: Provider): ChatAdapter; // Task 14; the seam that isolates TanStack AI
+  makeChatAdapter(provider: Provider, model: string): ChatAdapter; // Task 14; the seam that isolates TanStack AI
   validateFile(file: ExtractFile): void; // Task 14 - signature/MIME/page/pixel checks
   audit(line: Record<string, unknown>): void; // Task 14 - redacted structured log
 };
@@ -129,6 +132,7 @@ const EntriesZLocal = z.record(z.string(), EntriesValZ);
 export const makeAssistChatInputZ = (fileSchema: z.ZodType<ExtractFile>) => z.strictObject({
   projectId: z.uuid(), conversationId: z.uuid().optional(), turnId: z.uuid(),
   provider: z.enum(["gemini", "anthropic", "openai"]).optional(),
+  model: z.string().min(1).max(200).optional(),
   entries: EntriesZLocal, batches: z.array(z.number().int().min(1)).max(50),
   projectVersion: z.string().max(40),
   message: z.string().min(1).max(4000),
@@ -157,15 +161,16 @@ const byteSize = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).len
 const estimateTokens = (s: string) => Math.ceil(s.length / 4);
 
 // Stable error codes this engine throws internally (turns.ts fences, resolveProvider, the
-// resume-divergence guard). Anything outside this set — a DB driver error, a provider SDK error —
-// is arbitrary content that must NOT reach the audit log, the persisted `turn.errorCode`, or the
-// wire, so it collapses to a generic INTERNAL_ERROR. oRPC errors keep their own stable `code`
-// enum (never their free-form message).
+// resume-divergence guard). Anything outside this set — such as a DB driver error — is arbitrary
+// content that must NOT reach the audit log, the persisted `turn.errorCode`, or the wire, so it
+// collapses to a generic INTERNAL_ERROR. ProviderApiError has already been sanitized at the
+// provider boundary; oRPC errors keep their own stable `code` enum (never their free-form message).
 const KNOWN_ERROR_CODES = new Set([
   "LEASE_LOST", "OPERATION_IN_FLIGHT", "MAX_ATTEMPTS", "PROVIDER_UNAVAILABLE",
   "STATE_CHANGED", "CONTEXT_TOO_LARGE", "INVALID_TOOL_OUTPUT",
 ]);
 function classifyTurnError(e: unknown): string {
+  if (e instanceof ProviderApiError) return e.code;
   if (e instanceof ORPCError) return e.code;
   const msg = e instanceof Error ? e.message : String(e);
   return KNOWN_ERROR_CODES.has(msg) ? msg : "INTERNAL_ERROR";
@@ -193,7 +198,7 @@ function operationKeyFor(
 // per-provider native format). ----
 type ModelPart =
   | { type: "text"; text: string }
-  | { type: "toolCall"; id: string; name: string; args: unknown }
+  | { type: "toolCall"; id: string; name: string; args: unknown; metadata?: unknown }
   | { type: "toolResult"; id: string; name: string; result: unknown };
 type Msg = { role: "user"; text: string } | { role: "assistant"; parts: ModelPart[] };
 
@@ -239,7 +244,9 @@ function toolDeclsFor(model: ModelDef): ToolDecl[] {
     const t = TOOLS[name];
     return {
       name, kind: t.kind, label: t.label, description: t.description,
-      input: name === "setValues" ? makeSetValuesInputZ(keys) : t.input,
+      input: name === "setValues" ? makeSetValuesInputZ(keys)
+        : name === "previewCandidates" ? makePreviewCandidatesInputZ(keys)
+        : t.input,
       output: t.output,
     };
   });
@@ -330,9 +337,13 @@ export async function* runTurn(
   const project = await deps.loadProject(tenantId, input.projectId);
   if (!project) throw new ORPCError("NOT_FOUND", { message: "Project not found" });
 
-  let conversation: { id: string; provider: Provider } | null = null;
+  let conversation: { id: string; provider: Provider; model: string } | null = null;
   if (input.conversationId) {
-    const [c] = await deps.db.select({ id: assistantConversation.id, provider: assistantConversation.provider })
+    const [c] = await deps.db.select({
+      id: assistantConversation.id,
+      provider: assistantConversation.provider,
+      model: assistantConversation.model,
+    })
       .from(assistantConversation)
       .where(and(
         eq(assistantConversation.id, input.conversationId),
@@ -371,7 +382,9 @@ export async function* runTurn(
   } else {
     let resolved;
     try {
-      resolved = resolveProvider(provider);
+      const requestedModel = existingTurn?.model ?? input.model
+        ?? (input.provider && input.provider !== conversation?.provider ? undefined : conversation?.model);
+      resolved = resolveProvider(provider, process.env, requestedModel);
     } catch {
       throw new ORPCError("SERVICE_UNAVAILABLE", { message: `${provider} is not available` });
     }
@@ -401,8 +414,8 @@ export async function* runTurn(
       claimParams,
     );
   } else {
-    if (input.provider && !existingTurn && input.provider !== conversation.provider)
-      await deps.db.update(assistantConversation).set({ provider: input.provider }).where(eq(assistantConversation.id, conversation.id));
+    if (!existingTurn && (provider !== conversation.provider || modelName !== conversation.model))
+      await deps.db.update(assistantConversation).set({ provider, model: modelName }).where(eq(assistantConversation.id, conversation.id));
     claim = await claimTurn(deps.db, { ...claimParams, conversationId: conversation.id });
   }
 
@@ -577,7 +590,7 @@ export async function* runTurn(
     }
 
     // ============ STEP 4: provider loop ============
-    const adapter = deps.makeChatAdapter(provider);
+    const adapter = deps.makeChatAdapter(provider, modelName);
     // On resume, splice the current turn's pre-crash assistant transcript after the user message so
     // the model sees its own earlier setValues/calculate calls and continues instead of redoing them.
     const liveHead: Msg[] = [{ role: "user", text: input.message }];
@@ -641,7 +654,10 @@ export async function* runTurn(
             const errRes = sawToolCall
               ? { ok: false, code: "TOOL_ORDER", message: "one tool per turn", retryable: true }
               : { ok: false, code: "UNKNOWN_TOOL", message: `Unknown tool ${chunk.name}`, retryable: true };
-            iterationParts.push({ type: "toolCall", id: chunk.id, name: chunk.name, args: chunk.args });
+            iterationParts.push({
+              type: "toolCall", id: chunk.id, name: chunk.name, args: chunk.args,
+              ...(chunk.metadata !== undefined ? { metadata: chunk.metadata } : {}),
+            });
             iterationParts.push({ type: "toolResult", id: chunk.id, name: chunk.name, result: errRes });
             continue;
           }
@@ -650,9 +666,15 @@ export async function* runTurn(
           const s1 = await allocSeq(deps.db, turn.id, leaseToken, 1);
           yield eventFor({ type: "tool", turnId: turn.id, seq: s1, name, label: TOOLS[name].label });
 
-          const inputSchema = name === "setValues" ? makeSetValuesInputZ(model.definition.parameters.map((p) => p.key)) : TOOLS[name].input;
+          const paramKeys = model.definition.parameters.map((p) => p.key);
+          const inputSchema = name === "setValues" ? makeSetValuesInputZ(paramKeys)
+            : name === "previewCandidates" ? makePreviewCandidatesInputZ(paramKeys)
+            : TOOLS[name].input;
           const parsedArgs = inputSchema.safeParse(chunk.args);
-          iterationParts.push({ type: "toolCall", id: chunk.id, name, args: chunk.args });
+          iterationParts.push({
+            type: "toolCall", id: chunk.id, name, args: chunk.args,
+            ...(chunk.metadata !== undefined ? { metadata: chunk.metadata } : {}),
+          });
 
           if (!parsedArgs.success) {
             const errRes = { ok: false, code: "INVALID_ARGUMENTS", message: parsedArgs.error.issues.map((i) => i.message).join("; ").slice(0, 2000), retryable: true };
@@ -797,15 +819,15 @@ export async function* runTurn(
     yield eventFor({ type: "done", turnId: turn.id, seq: s, suggestions: suggestions ?? [], usage: { inputTokens: lastCounters.inputTokens, outputTokens: lastCounters.outputTokens } });
     finalStatus = "complete";
   } catch (e) {
-    // A raw Error.message can be arbitrary (DB driver / provider SDK) content — never let it reach
-    // the log, the persisted errorCode, or the wire. Collapse to a stable code; the user-facing
-    // `message` text stays generic.
+    // A raw Error.message can be arbitrary DB/SDK content, so only the provider-boundary wrapper's
+    // sanitized public API message may reach the wire. Audit and persisted state keep stable codes.
     const code = classifyTurnError(e);
+    const message = e instanceof ProviderApiError ? e.message : "Something went wrong; you can retry.";
     finalStatus = "partial"; finalErrorCode = code;
     deps.audit({ event: "assist_turn_error", turnId: turn.id, tenantId, code });
     try {
       const s = await allocSeq(deps.db, turn.id, leaseToken, 1);
-      yield eventFor({ type: "error", turnId: turn.id, seq: s, code, message: "Something went wrong; you can retry.", retryable: true });
+      yield eventFor({ type: "error", turnId: turn.id, seq: s, code, message, retryable: true });
     } catch { /* lease lost or transport gone: best-effort only */ }
   } finally {
     clearInterval(renewTimer);

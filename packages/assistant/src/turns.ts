@@ -73,7 +73,7 @@ async function claimInTx(tx: Db, p: ClaimParams): Promise<ClaimResult> {
   if (existing) {
     // Immutable identity check: conversation, user, message, provider, attachment hash.
     if (existing.conversationId !== p.conversationId || existing.userId !== p.userId
-      || existing.userMessage !== p.userMessage || existing.provider !== p.provider
+      || existing.userMessage !== p.userMessage || existing.provider !== p.provider || existing.model !== p.model
       || (existing.attachmentSha256 ?? null) !== (p.attachment?.sha256 ?? null))
       return { kind: "rejected" as const, code: "TURN_IDENTITY_MISMATCH" as const };
     if (existing.status === "running" && existing.leaseExpiresAt && existing.leaseExpiresAt > new Date())

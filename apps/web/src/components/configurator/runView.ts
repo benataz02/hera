@@ -1,4 +1,5 @@
 import type { Entries, ModelDef, OutputOverrides, Outputs } from "@hera/config-engine";
+import { randomUuid } from "../../uuid.ts";
 
 // Pure view logic for the configuration wizard. Client-side mirrors of the server's
 // RunCandidate/RunSelection jsonb shapes (web doesn't depend on @hera/db; structural match).
@@ -80,9 +81,9 @@ export const isRemoved = (ov: OutputOverrides, kind: "bom" | "ops", id: string):
   (ov[kind] ?? []).some((o) => o.id === id && o.remove === true);
 
 export const addBomLine = (ov: OutputOverrides): OutputOverrides =>
-  ({ ...ov, addBom: [...(ov.addBom ?? []), { id: crypto.randomUUID(), itemCode: "NEW", qtyPerUnit: 1, unitPrice: 0 }] });
+  ({ ...ov, addBom: [...(ov.addBom ?? []), { id: randomUuid(), itemCode: "NEW", qtyPerUnit: 1, unitPrice: 0 }] });
 export const addOpLine = (ov: OutputOverrides): OutputOverrides =>
-  ({ ...ov, addOps: [...(ov.addOps ?? []), { id: crypto.randomUUID(), resource: "NEW", setupMin: 0, runMinPerUnit: 0, ratePerHour: 0 }] });
+  ({ ...ov, addOps: [...(ov.addOps ?? []), { id: randomUuid(), resource: "NEW", setupMin: 0, runMinPerUnit: 0, ratePerHour: 0 }] });
 export const patchAddedBom = (ov: OutputOverrides, id: string, patch: Partial<AddedBom>): OutputOverrides =>
   ({ ...ov, addBom: (ov.addBom ?? []).map((o) => (o.id === id ? { ...o, ...patch } : o)) });
 export const patchAddedOp = (ov: OutputOverrides, id: string, patch: Partial<AddedOp>): OutputOverrides =>

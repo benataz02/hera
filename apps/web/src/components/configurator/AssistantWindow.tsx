@@ -10,6 +10,7 @@ import type { Entries, ModelDef, ResolvedLookups } from "@hera/config-engine";
 import type { AssistantEvent, AssistChatInput, Provider } from "@hera/assistant";
 import { client, orpc } from "../../orpc.ts";
 import { authClient } from "../../auth-client.ts";
+import { randomUuid } from "../../uuid.ts";
 import { confirm } from "../confirm.ts";
 import { MIME_BY_EXT, toBase64 } from "./ExtractPanel.tsx";
 import {
@@ -180,6 +181,7 @@ export function AssistantWindow({
   const [expanded, setExpanded] = useState(false);
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const [provider, setProvider] = useState<Provider | undefined>(undefined);
+  const [aiModel, setAiModel] = useState<string | undefined>(undefined);
   const [state, setState] = useState<ChatState>(initialChatState);
   const [hydrated, setHydrated] = useState<LogMsg[]>([]);
   const [hydratedCursor, setHydratedCursor] = useState<string | null>(null);
@@ -190,7 +192,10 @@ export function AssistantWindow({
   const [stopping, setStopping] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
-  const lastTurnRef = useRef<{ turnId: string; message: string; file?: Attachment; provider: Provider | undefined } | null>(null);
+  const lastTurnRef = useRef<{
+    turnId: string; message: string; file?: Attachment;
+    provider: Provider | undefined; model: string | undefined;
+  } | null>(null);
   const prevEntriesRef = useRef(entries);
   const prevBatchesRef = useRef(batches);
 
@@ -199,13 +204,16 @@ export function AssistantWindow({
 
   const firstName = session?.user?.name?.split(" ")[0] || session?.user?.email?.split("@")[0] || "there";
 
-  // Default the provider Select once the list loads, if nothing (no loaded conversation, no
+  // Default the provider-model Select once the list loads, if nothing (no loaded conversation, no
   // manual pick) has set one yet.
   useEffect(() => {
-    if (provider !== undefined) return;
-    const first = providersQ.data?.find((p) => p.available);
-    if (first) setProvider(first.provider);
-  }, [providersQ.data, provider]);
+    if (provider !== undefined && aiModel !== undefined) return;
+    const first = providersQ.data?.[0];
+    if (first) {
+      setProvider(first.provider);
+      setAiModel(first.model);
+    }
+  }, [providersQ.data, provider, aiModel]);
 
   // Touched-tracking: while the latest assistant message is sitting in an error state (a pending
   // retry), diff live entries/batches props against what they were last render and record any
@@ -228,7 +236,8 @@ export function AssistantWindow({
   const applyOpts = { onApplyValues: onApply, onCandidates, onSelection, onConversation: setConversationId };
 
   async function runStream(params: {
-    turnId: string; message: string; file?: Attachment; provider: Provider | undefined;
+    turnId: string; message: string; file?: Attachment;
+    provider: Provider | undefined; model: string | undefined;
     resume?: { lastAppliedSeq: number; touchedEntryKeys: string[]; batchesTouched: boolean };
   }) {
     const ac = new AbortController();
@@ -236,7 +245,8 @@ export function AssistantWindow({
     onBusyChange(true);
     try {
       const input: AssistChatInput = {
-        projectId, turnId: params.turnId, conversationId, provider: params.provider,
+        projectId, turnId: params.turnId, conversationId,
+        provider: params.provider, model: params.model,
         entries, batches, projectVersion, message: params.message,
         file: params.file, resume: params.resume,
       };
@@ -277,10 +287,10 @@ export function AssistantWindow({
     setFile(null);
     setFileError(null);
     setPromptValue("");
-    const turnId = crypto.randomUUID();
-    lastTurnRef.current = { turnId, message: trimmed, file: attachment, provider };
+    const turnId = randomUuid();
+    lastTurnRef.current = { turnId, message: trimmed, file: attachment, provider, model: aiModel };
     setState((s) => startTurn(s, turnId, trimmed, attachment?.name));
-    await runStream({ turnId, message: trimmed, file: attachment, provider });
+    await runStream({ turnId, message: trimmed, file: attachment, provider, model: aiModel });
   }
 
   function retry(turnId: string) {
@@ -295,11 +305,14 @@ export function AssistantWindow({
       ...s, busy: true,
       messages: s.messages.map((m) => (m.role === "assistant" && m.turnId === turnId ? { ...m, error: undefined } : m)),
     }));
-    // Pin the provider captured at send time, not the live `provider` state — the user may have
-    // switched providers since the turn errored (the Select only locks on state.busy), and the
-    // server rejects a reused turnId whose provider doesn't match the original with
+    // Pin the provider/model captured at send time, not the live Select state — the user may have
+    // switched it since the turn errored, and the server rejects a reused turnId whose pair
+    // doesn't match the original with
     // TURN_IDENTITY_MISMATCH instead of resuming it.
-    void runStream({ turnId, message: last.message, file: last.file, provider: last.provider, resume });
+    void runStream({
+      turnId, message: last.message, file: last.file,
+      provider: last.provider, model: last.model, resume,
+    });
   }
 
   function requestClose() {
@@ -331,13 +344,14 @@ export function AssistantWindow({
     }
   }
 
-  function pickConversation(id: string, convProvider: Provider) {
+  function pickConversation(id: string, convProvider: Provider, convModel: string) {
     setState(initialChatState);
     setHydrated([]);
     setHydratedCursor(null);
     lastTurnRef.current = null;
     setConversationId(id);
     setProvider(convProvider);
+    setAiModel(convModel);
     setView("chat");
     void loadConversation(id);
   }
@@ -381,13 +395,21 @@ export function AssistantWindow({
             disabled={state.busy} onClick={() => setView("conversations")} />
         ) : null}
         <Title level="H5" style={{ color: "white", flex: 1 }}>Chati</Title>
-        <Select disabled={state.busy} value={provider ?? ""} style={{ width: "7.5rem" }}
+        <Select disabled={state.busy} value={provider && aiModel ? `${provider}:${aiModel}` : ""} style={{ width: "13rem" }}
           onChange={(e) => {
-            const p = (e.detail.selectedOption as HTMLElement).dataset.provider as Provider | undefined;
-            if (p) setProvider(p);
+            const option = e.detail.selectedOption as HTMLElement;
+            const p = option.dataset.provider as Provider | undefined;
+            const m = option.dataset.model;
+            if (p && m) {
+              setProvider(p);
+              setAiModel(m);
+            }
           }}>
-          {(providersQ.data ?? []).filter((p) => p.available).map((p) => (
-            <Option key={p.provider} value={p.provider} data-provider={p.provider}>{PROVIDER_LABEL[p.provider]}</Option>
+          {(providersQ.data ?? []).map((p) => (
+            <Option key={`${p.provider}:${p.model}`} value={`${p.provider}:${p.model}`}
+              data-provider={p.provider} data-model={p.model}>
+              {PROVIDER_LABEL[p.provider]} — {p.model}
+            </Option>
           ))}
         </Select>
         <Button design="Transparent" icon={expanded ? "exit-full-screen" : "full-screen"}
@@ -548,7 +570,9 @@ function Bubble({
 }
 
 function ConversationsList({ projectId, onPick, onNew, busy }: {
-  projectId: string; onPick: (id: string, provider: Provider) => void; onNew: () => void; busy: boolean;
+  projectId: string;
+  onPick: (id: string, provider: Provider, model: string) => void;
+  onNew: () => void; busy: boolean;
 }) {
   const qc = useQueryClient();
   const q = useQuery(orpc.assist.list.queryOptions({ input: { projectId } }));
@@ -572,7 +596,7 @@ function ConversationsList({ projectId, onPick, onNew, busy }: {
       {del.error ? <MessageStrip design="Negative" hideCloseButton>{del.error.message}</MessageStrip> : null}
       {q.data && q.data.items.length === 0 ? <Text>No conversations yet.</Text> : null}
       {(q.data?.items ?? []).map((c) => (
-        <div key={c.id} onClick={() => { if (!busy) onPick(c.id, c.provider); }} style={{
+        <div key={c.id} onClick={() => { if (!busy) onPick(c.id, c.provider, c.model); }} style={{
           display: "flex", alignItems: "center", gap: "0.5rem", cursor: busy ? "default" : "pointer",
           padding: "0.4rem 0.5rem", borderRadius: "0.5rem", border: "1px solid var(--sapList_BorderColor)",
           opacity: busy ? 0.6 : 1,

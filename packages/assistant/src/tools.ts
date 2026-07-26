@@ -53,6 +53,13 @@ export const makeSetValuesInputZ = (paramKeys: string[]) =>
     })).min(1).max(Math.max(paramKeys.length, 1)),
   });
 
+export const makePreviewCandidatesInputZ = (paramKeys: string[]) =>
+  z.strictObject({
+    overrides: z.strictObject(Object.fromEntries(
+      paramKeys.map((key) => [key, ValZ.optional()]),
+    )).optional(),
+  });
+
 export const TOOLS = {
   setValues: {
     name: "setValues", kind: "write" as const,
@@ -82,7 +89,7 @@ export const TOOLS = {
     name: "previewCandidates", kind: "read" as const,
     label: "Previewing candidates…",
     description: "What-if enumeration on the current working values plus optional overrides. Persists nothing; preview ids are NOT selectable.",
-    input: z.strictObject({ overrides: z.record(z.string().max(200), ValZ).optional() }),
+    input: makePreviewCandidatesInputZ([]),
     output: toolResult({
       resultId: z.string().max(100), observedProjectVersion: version,
       workingRevision: z.number().int().min(0), candidateCount: z.number().int().min(0), top: previewTopZ,

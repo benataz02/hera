@@ -1,5 +1,5 @@
-import { chat, toolDefinition, EventType, type ModelMessage } from "@tanstack/ai";
-import { resolveProvider, type ChatAdapter, type ToolDecl, type Provider } from "@hera/assistant";
+import { chat, toolDefinition, EventType, type ModelMessage, type StreamChunk } from "@tanstack/ai";
+import { resolveProvider, toProviderApiError, type ChatAdapter, type ToolDecl, type Provider } from "@hera/assistant";
 
 // TanStack AI findings for THIS file (streaming chunk shapes + tool declarations), verified
 // against the installed .d.ts under packages/assistant/node_modules/@tanstack/ai@0.42.0 (the
@@ -48,7 +48,7 @@ import { resolveProvider, type ChatAdapter, type ToolDecl, type Provider } from 
 
 type ModelPart =
   | { type: "text"; text: string }
-  | { type: "toolCall"; id: string; name: string; args: unknown }
+  | { type: "toolCall"; id: string; name: string; args: unknown; metadata?: unknown }
   | { type: "toolResult"; id: string; name: string; result: unknown };
 type Msg = { role: "user"; text: string } | { role: "assistant"; parts: ModelPart[] };
 
@@ -56,7 +56,7 @@ type Msg = { role: "user"; text: string } | { role: "assistant"; parts: ModelPar
  *  a tool call expands to two ModelMessages (assistant call, then the tool's result) since
  *  ModelMessage carries only one role per object. loop.ts enforces one tool call per iteration,
  *  so at most one call/result pair ever needs splitting out of a single `parts` array. */
-function toModelMessages(messages: unknown[]): ModelMessage[] {
+export function toModelMessages(messages: unknown[]): ModelMessage[] {
   const out: ModelMessage[] = [];
   for (const m of messages as Msg[]) {
     if (m.role === "user") {
@@ -69,7 +69,12 @@ function toModelMessages(messages: unknown[]): ModelMessage[] {
     out.push({
       role: "assistant",
       content: text?.text ?? null,
-      ...(call ? { toolCalls: [{ id: call.id, type: "function" as const, function: { name: call.name, arguments: JSON.stringify(call.args) } }] } : {}),
+      ...(call ? { toolCalls: [{
+        id: call.id,
+        type: "function" as const,
+        function: { name: call.name, arguments: JSON.stringify(call.args) },
+        ...(call.metadata !== undefined ? { metadata: call.metadata } : {}),
+      }] } : {}),
     });
     if (result) out.push({ role: "tool", content: JSON.stringify(result.result), toolCallId: result.id });
   }
@@ -89,44 +94,70 @@ function modelOptionsFor(provider: Provider, maxOutputTokens: number): Record<st
   return { max_output_tokens: maxOutputTokens };
 }
 
+/** Convert TanStack's provider stream to the package-neutral chunks used by the durable loop.
+ * Tool-call metadata arrives on TOOL_CALL_START, so retain it until the matching END event. */
+export async function* translateStream(stream: AsyncIterable<StreamChunk>) {
+  const toolCallMetadata = new Map<string, unknown>();
+
+  for await (const chunk of stream) {
+    if (chunk.type === EventType.TOOL_CALL_START) {
+      if (chunk.metadata !== undefined) toolCallMetadata.set(chunk.toolCallId, chunk.metadata);
+    } else if (chunk.type === EventType.TEXT_MESSAGE_CONTENT) {
+      if (chunk.delta) yield { kind: "text" as const, text: chunk.delta };
+    } else if (chunk.type === EventType.TOOL_CALL_END) {
+      const metadata = toolCallMetadata.get(chunk.toolCallId);
+      toolCallMetadata.delete(chunk.toolCallId);
+      yield {
+        kind: "toolCall" as const,
+        id: chunk.toolCallId,
+        name: chunk.toolCallName ?? "",
+        args: chunk.input,
+        ...(metadata !== undefined ? { metadata } : {}),
+      };
+    } else if (chunk.type === EventType.RUN_FINISHED) {
+      if (chunk.usage) yield {
+        kind: "usage" as const,
+        inputTokens: chunk.usage.promptTokens,
+        outputTokens: chunk.usage.completionTokens,
+      };
+    } else if (chunk.type === EventType.RUN_ERROR) {
+      throw new Error(chunk.message);
+    }
+  }
+}
+
 /** Builds one turn's `ChatAdapter` (loop.ts). `resolveProvider` + `makeAdapter()` run once here,
  *  reused across every provider call the turn makes (mirrors provider.ts's own "adapters are
  *  built per turn" comment) — never at module scope, so no API key is ever cached across turns. */
-export function makeChatAdapter(provider: Provider): ChatAdapter {
-  const resolved = resolveProvider(provider);
+export function makeChatAdapter(provider: Provider, model: string): ChatAdapter {
+  const resolved = resolveProvider(provider, process.env, model);
   const providerAdapter = resolved.makeAdapter();
 
   return async function* (req) {
-    const abortController = new AbortController();
-    if (req.signal.aborted) abortController.abort();
-    else req.signal.addEventListener("abort", () => abortController.abort(), { once: true });
+    try {
+      const abortController = new AbortController();
+      if (req.signal.aborted) abortController.abort();
+      else req.signal.addEventListener("abort", () => abortController.abort(), { once: true });
 
-    const stream = chat({
-      adapter: providerAdapter,
-      systemPrompts: [req.system],
-      messages: toModelMessages(req.messages),
-      tools: req.tools ? toolDefinitionsFor(req.tools) : undefined,
-      // Cast: `buildAdapter`'s return type (provider.ts) is a union across the three provider
-      // adapters chosen at runtime, so `modelOptions`'s inferred type at this call site is the
-      // union of all three providers' option shapes — TS can't statically narrow which one
-      // applies here. `modelOptionsFor` above has already chosen the right field name for the
-      // actual `provider`; this cast is a type-level formality, not a runtime trust decision
-      // (same rationale as provider.ts's own `buildAdapter` cast).
-      modelOptions: modelOptionsFor(provider, req.maxOutputTokens) as never,
-      abortController,
-      stream: true,
-    });
+      const stream = chat({
+        adapter: providerAdapter,
+        systemPrompts: [req.system],
+        messages: toModelMessages(req.messages),
+        tools: req.tools ? toolDefinitionsFor(req.tools) : undefined,
+        // Cast: `buildAdapter`'s return type (provider.ts) is a union across the three provider
+        // adapters chosen at runtime, so `modelOptions`'s inferred type at this call site is the
+        // union of all three providers' option shapes — TS can't statically narrow which one
+        // applies here. `modelOptionsFor` above has already chosen the right field name for the
+        // actual `provider`; this cast is a type-level formality, not a runtime trust decision
+        // (same rationale as provider.ts's own `buildAdapter` cast).
+        modelOptions: modelOptionsFor(provider, req.maxOutputTokens) as never,
+        abortController,
+        stream: true,
+      });
 
-    for await (const chunk of stream) {
-      if (chunk.type === EventType.TEXT_MESSAGE_CONTENT) {
-        if (chunk.delta) yield { kind: "text" as const, text: chunk.delta };
-      } else if (chunk.type === EventType.TOOL_CALL_END) {
-        yield { kind: "toolCall" as const, id: chunk.toolCallId, name: chunk.toolCallName ?? "", args: chunk.input };
-      } else if (chunk.type === EventType.RUN_FINISHED) {
-        if (chunk.usage) yield { kind: "usage" as const, inputTokens: chunk.usage.promptTokens, outputTokens: chunk.usage.completionTokens };
-      } else if (chunk.type === EventType.RUN_ERROR) {
-        throw new Error(chunk.message);
-      }
+      yield* translateStream(stream);
+    } catch (error) {
+      throw toProviderApiError(error);
     }
   };
 }

@@ -3,7 +3,7 @@ import type { BuilderWithMiddlewares, Context, Schema } from "@orpc/server";
 import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import { assistantConversation, assistantMessage, assistantTurn } from "./schema.ts";
-import { listProviders } from "./provider.ts";
+import { listProviderModels } from "./provider.ts";
 import { AssistantEventZ } from "./events.ts";
 import { runTurn, makeAssistChatInputZ, type AssistantDeps } from "./loop.ts";
 
@@ -60,7 +60,7 @@ export function createAssistantRouter<TInitialContext extends Context, TCurrentC
   };
 
   return {
-    providers: base.handler(() => listProviders()),
+    providers: base.handler(() => listProviderModels()),
 
     list: base
       .input(z.strictObject({ projectId: z.uuid(), cursor: z.string().max(200).optional(), limit: z.number().int().min(1).max(50).default(20) }))
@@ -68,7 +68,8 @@ export function createAssistantRouter<TInitialContext extends Context, TCurrentC
         const cur = input.cursor ? atobCursor(input.cursor) : null;
         const rows = await deps.db.select({
           id: assistantConversation.id, title: assistantConversation.title,
-          provider: assistantConversation.provider, updatedAt: assistantConversation.updatedAt,
+          provider: assistantConversation.provider, model: assistantConversation.model,
+          updatedAt: assistantConversation.updatedAt,
         }).from(assistantConversation)
           .where(and(
             eq(assistantConversation.tenantId, context.tenantId),
