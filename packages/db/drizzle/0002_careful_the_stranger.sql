@@ -1,1 +1,0 @@
-ALTER TABLE "ui_variant" DROP COLUMN "apply_automatically";

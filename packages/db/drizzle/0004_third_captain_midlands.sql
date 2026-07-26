@@ -1,1 +1,0 @@
-ALTER TABLE "config_run" ADD COLUMN "selection_version" integer DEFAULT 0 NOT NULL;
