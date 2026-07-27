@@ -49,6 +49,8 @@ line-level defaulting and arithmetic.
 - Routing quote creation through the outbox `dedupKey` idempotency. See "Accepted risks".
 - OData v3 (`b1s/v1`) navigation properties.
 - Collections nested more than one level (`DocumentLines[].LineTaxJurisdictions`).
+- Reverse associations ("all Quotations for this ChartOfAccount"). Parsed well enough to be
+  distinguished from owned collections, then discarded — related-object navigation is its own feature.
 - ETag / optimistic concurrency on save.
 - Changing the list report's OData compilation path.
 
@@ -105,19 +107,75 @@ export interface EntitySchema {
   name: string;
   keys: string[];
   properties: EdmProperty[];
-  /** NavigationProperty targets, one level deep. `many` distinguishes a collection from a struct. */
+  /** Owned sub-structures, one level deep. `many` distinguishes a collection from a struct. */
   collections?: (EntitySchema & { many: boolean })[];
 }
 ```
 
 Parser changes:
 
-- Add `EnumType`, `Member`, `NavigationProperty` to the `XMLParser` `isArray` list.
+- Add `EnumType`, `Member`, `NavigationProperty`, `ReferentialConstraint` to the `XMLParser` `isArray` list.
 - Build `Map<enumLocalName, {value,text}[]>` from `EnumType > Member` (`@_Name` → text, `@_Value` →
   value). When a `Property`'s `@_Type` strips to a name in that map, attach `options`.
-- For each `EntityType`, read its `NavigationProperty` entries. `Type="Collection(NS.X)"` → resolve
-  `X` in the existing `types` map, emit `{name: navPropName, ...childType, many: true}`.
-  `Type="NS.X"` (single-valued) → same, `many: false`.
+- **Invert the existing EntitySet → EntityType map** into `Map<entityTypeLocalName, entitySetName>`.
+  The parser already walks `EntityContainer > EntitySet`; this is the same loop.
+- Walk each `EntityType`'s `NavigationProperty` entries and classify them (below).
+
+#### Owned sub-collection vs. reverse association
+
+B1 declares navigation in **both** directions, and the two are not remotely the same thing:
+
+```xml
+<!-- on ChartOfAccount: a reverse association. Every Document that references this account. -->
+<NavigationProperty Name="Quotations" Partner="ChartOfAccount" Type="Collection(SAPB1.Document)"/>
+
+<!-- on Document: an owned sub-collection. The document's own lines. -->
+<NavigationProperty Name="DocumentLines" Type="Collection(SAPB1.Document_Lines)"/>
+```
+
+Both are `Type="Collection(...)"`. Treating every collection nav property as a section would give
+`ChartOfAccounts` a "Quotations" section listing every quotation in the company, and would inline the
+entire `Document` schema into every master-data type that points at one — which is also the payload
+explosion risk, not just a UI bug.
+
+The discriminator is derivable from the inverted map:
+
+> **A collection nav property whose target EntityType has no EntitySet is owned. One whose target
+> has an EntitySet is a reverse association.**
+
+`Document_Lines` is not addressable (`GET /Document_Lines` does not exist), so it is owned and gets a
+section. `Document` is addressable as `Quotations`/`Orders`/`Invoices`, so `ChartOfAccount.Quotations`
+is a reverse association and is skipped. If B1 also emits OData v4's `ContainsTarget="true"` on owned
+navigation, that is the more explicit signal and takes precedence when present.
+
+Reverse associations are **discarded**, not stored. Rendering "related documents" is a separate
+feature and nothing in this spec consumes them.
+
+#### Foreign keys come from `ReferentialConstraint`
+
+Single-valued nav properties carry the FK mapping explicitly:
+
+```xml
+<NavigationProperty Name="BusinessPartner" Partner="Quotations" Type="SAPB1.BusinessPartner">
+  <ReferentialConstraint Property="CardCode" ReferencedProperty="CardCode"/>
+</NavigationProperty>
+```
+
+`Property` is the local (dependent) field; the nav target's EntityType resolved through the inverted
+map gives the entity set to read from. So the local `CardCode` property gains:
+
+```ts
+/** Derived from NavigationProperty > ReferentialConstraint. Drives ValueHelp. */
+lookup?: { entitySet: string; valueField: string };   // { entitySet: "BusinessPartners", valueField: "CardCode" }
+```
+
+`ItemCode` on `Document_Lines` resolves to `Items` the same way. This is the entire value-help source
+map, derived rather than declared — no hand-maintained table, and a UDF-driven FK a customer adds
+works without a code change. A property whose nav property omits `ReferentialConstraint` simply gets
+no `lookup` and falls back to a plain `Input`.
+
+Single-valued nav properties whose target has **no** EntitySet are owned structs — `many: false`,
+rendered as a Form section.
 
 **Enums are inlined per property, not stored in a shared table.** B1 enums are small (2-6 members) and
 inlining keeps `EntityProperty` structurally compatible with `ListColumn` (`{name, type, label?,
@@ -137,9 +195,10 @@ Two deliberate ceilings, each with a `ponytail:` comment naming its upgrade path
 
 **Payload risk (accepted, monitored).** `discover` returns every entity set, so inlining
 `Document_Lines` into ~30 document sets grows a response that travels through the `agent_request.result`
-jsonb column and the LISTEN/NOTIFY reply path. Mitigation: log the serialized byte size in the
-`discover` handler. If it measurably hurts, dedupe child types into a top-level map keyed by type
-name. Not before it fires.
+jsonb column and the LISTEN/NOTIFY reply path. The owned-vs-reverse rule above is what keeps this
+bounded — without it, every master-data type pointing at a `Document` would inline the full document
+schema. Mitigation on top: log the serialized byte size in the `discover` handler. If it measurably
+hurts, dedupe child types into a top-level map keyed by type name. Not before it fires.
 
 **The type is declared twice and validated once — all three must change together.**
 
@@ -175,7 +234,7 @@ Every name is validated against the schema before it reaches a URL, by the same 
 today's whole-record behaviour, so the endpoint change lands independently of the UI.
 
 Agent gains `buildGetPath(entity, key, keyQuoted, {select, expand})` next to `buildListPath` — pure,
-no I/O, so it joins the network-free `scripts/e2e.ts --unit` self-check:
+no I/O, so it is unit-testable without a live B1:
 
 ```
 /Quotations(142)?$select=DocEntry,DocNum,CardCode,CardName,DocDate,DocTotal
@@ -309,21 +368,28 @@ Props:
 }
 ```
 
-`EditField` switches on the Edm type: `p.options` → `Select` (enums, newly available), bool →
-`CheckBox`, date → `DatePicker`, numeric → `Input type="Number"`, FK-ish → `ValueHelp`, else `Input`.
+`EditField` switches on the Edm type, in this order:
 
-FK targets are hand-mapped, because B1's v2 metadata declares no referential constraints:
+| Condition | Control |
+|---|---|
+| `p.lookup` | `ValueHelp` against `p.lookup.entitySet` |
+| `p.options` | `Select` (enum members) |
+| bool | `CheckBox` |
+| date/time | `DatePicker` |
+| numeric | `Input type="Number"` |
+| otherwise | `Input` |
 
-```ts
-// ponytail: no referential constraints in B1 metadata; extend as fields come up.
-const LOOKUPS = { ItemCode: "Items", CardCode: "BusinessPartners",
-                  WhsCode: "Warehouses", WarehouseCode: "Warehouses",
-                  SalesPersonCode: "SalesPersons" };
-```
+`p.lookup` is the `ReferentialConstraint`-derived target from §1 — no hand-maintained field→entity
+map anywhere in the codebase. `ValueHelp` reads its options from `entities.list` on
+`p.lookup.entitySet`, projecting the target's key plus its name-ish field.
 
 Reuses the existing `apps/web/src/components/ValueHelp.tsx` unchanged — its `DomainOption
 {value,label}` and `ResolvedTable {columns,rows}` are structurally satisfiable from an
 `entities.list` page, and it already supports remote `onSearch`. The adapter is a few lines.
+
+One caveat worth stating: a lookup target must itself be an **enabled** entity for `entities.list` to
+serve it (`loadEnabled` throws `FORBIDDEN` otherwise). A field whose target is not enabled degrades to
+a plain `Input` rather than erroring — checked when building the field, not on click.
 
 ### 6. B1 line logic
 
@@ -339,6 +405,12 @@ itemDefaults(item)  // ItemName→ItemDescription, SalesUnit→UoMCode, sales/pu
 Picking an `ItemCode` issues `entities.get("Items", code, {select: [...]})`, merges `itemDefaults`
 into the line, then `recalcLine` → `recalcTotals`. Editing `Quantity`, `UnitPrice` or
 `DiscountPercent` runs the same last two steps.
+
+`itemDefaults` **is** a hand-written field mapping, and unlike the FK lookups it has to be: which
+`Item` field seeds which `Document_Lines` field is B1 application semantics, not a relationship, and
+appears nowhere in `$metadata`. It stays a small explicit table with a `ponytail:` comment, extended
+as fields come up. `entities.get` on `Items` is reached through the derived `lookup.entitySet`, not a
+hardcoded `"Items"` string.
 
 ### 7. Save
 
@@ -381,13 +453,27 @@ of this one.
   always carries `LineNum`; an empty def yields no `select`/`expand` (fetch everything).
 - `b1Lines.test.ts` — LineTotal with and without discount, rounding at 2dp, totals over empty and
   mixed line sets, `itemDefaults` mapping.
-- `parseEdmx` — an `EnumType` + `NavigationProperty` fixture added to the existing network-free
-  `scripts/e2e.ts --unit` self-check, asserting `options` on an enum property and a `many: true`
-  collection with its own keys.
+
+**Note:** the code comments in `service-layer-client.ts` point `parseEdmx`/`buildListPath` self-checks
+at `scripts/e2e.ts --unit`, and `package.json` still has an `e2e` script — **but that file no longer
+exists.** The parser tests go to a new `apps/agent/src/service-layer-client.test.ts` with a
+`test:agent` script alongside `test:engine`/`test:server`/`test:web`, and the stale comments get
+corrected in passing.
+
+- `service-layer-client.test.ts` — against a **real `$metadata` fixture** (see build order):
+  enum property carries `options`; `DocumentLines` is `many: true` with its own keys; a reverse
+  association like `ChartOfAccount.Quotations` is **absent** from `collections`; `CardCode` carries
+  `lookup: {entitySet: "BusinessPartners", valueField: "CardCode"}`; `buildGetPath` emits nested
+  `$expand=X($select=...)`.
 
 ## Build order
 
-1. `parseEdmx` + the three type/zod declarations in lockstep + the unit fixture. Nothing consumes it yet.
+0. **Dump a real `$metadata` from the B1 sandbox to a trimmed fixture** (a document entity, its lines
+   type, one enum, one reverse association, one `ReferentialConstraint`). Every classification rule in
+   §1 is a claim about what B1 actually emits; the fixture is what turns them from assumptions into
+   assertions. Do this before writing parser code.
+1. `parseEdmx` + the three type/zod declarations in lockstep, tested against the fixture. Nothing
+   consumes it yet.
 2. `entities.get` `select`/`expand` + `buildGetPath` + validation. Optional params, so no caller breaks.
 3. `ObjectVariantDefZ` reshape + `seedObjectDef` + the empty-Standard overwrite branch.
 4. `objectSpec.ts` + `b1Lines.ts` + their tests.
