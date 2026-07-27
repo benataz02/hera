@@ -1,15 +1,16 @@
-import { useMemo, useState, type ComponentProps } from "react";
+import { useMemo, useState } from "react";
 import {
-  BusyIndicator, CheckBox, Form, FormGroup, FormItem, Icon, Input, Label, MultiComboBox, MultiComboBoxItem,
-  ObjectStatus, Option, RadioButton, Select, StepInput, SuggestionItem, Text,
+  Bar, BusyIndicator, Button, CheckBox, Form, FormGroup, FormItem, Icon, Input, Label, MessageStrip,
+  MultiComboBox, MultiComboBoxItem, ObjectStatus, Option, RadioButton, Select, StepInput,
+  Text, Title, Token, Tokenizer,
 } from "@ui5/webcomponents-react";
 import {
   propagate, refColumns, refKeyCols,
-  type DomainOption, type Entries, type LookupRef, type ModelDef, type Param, type ResolvedLookups, type ResolvedTable, type Val,
+  type DomainOption, type Entries, type LookupRef, type ModelDef, type ResolvedLookups, type ResolvedTable, type Val,
 } from "@hera/config-engine";
-import { ValueHelpDialog } from "./ValueHelpDialog.tsx";
-import { BatchEditor } from "./BatchEditor.tsx";
-import { clientBaseLookups, resolveEntry } from "./formHelpers.ts";
+import { ValueHelp } from "../ValueHelp.tsx";
+import { clientBaseLookups } from "./formHelpers.ts";
+import { money, paramPrices } from "./costElements.ts";
 
 /** The ref's display columns for one option value, joined — shown next to the option. */
 function extraOf(ref: LookupRef, t: ResolvedTable | undefined, val: Val): string | undefined {
@@ -19,56 +20,6 @@ function extraOf(ref: LookupRef, t: ResolvedTable | undefined, val: Val): string
   if (!row) return undefined;
   const s = refColumns(ref, t.columns).map((c) => String(row[t.columns.indexOf(c)] ?? "")).filter(Boolean).join(" · ");
   return s || undefined;
-}
-
-// Value-help input for a query-sourced param. Local `typed` state lets you filter as you type
-// without committing; on blur/Enter an unknown value is rejected (reverts to the last valid one).
-function QueryValueInput({ p, refDef, dom, value, table, onCommit, disabled }: {
-  p: Param;
-  refDef: LookupRef;
-  dom: DomainOption[];
-  value: Val | undefined;
-  table: ResolvedTable | undefined;
-  onCommit: (v: Val | undefined) => void;
-  disabled?: boolean;
-}) {
-  const [typed, setTyped] = useState<string | null>(null);
-  const [vhOpen, setVhOpen] = useState(false);
-  const key = value === undefined || value === null ? "" : String(value);
-  const shown = typed ?? key;
-  // filter="None" on the Input; we filter here so both key and label are searchable.
-  const q = (typed ?? "").trim().toLowerCase();
-  const items = dom.filter(
-    (o) => !o.eliminatedBy && (!q || String(o.value ?? "").toLowerCase().includes(q) || o.label.toLowerCase().includes(q)),
-  );
-
-  const commit = (raw: string) => {
-    const r = resolveEntry(dom, raw);
-    if (r.kind === "clear") onCommit(undefined);
-    else if (r.kind === "set") onCommit(r.value);
-    // reject: keep the last committed value
-    setTyped(null); // snap the field back to the committed key
-  };
-
-  return (
-    <>
-      <Input showSuggestions filter="None" value={shown} placeholder="Type or pick…" showClearIcon
-        style={{ width: "100%" }} disabled={disabled}
-        icon={<Icon name="value-help" style={{ cursor: "pointer" }} onClick={() => setVhOpen(true)} />}
-        onInput={(e) => setTyped(e.target.value ?? "")}
-        onChange={(e) => commit(e.target.value ?? "")}>
-        {items.map((o, i) => (
-          <SuggestionItem key={i} text={String(o.value ?? "")} additionalText={o.label} />
-        ))}
-      </Input>
-      {vhOpen && table ? (
-        <ValueHelpDialog open headerText={p.label} table={table} valueCol={refKeyCols(refDef, table.columns).valueCol}
-          columns={refColumns(refDef, table.columns)}
-          hiddenValues={new Set(dom.filter((o) => o.eliminatedBy).map((o) => o.value))}
-          onSelect={(nv) => { onCommit(nv); setTyped(null); }} onClose={() => setVhOpen(false)} />
-      ) : null}
-    </>
-  );
 }
 
 // The one form both the builder preview and the wizard render. Fully controlled:
@@ -96,14 +47,13 @@ export function ConsistencyStatus({ model, lookups, entries }: {
 // labelSpan 12 everywhere = labels on top of their fields (natively left-aligned), field takes the full column.
 const FORM_PROPS = { labelSpan: "S12 M12 L12 XL12", layout: "S1 M2 L2 XL2", headerLevel: "H5" } as const;
 
-export function ConfiguratorForm({ model, lookups, entries, onChange, loading, batch, section, aiMarks, disabled }: {
+export function ConfiguratorForm({ model, lookups, entries, onChange, loading, section, aiMarks, disabled }: {
   model: ModelDef;
   lookups?: ResolvedLookups;
   entries: Entries;
   onChange: (next: Entries) => void;
   /** the single lookups fetch is still in flight — table/query fields show a spinner until it lands */
   loading?: boolean;
-  batch?: ComponentProps<typeof BatchEditor>;
   /** render only this section, without its own Form header — the caller shows the title (e.g. an ObjectPageSection) */
   section?: string;
   /** paramKey → evidence tooltip, for values Chati just set — renders an "AI" chip next to the field */
@@ -113,6 +63,11 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
 }) {
   const lk = useMemo(() => lookups ?? clientBaseLookups(model), [lookups, model]);
   const prop = useMemo(() => propagate(model, lk, entries), [model, lk, entries]);
+  // Same source the rail's Costs card reads, so a badge and the card can never disagree.
+  const priceOf = useMemo(
+    () => new Map(paramPrices(model, prop, lk.tables).map((c) => [c.key, c.amount])),
+    [model, prop, lk],
+  );
 
   const set = (key: string, v: Val | undefined) => {
     const next = { ...entries };
@@ -125,6 +80,9 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
     const p = model.parameters.find((x) => x.key === key)!;
     const dom: DomainOption[] = prop.domains[key] ?? [];
     const v = prop.values[key];
+    // readonly, not disabled: a read-only field stays focusable, copyable and screen-reader
+    // announced — and these fields exist precisely to be read.
+    const ro = !!p.readonly;
 
     // Server-backed options (config table / query) arrive with the single lookups fetch; spin
     // just this field until it lands. Manual/range/plain fields resolve client-side and stay usable.
@@ -136,7 +94,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
       return (
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem 1rem" }}>
           {dom.map((o, i) => (
-            <RadioButton key={i} name={`cfg-${key}`} text={o.label} checked={v === o.value}
+            <RadioButton key={i} name={`cfg-${key}`} text={o.label} checked={v === o.value} readonly={ro}
               disabled={disabled || !!o.eliminatedBy}
               // tooltip is a runtime ui5 prop the React typing omits (like Option's disabled).
               {...(o.eliminatedBy ? ({ tooltip: `Unavailable: ${o.eliminatedBy}` } as Record<string, unknown>) : {})}
@@ -145,21 +103,21 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
         </div>
       );
 
-    if (p.ui === "checkbox" || (p.type === "boolean" && p.ui !== "select"))
+    if (p.ui === "checkbox" || (p.type === "boolean" && p.ui !== "select")) {
+      // a checkbox can only be toggled if flipping it isn't eliminated — that reason is also the tooltip.
+      const blocked = dom.find((o) => o.value === (v !== true))?.eliminatedBy;
       return (
-        <CheckBox checked={v === true}
-          disabled={disabled || !!dom.find((o) => o.value === (v !== true))?.eliminatedBy}
-          {...(() => {
-            const t = dom.find((o) => !!o.eliminatedBy)?.eliminatedBy;
-            return t ? ({ tooltip: t } as Record<string, unknown>) : {};
-          })()}
+        <CheckBox checked={v === true} readonly={ro} disabled={disabled || !!blocked}
+          // tooltip is a runtime ui5 prop the React typing omits.
+          {...(blocked ? ({ tooltip: `Unavailable: ${blocked}` } as Record<string, unknown>) : {})}
           onChange={(e) => set(key, e.target.checked)} />
       );
+    }
 
     if (p.ui === "multicombo")
       return (
         // MultiComboBoxItem has no disabled prop -> eliminated options are filtered out.
-        <MultiComboBox style={{ width: "100%" }} disabled={disabled}
+        <MultiComboBox style={{ width: "100%" }} disabled={disabled} readonly={ro}
           onSelectionChange={(e) => {
             const texts = e.detail.items.map((i) => (i as HTMLElement).getAttribute("text")!);
             set(key, texts.length ? texts : undefined);
@@ -174,17 +132,20 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
       const r = p.domain?.kind === "range" ? p.domain : undefined;
       return (
         <StepInput value={typeof v === "number" ? v : undefined} min={r?.min} max={r?.max} step={r?.step ?? 1}
-          style={{ width: "100%" }} disabled={disabled}
+          style={{ width: "100%" }} disabled={disabled} readonly={ro}
           onChange={(e) => set(key, e.target.value ?? undefined)} />
       );
     }
 
     if (p.domain?.kind === "options" && p.domain.ref.source === "query") {
-      // ponytail: every option is rendered as a suggestion child and filtered natively;
+      // ponytail: every option is rendered as a suggestion child and filtered locally;
       // cap or virtualize if a query ever returns thousands of rows.
+      const ref: LookupRef = p.domain.ref;
+      const tbl = lk.tables[ref.table];
       return (
-        <QueryValueInput p={p} refDef={p.domain.ref} dom={dom} value={v} disabled={disabled}
-          table={lk.tables[p.domain.ref.table]} onCommit={(nv) => set(key, nv)} />
+        <ValueHelp options={dom} value={v} onChange={(nv) => set(key, nv)} headerText={p.label} disabled={disabled} readonly={ro}
+          table={tbl} valueCol={tbl && refKeyCols(ref, tbl.columns).valueCol}
+          columns={tbl && refColumns(ref, tbl.columns)} />
       );
     }
 
@@ -192,7 +153,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
       const tref = p.domain?.kind === "options" && p.domain.ref.source === "table" ? p.domain.ref : undefined;
       const tbl = tref ? lk.tables[tref.table] : undefined;
       return (
-        <Select value={v === undefined ? "" : JSON.stringify(v)} style={{ width: "100%" }} disabled={disabled}
+        <Select value={v === undefined ? "" : JSON.stringify(v)} style={{ width: "100%" }} disabled={disabled} readonly={ro}
           onChange={(e) => {
             const j = (e.detail.selectedOption as HTMLElement).dataset.j;
             set(key, j === undefined || j === "" ? undefined : (JSON.parse(j) as Val));
@@ -213,7 +174,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
 
     return (
       <Input type={p.type === "number" ? "Number" : "Text"} value={v === undefined || v === null ? "" : String(v)}
-        style={{ width: "100%" }} disabled={disabled}
+        style={{ width: "100%" }} disabled={disabled} readonly={ro}
         onChange={(e) => {
           const raw = e.target.value ?? "";
           set(key, raw === "" ? undefined : p.type === "number" ? Number(raw) : raw);
@@ -221,11 +182,15 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
     );
   };
 
-  const sections = section ? model.structure.sections.filter((s) => s.key === section) : model.structure.sections;
-  const lastKey = model.structure.sections.at(-1)?.key;
+  // One Form per model section. UI5's Form is the layout container and supports exactly one level
+  // of grouping (Form > FormGroup), so section→Form / group→FormGroup is the only mapping that keeps
+  // both titles; a single Form for everything would flatten sections away. In the ObjectPage each
+  // section already gets its own ObjectPageSubSection (which supplies the title and the anchor), so
+  // headerText is only needed when we stack the whole model ourselves (builder preview, portal wizard).
+  const shown = model.structure.sections.filter((s) => !section || s.key === section);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-      {sections.map((s) => (
+      {shown.map((s) => (
         <Form key={s.key} headerText={section ? undefined : s.title} {...FORM_PROPS}>
           {s.groups.map((g) => (
             <FormGroup key={g.key} headerText={g.title}>
@@ -239,18 +204,26 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
                 const showEliminatedNote = p.ui === "multicombo" && eliminated > 0;
                 return (
                   <FormItem key={k} labelContent={
-                    <Label>
-                      {p.label + (p.unit ? ` (${p.unit})` : "")}
-                      {p.help ? <Icon name="message-information" accessibleName={p.help} title={p.help}
-                        style={{ marginInlineStart: "0.375rem", cursor: "help", color: "var(--sapContent_IconColor)" }} /> : null}
-                    </Label>
+                    // labelSpan is 12, so the label owns a full-width row above its control — its
+                    // right end IS the input's top-right corner, which is where the price belongs.
+                    <div style={{ display: "flex", alignItems: "baseline", gap: "0.5rem", width: "100%" }}>
+                      <Label>
+                        {p.label + (p.unit ? ` (${p.unit})` : "")}
+                        {p.help ? <Icon name="message-information" accessibleName={p.help} title={p.help}
+                          style={{ marginInlineStart: "0.375rem", cursor: "help", color: "var(--sapContent_IconColor)" }} /> : null}
+                        {aiMarks?.has(k) ? <Icon name="ai" accessibleName={aiMarks.get(k)} title={aiMarks.get(k)}
+                          style={{ marginInlineStart: "0.375rem", color: "var(--sapInformativeColor)" }} /> : null}
+                      </Label>
+                      {priceOf.has(k) ? (
+                        <ObjectStatus style={{ marginInlineStart: "auto" }}>
+                          {money(priceOf.get(k)!, model.pricing.currency)}
+                        </ObjectStatus>
+                      ) : null}
+                    </div>
                   }>
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.125rem", width: "100%" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", width: "100%" }}>
                         {control(k)}
-                        {aiMarks?.has(k) ? (
-                          <ObjectStatus state="Information" icon="ai" title={aiMarks.get(k)}>AI</ObjectStatus>
-                        ) : null}
                         {prop.defaulted.has(k) ? <ObjectStatus state="Information">auto</ObjectStatus> : null}
                       </div>
                       {showEliminatedNote ? (
@@ -264,15 +237,69 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, b
               })}
             </FormGroup>
           ))}
-          {batch && s.key === lastKey ? (
-            <FormGroup headerText="Batch quantities">
-              <FormItem labelContent={<Label>Quantities</Label>}>
-                <BatchEditor {...batch} />
-              </FormItem>
-            </FormGroup>
-          ) : null}
         </Form>
       ))}
+    </div>
+  );
+}
+
+// The batch-quantity list editor shared by the internal Configure step and the portal wizard.
+export function BatchEditor({ batches, onChange, disabled }: {
+  batches: number[];
+  onChange: (next: number[]) => void;
+  disabled?: boolean;
+}) {
+  const [qty, setQty] = useState(1);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", width: "100%" }}>
+      <Tokenizer accessibleName="Batch quantities" disabled={disabled}
+        onTokenDelete={(e) => {
+          const gone = new Set(e.detail.tokens.map((t) => Number((t as HTMLElement).getAttribute("text"))));
+          onChange(batches.filter((b) => !gone.has(b)));
+        }}>
+        {batches.map((b) => <Token key={b} text={String(b)} />)}
+      </Tokenizer>
+      {batches.length === 0 ? <Text>Add at least one quantity to calculate.</Text> : null}
+      <div style={{ display: "flex", alignItems: "flex-end", gap: "0.5rem" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+          <Label for="new-batch-qty">Quantity</Label>
+          <StepInput id="new-batch-qty" min={1} value={qty} disabled={disabled} onChange={(e) => setQty(e.target.value ?? 1)} />
+        </div>
+        <Button icon="add" disabled={disabled}
+          onClick={() => { if (!batches.includes(qty)) onChange([...batches, qty].sort((a, b) => a - b)); }}>
+          Add quantity
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// Portal wizard "Quantities" step: BatchEditor plus the step's own copy and Calculate footer.
+// Each quantity becomes a column in the candidates matrix; setup cost is amortized by the engine.
+export function StepBatches({ batches, onChange, onCalculate, running, error, staleRun }: {
+  batches: number[];
+  onChange: (next: number[]) => void;
+  onCalculate: () => void;
+  running: boolean;
+  error: string | null;
+  staleRun: boolean;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+      <Title level="H5">Batch quantities</Title>
+      <Text>Each quantity gets its own price column — setup cost is spread across the batch.</Text>
+      {staleRun ? (
+        <MessageStrip design="Critical" hideCloseButton>
+          Inputs changed since the last calculation — calculate again to refresh candidates.
+        </MessageStrip>
+      ) : null}
+      {error ? <MessageStrip design="Negative" hideCloseButton>{error}</MessageStrip> : null}
+      <BatchEditor batches={batches} onChange={onChange} />
+      <Bar design="FloatingFooter" endContent={
+        <Button design="Emphasized" disabled={batches.length === 0 || running} onClick={onCalculate}>
+          {running ? "Calculating…" : "Calculate"}
+        </Button>
+      } />
     </div>
   );
 }

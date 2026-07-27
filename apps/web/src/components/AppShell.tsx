@@ -4,7 +4,7 @@ import {
   Avatar,
   Breadcrumbs, BreadcrumbsItem,
   Button,
-  NavigationLayout, Search, ShellBar, SideNavigation, SideNavigationItem,
+  NavigationLayout, ShellBar, SideNavigation, SideNavigationItem,
   ToggleButton,
   UserMenu,
   UserMenuAccount,
@@ -13,7 +13,8 @@ import {
 import type { SideNavigationPropTypes, NavigationLayoutDomRef, NavigationLayoutPropTypes } from "@ui5/webcomponents-react";
 import { authClient } from "../auth-client.ts";
 import { orpc, client } from "../orpc.ts";
-import { useRef, useState, useEffect } from "react";
+import { GlobalSearch, type SearchEntry } from "./GlobalSearch.tsx";
+import { useRef, useState, useEffect, useMemo } from "react";
 import { getTheme, setTheme } from '@ui5/webcomponents-base/dist/config/Theme.js';
 
 
@@ -70,6 +71,30 @@ export function AppShell() {
     { id: 'sap_fiori_3_hcw', labelKey: 'High Contrast White' },
   ] as const;
 
+  // What the shellbar search can reach besides objects: the same targets as the side nav, plus the
+  // appearance settings that otherwise only live in the user menu.
+  const searchEntries = useMemo<SearchEntry[]>(() => {
+    const page = (text: string, to: string, icon: string) => ({ group: "Menus", text, icon, run: () => navigate({ to }) });
+    return [
+      page("Home", "/", "home"),
+      ...enabled.map((ent) => ({
+        group: "Menus", text: ent.name, icon: "list", description: "SAP B1 entity",
+        run: () => navigate({ to: "/$entity", params: { entity: ent.name } }),
+      })),
+      page("Configurations", "/configs", "sales-quote"),
+      ...(isAdmin
+        ? [page("Configurator models", "/models", "tree"), page("Settings", "/settings", "action-settings")]
+        : []),
+      ...THEMES.map((t) => ({
+        group: "Settings", text: t.labelKey, description: "Theme", icon: "palette",
+        run: () => setThemeState(t.id),
+      })),
+      { group: "Settings", text: "Compact", description: "Density", icon: "resize-horizontal", run: () => setDensity('compact') },
+      { group: "Settings", text: "Cozy", description: "Density", icon: "resize-horizontal", run: () => setDensity('cozy') },
+    ];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, isAdmin, navigate]);
+
   type Density = 'cozy' | 'compact';
 
   function getDensity(): Density {
@@ -124,9 +149,7 @@ export function AppShell() {
             primaryTitle="HERA"
             logo={<img alt="SAP Logo" src="https://ui5.github.io/webcomponents/images/sap-logo-svg.svg" />}
             onLogoClick={() => navigate({ to: "/" })}
-            searchField={isClient ? undefined : <Search  placeholder="Search" showClearIcon />}
-            showSearchField={!isClient}
-            hideSearchButton
+            content={isClient ? undefined : <GlobalSearch entries={searchEntries} isAdmin={isAdmin} />}
             profile={<Avatar id="user-menu-opener" initials='BA' />}
             onProfileClick={() => setUserMenuOpen((open) => !open)}
             showNotifications

@@ -47,6 +47,9 @@ export const ParamZ = z.object({
   defaultExpr: z.string().optional(),
   visibleWhen: z.string().optional(),
   requiredWhen: z.string().optional(),
+  /** informational per-unit price shown at the field's top-right; never enters the calculated price */
+  priceExpr: z.string().optional(),
+  readonly: z.boolean().optional(),
   unit: z.string().optional(),
   help: z.string().optional(),
   extractionHint: z.string().optional(),
@@ -125,7 +128,9 @@ export const ModelDefZ = z.object({
       display: z.array(z.string()),
     })
     .optional(),
-  pricing: z.object({ priceExpr: z.string(), quoteItemCode: z.string().min(1) }),
+  // currency is optional, not .default("EUR"): a zod default lands in the inferred type as required
+  // and would force the key into every ModelDef literal. One `?? "EUR"` in money() covers it.
+  pricing: z.object({ priceExpr: z.string(), quoteItemCode: z.string().min(1), currency: z.string().optional() }),
   batchDefaults: z.array(z.number().int().positive()),
   extraction: z.object({ context: z.string().optional() }).optional(),
 });

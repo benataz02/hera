@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toORPCError } from "@orpc/client";
 import {
-  BusyIndicator, Button, Card, CardHeader, FileUploader, MessageStrip, ObjectStatus, Option, Select, Tag, Text, Title,
+  BusyIndicator, Button, Card, CardHeader, FileUploader, Icon, MessageStrip, ObjectStatus, Option, Select, Tag, Text, Title,
 } from "@ui5/webcomponents-react";
 import { PromptInput } from "@ui5/webcomponents-ai-react";
 import type { Entries, ModelDef, ResolvedLookups } from "@hera/config-engine";
@@ -35,9 +35,13 @@ const winStyle = (expanded: boolean): CSSProperties => ({
   background: "var(--sapBackgroundColor)",
   ...(expanded ? { inset: "2rem" } : { right: "1rem", bottom: "1rem", width: "26rem", height: "34rem" }),
 });
+// Joule palette. The header is the flat top of the same gradient the welcome hero continues, so
+// the two read as one purple block when the conversation is empty.
+const JOULE_TOP = "#6b21d8";
+const JOULE_HERO = `linear-gradient(150deg, ${JOULE_TOP} 0%, #8d1fd2 55%, #b826c6 100%)`;
 const headerStyle: CSSProperties = {
   display: "flex", alignItems: "center", gap: "0.15rem", padding: "0.5rem 0.6rem", flex: "0 0 auto",
-  background: "linear-gradient(135deg, var(--sapBrandColor), #7a35c4)",
+  background: JOULE_TOP,
 };
 const inputRowStyle: CSSProperties = {
   display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 0.6rem",
@@ -96,47 +100,58 @@ const RESULT_TITLES: Record<string, string> = {
   searchSimilar: "Similar configurations", getDocHistory: "Document history", previewCandidates: "Preview",
 };
 
+/** One line item in a document-style card: bold title + key figure on the right, then a meta line
+ * and a muted note beneath — the itemised layout the brief's reference screenshot uses. */
+type DocLine = { key: string; title: string; keyFigure?: string; meta?: string; note?: string };
+
 /** Defensive: `result.data` is `unknown` on the wire (events.ts). Reads each known tool's shape
  * (tools.ts) without trusting it — an unrecognized tool or malformed payload renders an empty card
  * rather than throwing. */
-function resultRows(tool: string, data: unknown): { key: string; label: string; keyFigure?: string }[] {
+function resultRows(tool: string, data: unknown): DocLine[] {
   if (!isRecord(data)) return [];
   if (tool === "searchSimilar") {
     return asArray(data.rows).filter(isRecord).map((r) => {
-      const display = isRecord(r.display) ? r.display : {};
-      const label = Object.entries(display).map(([k, v]) => `${k}: ${formatRaw(v)}`).join(" · ") || String(r.rowId ?? "");
-      return { key: String(r.rowId ?? ""), label, keyFigure: typeof r.score === "number" ? `${Math.round(r.score * 100)}% match` : undefined };
+      // First display field is the item's name; the rest become the descriptive line under it.
+      const [first, ...rest] = Object.entries(isRecord(r.display) ? r.display : {});
+      return {
+        key: String(r.rowId ?? ""),
+        title: first ? formatRaw(first[1]) : String(r.rowId ?? ""),
+        note: rest.map(([k, v]) => `${k}: ${formatRaw(v)}`).join(" · ") || undefined,
+        keyFigure: typeof r.score === "number" ? `${Math.round(r.score * 100)}% match` : undefined,
+      };
     });
   }
   if (tool === "getDocHistory") {
-    return asArray(data.rows).filter(isRecord).map((r) => {
-      const kind = r.kind === "order" ? "Order" : "Quotation";
-      const date = typeof r.date === "string" ? r.date.slice(0, 10) : "";
-      const qty = r.qty != null ? `qty ${String(r.qty)}` : null;
-      const price = r.price != null ? String(r.price) : null;
-      return { key: String(r.rowId ?? ""), label: `${kind} ${String(r.docNum ?? "")} · ${date}`, keyFigure: [qty, price].filter(Boolean).join(" · ") || undefined };
-    });
+    return asArray(data.rows).filter(isRecord).map((r) => ({
+      key: String(r.rowId ?? ""),
+      title: `${r.kind === "order" ? "Order" : "Quotation"} ${String(r.docNum ?? "")}`.trim(),
+      meta: typeof r.date === "string" ? r.date.slice(0, 10) : undefined,
+      note: r.qty != null ? `Quantity ${String(r.qty)}` : undefined,
+      keyFigure: r.price != null ? String(r.price) : undefined,
+    }));
   }
   if (tool === "previewCandidates") {
     return asArray(data.top).filter(isRecord).map((r) => ({
-      key: String(r.previewId ?? ""), label: String(r.label ?? ""), keyFigure: r.keyFigure != null ? String(r.keyFigure) : undefined,
+      key: String(r.previewId ?? ""), title: String(r.label ?? ""),
+      keyFigure: r.keyFigure != null ? String(r.keyFigure) : undefined,
     }));
   }
   return [];
 }
 
-function resultFooter(tool: string, data: unknown): string | undefined {
+/** The card's bottom "Total"-style row: a label and a value, ruled off from the line items. */
+function resultFooter(tool: string, data: unknown): { label: string; value: string } | undefined {
   if (!isRecord(data)) return undefined;
   if (tool === "getDocHistory") {
     const total = typeof data.total === "number" ? data.total : undefined;
     if (total === undefined) return undefined;
-    return `${asArray(data.rows).length} of ${total}${data.truncated ? " (more available)" : ""}`;
+    return { label: "Documents", value: `${asArray(data.rows).length} of ${total}${data.truncated ? " · more available" : ""}` };
   }
   if (tool === "previewCandidates") {
     const count = typeof data.candidateCount === "number" ? data.candidateCount : undefined;
-    return count === undefined ? undefined : `${asArray(data.top).length} of ${count}`;
+    return count === undefined ? undefined : { label: "Candidates", value: `${asArray(data.top).length} of ${count}` };
   }
-  if (tool === "searchSimilar") return `${asArray(data.rows).length} found`;
+  if (tool === "searchSimilar") return { label: "Matches", value: String(asArray(data.rows).length) };
   return undefined;
 }
 
@@ -453,20 +468,24 @@ export function AssistantWindow({
 
 function Welcome({ firstName, onChip }: { firstName: string; onChip: (text: string) => void }) {
   return (
-    <div style={{
-      flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column",
-      alignItems: "center", justifyContent: "center", gap: "1rem", padding: "1.5rem", textAlign: "center",
-    }}>
-      <Title level="H4">Hello {firstName}</Title>
-      <Card style={{ width: "100%" }}>
-        <div style={{ padding: "0.85rem 1rem" }}>
-          <Text>I'm Chati — talk to me naturally, e.g. "What's left to fill?"</Text>
+    <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+      <div style={{ background: JOULE_HERO, padding: "1.25rem 1.25rem 2rem", flex: "0 0 auto" }}>
+        {/* "ai" is the SAP-icons Joule mark; main.tsx registers AllIcons, so no per-icon import. */}
+        <div style={{ display: "flex", justifyContent: "center", padding: "0.75rem 0 1.5rem" }}>
+          <Icon name="da-2" style={{ width: "7rem", height: "5rem", color: "#fff" }} />
         </div>
-      </Card>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "center" }}>
-        {STARTER_CHIPS.map((c) => (
-          <Button key={c} design="Transparent" onClick={() => onChip(c)}>{c}</Button>
-        ))}
+        <Text style={{ color: "rgba(255,255,255,0.85)", display: "block" }}>Hello {firstName},</Text>
+        <Title level="H1" style={{ color: "#fff" }}>How can I help you?</Title>
+      </div>
+      <div style={{ padding: "0.75rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        <div style={{
+          border: "1px solid var(--sapList_BorderColor)", borderRadius: "0.5rem", padding: "0.5rem 0.75rem",
+        }}>
+          <Text style={{ color: "var(--sapContent_LabelColor)" }}>Get started</Text>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+          {STARTER_CHIPS.map((c) => <Button key={c} onClick={() => onChip(c)}>{c}</Button>)}
+        </div>
       </div>
     </div>
   );
@@ -615,20 +634,41 @@ function ConversationsList({ projectId, onPick, onNew, busy }: {
 
 // ---- Info cards ----
 
+function DocLines({ rows, footer }: { rows: DocLine[]; footer?: { label: string; value: string } }) {
+  return (
+    <div style={{ padding: "0 1rem 0.75rem" }}>
+      {rows.length === 0 ? <Text>No results.</Text> : rows.map((r, i) => (
+        <div key={r.key || i} style={{
+          padding: "0.6rem 0",
+          borderTop: i === 0 ? undefined : "1px solid var(--sapList_BorderColor)",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <Text style={{ flex: 1, fontWeight: "bold" }}>{r.title}</Text>
+            {r.keyFigure ? (
+              <Text style={{ fontWeight: "bold", color: "var(--sapInformativeTextColor)" }}>{r.keyFigure}</Text>
+            ) : null}
+          </div>
+          {r.meta ? <Text>{r.meta}</Text> : null}
+          {r.note ? <Text style={{ color: "var(--sapContent_LabelColor)" }}>{r.note}</Text> : null}
+        </div>
+      ))}
+      {footer ? (
+        <div style={{
+          display: "flex", justifyContent: "space-between", gap: "0.5rem",
+          borderTop: "2px solid var(--sapList_BorderColor)", paddingTop: "0.55rem", marginTop: "0.15rem",
+        }}>
+          <Text style={{ fontWeight: "bold" }}>{footer.label}</Text>
+          <Text style={{ fontWeight: "bold" }}>{footer.value}</Text>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ResultCard({ tool, data }: { tool: string; data: unknown }) {
-  const rows = resultRows(tool, data);
-  const footer = resultFooter(tool, data);
   return (
     <Card header={<CardHeader titleText={RESULT_TITLES[tool] ?? tool} />}>
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem", padding: "0.5rem 1rem" }}>
-        {rows.length === 0 ? <Text>No results.</Text> : rows.map((r, i) => (
-          <div key={r.key || i} style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
-            <Text>{r.label}</Text>
-            {r.keyFigure ? <Text style={{ opacity: 0.7 }}>{r.keyFigure}</Text> : null}
-          </div>
-        ))}
-        {footer ? <Text style={{ fontSize: "0.7rem", opacity: 0.6, marginTop: "0.2rem" }}>{footer}</Text> : null}
-      </div>
+      <DocLines rows={resultRows(tool, data)} footer={resultFooter(tool, data)} />
     </Card>
   );
 }
@@ -676,23 +716,16 @@ function RunSummaryCard({ candidates, onOpen }: {
 }) {
   // `top` is `unknown[]` on ChatMsg (assistantState.ts doesn't narrow it) — read defensively,
   // same approach as resultRows.
-  const top = candidates.top.filter(isRecord).map((t) => ({
-    candidateId: String(t.candidateId ?? ""), label: String(t.label ?? ""),
+  const top: DocLine[] = candidates.top.filter(isRecord).map((t) => ({
+    key: String(t.candidateId ?? ""), title: String(t.label ?? ""),
     keyFigure: t.keyFigure != null ? String(t.keyFigure) : undefined,
   }));
   return (
     <Card header={<CardHeader titleText="Candidates calculated"
       subtitleText={`${candidates.candidateCount} candidate${candidates.candidateCount === 1 ? "" : "s"}`} />}>
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem", padding: "0.5rem 1rem" }}>
-        {top.map((t) => (
-          <div key={t.candidateId} style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
-            <Text>{t.label}</Text>
-            {t.keyFigure ? <Text style={{ opacity: 0.7 }}>{t.keyFigure}</Text> : null}
-          </div>
-        ))}
-        <Button design="Transparent" onClick={onOpen} style={{ alignSelf: "flex-start", marginTop: "0.25rem" }}>
-          Open Candidates
-        </Button>
+      <DocLines rows={top} footer={{ label: "Candidates", value: String(candidates.candidateCount) }} />
+      <div style={{ padding: "0 1rem 0.75rem" }}>
+        <Button design="Transparent" onClick={onOpen}>Open Candidates</Button>
       </div>
     </Card>
   );

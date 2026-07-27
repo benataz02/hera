@@ -1,9 +1,8 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Bar, Button, Dialog, IllustratedMessage, Input, Label, MessageStrip, ObjectStatus, Option, Select,
-  Text, Toolbar, ToolbarButton,
+  IllustratedMessage, ObjectStatus, Text, Toolbar, ToolbarButton,
 } from "@ui5/webcomponents-react";
 import "@ui5/webcomponents-fiori/dist/illustrations/NoData.js";
 import { orpc } from "../../orpc.ts";
@@ -62,9 +61,8 @@ export function ConfigsPage() {
   );
   const rows = useMemo(() => applySpec(flat, listSpec.spec, COLUMNS), [flat, listSpec.spec]);
 
-  const [newOpen, setNewOpen] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [modelId, setModelId] = useState("");
+  // No create dialog: a new configuration is an empty draft on the first model, and name / model /
+  // business partner are filled in on its own General section.
   const create = useMutation(
     orpc.configs.create.mutationOptions({
       onSuccess: (r) => {
@@ -94,61 +92,32 @@ export function ConfigsPage() {
     [remove],
   );
 
-  return (
-    <>
-      <ListReport
-        listSpec={listSpec}
-        title="Configurations"
-        columns={COLUMNS}
-        keyField="id"
-        rows={rows}
-        total={rows.length}
-        loading={configs.isFetching}
-        error={configs.error ?? remove.error}
-        onRowClick={(row) => navigate({ to: "/configs/$id", params: { id: String(row.id) } })}
-        onDelete={onDelete}
-        noData={noData}
-        actions={
-          <Toolbar design="Transparent">
-            <ToolbarButton
-              design="Emphasized"
-              disabled={!models.data?.length}
-              tooltip={models.data?.length ? undefined : "No configurator models yet — an admin creates those first."}
-              onClick={() => { setNewName(""); setModelId(models.data?.[0]?.id ?? ""); setNewOpen(true); }}
-              text="New configuration"
-            />
-          </Toolbar>
-        }
-      />
+  const first = models.data?.[0]?.id;
 
-      <Dialog
-        open={newOpen}
-        headerText="New configuration"
-        onClose={() => setNewOpen(false)}
-        footer={
-          <Bar design="Footer" endContent={
-            <>
-              <Button design="Emphasized" disabled={!newName.trim() || !modelId || create.isPending}
-                onClick={() => create.mutate({ modelId, name: newName.trim() })}>
-                {create.isPending ? "Creating…" : "Create"}
-              </Button>
-              <Button onClick={() => setNewOpen(false)}>Cancel</Button>
-            </>
-          } />
-        }
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.5rem 0" }}>
-          {create.error ? <MessageStrip design="Negative" hideCloseButton>{create.error.message}</MessageStrip> : null}
-          <Label for="new-config-name" required>Name</Label>
-          <Input id="new-config-name" value={newName} onInput={(e) => setNewName(e.target.value)} />
-          <Label required>Model</Label>
-          <Select value={modelId} onChange={(e) => setModelId(e.detail.selectedOption.value ?? "")}>
-            {(models.data ?? []).map((m) => (
-              <Option key={m.id} value={m.id}>{m.name}</Option>
-            ))}
-          </Select>
-        </div>
-      </Dialog>
-    </>
+  return (
+    <ListReport
+      listSpec={listSpec}
+      title="Configurations"
+      columns={COLUMNS}
+      keyField="id"
+      rows={rows}
+      total={rows.length}
+      loading={configs.isFetching}
+      error={configs.error ?? remove.error ?? create.error}
+      onRowClick={(row) => navigate({ to: "/configs/$id", params: { id: String(row.id) } })}
+      onDelete={onDelete}
+      noData={noData}
+      actions={
+        <Toolbar design="Transparent">
+          <ToolbarButton
+            design="Emphasized"
+            disabled={!first || create.isPending}
+            tooltip={first ? undefined : "No configurator models yet — an admin creates those first."}
+            onClick={() => { if (first) create.mutate({ modelId: first }); }}
+            text={create.isPending ? "Creating…" : "New configuration"}
+          />
+        </Toolbar>
+      }
+    />
   );
 }

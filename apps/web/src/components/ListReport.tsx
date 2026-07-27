@@ -5,7 +5,7 @@ import {
   AnalyticalTable, Bar, Title, Input, Select, Option, DatePicker,
   Button, Dialog, CheckBox,
   Table, TableHeaderRow, TableHeaderCell, TableRow, TableCell,
-  MessageStrip, Card,
+  MessageStrip,
 } from "@ui5/webcomponents-react";
 import type { AnalyticalTableInstance, UI5WCSlotsNode } from "@ui5/webcomponents-react";
 import {
@@ -43,6 +43,13 @@ const NO_SELECTION: { ids: Record<string, boolean>; rows: Row[] } = { ids: {}, r
 // Select matches its `value` against `option.getAttribute("value") || option.textContent`, so an
 // empty value silently matches on the label instead. The "no filter" entry needs a real sentinel.
 const NO_FILTER = "__none__";
+
+const tableStyle: CSSProperties = {
+  maxHeight: "100%",
+  boxSizing: "border-box",
+  overflow: "hidden",
+  borderRadius: "var(--sapElement_BorderCornerRadius)",
+};
 
 // The one list-report floorplan: DynamicPage + VariantManagement + FilterBar over an AnalyticalTable.
 // A saved view (variant) IS the query — select/filter/orderby/search are executed by the caller
@@ -237,7 +244,7 @@ export function ListReport({
       );
     } else if (isDate) {
       // ISO so the server-side OData $filter literal is valid (B1 dates are unquoted ISO).
-      control = <DatePicker formatPattern="yyyy-MM-dd" value={cond ? String(cond.value) : ""} onChange={(e) => setCond(c.name, "eq", e.detail.value)} />;
+      control = <DatePicker displayFormat="yyyy-MM-dd" value={cond ? String(cond.value) : ""} onChange={(e) => setCond(c.name, "eq", e.detail.value)} />;
     } else {
       control = (
         <Input
@@ -307,12 +314,22 @@ export function ListReport({
         </DynamicPageHeader>
       }
     >
-      {error ? <MessageStrip design="Negative" hideCloseButton style={{ marginBottom: "0.5rem" }}>{error.message}</MessageStrip> : null}
-      <Card style={{ height: "100%", marginBottom: "1rem" }} onPointerUp={onColumnResizeEnd}>
+      {/* Flex column so the table gets exactly the leftover height and the page never scrolls.
+          DynamicPage's content padding is `1rem 1rem 0`, so the bottom gap is ours to add — as
+          padding here, not a margin below the table, which would overflow the 100% again. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", height: "100%", paddingBottom: "1rem", boxSizing: "border-box" }}>
+        {error ? <MessageStrip design="Negative" hideCloseButton>{error.message}</MessageStrip> : null}
+        {/* Plain div, not a Card: AutoWithEmptyRows measures this element and the table ends up a
+            whole number of rows short of it, so the frame goes on the table itself — otherwise the
+            rounded bottom floats below the last row. This box only supplies the height. */}
+        <div style={{ flex: 1, minHeight: 0 }} onPointerUp={onColumnResizeEnd}>
         <AnalyticalTable
           columns={columns}
           data={rows}
           reactTableOptions={reactTableOptions}
+          // What Card gave us: --_ui5_card_border + rounded corners, clipped so the header/last row
+          // don't square them off. maxHeight absorbs the 2px the border adds to the measured fit.
+          style={tableStyle}
           extension={countBar}
           loading={loading}
           minRows={1}
@@ -330,7 +347,12 @@ export function ListReport({
             // rowsById carries the originals, so bulk actions never re-derive ids from the DOM.
             setSelected({ ids, rows: Object.keys(ids).filter((k) => ids[k]).map((k) => byId[k]?.original as Row).filter(Boolean) });
           }}
-          onRowClick={(e) => onRowClick(e.detail.row.original as Row)}
+          // UI5 only suppresses onRowClick when the checkbox itself is hit; the padding around it
+          // is the cell div, which still navigates. Walk up to the cell instead.
+          onRowClick={(e) => {
+            if ((e.target as HTMLElement | null)?.closest?.('[data-selection-cell="true"]')) return;
+            onRowClick(e.detail.row.original as Row);
+          }}
           // Sort routes to the caller's query, not client-side (manualSortBy). Single-column for v1.
           // ponytail: multi-sort -> push each into orderby instead of replacing.
           onSort={(e) => {
@@ -346,8 +368,9 @@ export function ListReport({
           selectionBehavior="Row"
           selectionMode="Multiple"
           sortable
-        />
-      </Card>
+          />
+        </div>
+      </div>
       <Dialog
         open={colsOpen}
         onClose={closeColumns}

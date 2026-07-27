@@ -276,7 +276,9 @@ export const configsRouter = {
   }),
 
   create: userProcedure
-    .input(z.object({ modelId: z.uuid(), name: z.string().min(1) }))
+    // No create dialog on the client: a new configuration is an empty draft, and name / model /
+    // customer are filled in on its General section (configs.update).
+    .input(z.object({ modelId: z.uuid(), name: z.string().min(1).default("Untitled configuration") }))
     .handler(async ({ input, context }) => {
       const model = await loadModel(context.tenantId, input.modelId);
       const [ins] = await db
@@ -294,6 +296,7 @@ export const configsRouter = {
       z.object({
         id: z.uuid(),
         name: z.string().min(1).optional(),
+        modelId: z.uuid().optional(),
         customer: z.object({ cardCode: z.string(), cardName: z.string() }).nullable().optional(),
         entries: EntriesZ.optional(),
         batches: z.array(z.number().int().min(1)).optional(),
@@ -304,6 +307,23 @@ export const configsRouter = {
       const fields: Partial<typeof configProject.$inferInsert> = { ...rest, updatedAt: new Date() };
       // Changing what gets computed invalidates a previous run's "calculated" claim.
       if (input.entries !== undefined || input.batches !== undefined) fields.status = "draft";
+      // Switching the model invalidates every entry (a param key only means something inside its
+      // own model), so entries/batches start over. Only on an actual change — re-sending the same
+      // modelId must not wipe a configuration. loadModel also proves the model is this tenant's.
+      if (input.modelId !== undefined) {
+        const [cur] = await db
+          .select({ modelId: configProject.modelId })
+          .from(configProject)
+          .where(and(eq(configProject.id, id), eq(configProject.tenantId, context.tenantId)))
+          .limit(1);
+        if (!cur) throw new ORPCError("NOT_FOUND");
+        if (cur.modelId !== input.modelId) {
+          const model = await loadModel(context.tenantId, input.modelId);
+          fields.entries = {};
+          fields.batches = model.definition.batchDefaults;
+          fields.status = "draft";
+        }
+      }
       const updated = await db
         .update(configProject)
         .set(fields)

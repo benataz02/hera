@@ -49,6 +49,11 @@ export function SettingsTab({ draft, update, issues, portalMeta, setPortalMeta }
               valueState={draft.pricing.quoteItemCode ? "None" : "Negative"}
               onInput={(e) => update((d) => ({ ...d, pricing: { ...d.pricing, quoteItemCode: e.target.value } }))} />
           </FormItem>
+          {/* free text, because B1 currency codes are free text; blank = EUR (see money()) */}
+          <FormItem labelContent={<Label>Currency</Label>}>
+            <Input value={draft.pricing.currency ?? ""} placeholder="EUR"
+              onInput={(e) => update((d) => ({ ...d, pricing: { ...d.pricing, currency: e.target.value || undefined } }))} />
+          </FormItem>
         </FormGroup>
         <FormGroup headerText="Client portal">
           <FormItem labelContent={<Label>Available in portal</Label>}>

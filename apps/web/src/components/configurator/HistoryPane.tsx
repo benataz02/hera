@@ -1,34 +1,14 @@
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import {
-  BusyIndicator, Button, Card, CardHeader, MessageStrip, Tab, TabContainer, Table, TableCell, TableHeaderCell,
+  BusyIndicator, Button, Card, CardHeader, MessageStrip, Table, TableCell, TableHeaderCell,
   TableHeaderRow, TableRow, Tag, Text, Toolbar, ToolbarButton, ToolbarSpacer,
 } from "@ui5/webcomponents-react";
 import type { Entries, ModelDef, Val } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
 
-// The process page's right-hand help pane: live B1 doc history + similar past configurations.
-export function HistoryPane({ projectId, model, entries, onCopy, paneOpen }: {
-  projectId: string;
-  model: ModelDef;
-  entries: Entries;
-  onCopy: (values: Record<string, Val>) => void;
-  paneOpen: boolean;
-}) {
-  const h = model.history;
-  const rawItem = h?.itemCodeParam ? entries[h.itemCodeParam] : undefined;
-  const itemCode = typeof rawItem === "string" && rawItem ? rawItem : undefined;
-  return (
-    <TabContainer style={{ height: "100%" }}>
-      <Tab text="Customer & item history" icon="history" selected>
-        <DocHistory projectId={projectId} itemCode={itemCode} paneOpen={paneOpen} />
-      </Tab>
-      <Tab text="Similar configurations" icon="detail-view">
-        <Similar projectId={projectId} model={model} entries={entries} onCopy={onCopy} />
-      </Tab>
-    </TabContainer>
-  );
-}
+// The two supplementary views of the process page — live B1 doc history and similar past
+// configurations. Each is a panel in the insights rail (see InsightsRail.tsx).
 
 const matchTag = {
   both: { design: "Positive", text: "customer + item" },
@@ -36,11 +16,20 @@ const matchTag = {
   customer: { design: "Neutral", text: "customer" },
 } as const;
 
-function DocHistory({ projectId, itemCode, paneOpen }: { projectId: string; itemCode?: string; paneOpen: boolean }) {
+export function DocHistory({ projectId, model, entries, open }: {
+  projectId: string;
+  model: ModelDef;
+  entries: Entries;
+  /** the Documents panel is expanded */
+  open: boolean;
+}) {
+  const h = model.history;
+  const rawItem = h?.itemCodeParam ? entries[h.itemCodeParam] : undefined;
+  const itemCode = typeof rawItem === "string" && rawItem ? rawItem : undefined;
   const q = useQuery({
     ...orpc.configs.docHistory.queryOptions({ input: { id: projectId, itemCode } }),
-    enabled: paneOpen, // pane is always mounted (for the slide animation) but hidden when closed —
-    // don't fire live B1 agent traffic for a pane nobody is looking at.
+    enabled: open, // the panel stays mounted when collapsed —
+    // don't fire live B1 agent traffic for a panel nobody is looking at.
     staleTime: 5 * 60_000,
     retry: false, // agent-offline should show its message, not spin
   });
@@ -101,7 +90,7 @@ function useDebounced<T>(value: T, ms: number): T {
 
 const chipDesign = (score: number) => (score >= 0.99 ? "Positive" : score > 0 ? "Critical" : "Neutral");
 
-function Similar({ projectId, model, entries, onCopy }: {
+export function Similar({ projectId, model, entries, onCopy }: {
   projectId: string;
   model: ModelDef;
   entries: Entries;

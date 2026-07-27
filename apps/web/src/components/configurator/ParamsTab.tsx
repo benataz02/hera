@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  Bar, Button, Dialog, IllustratedMessage, Input, Label, List, ListItemStandard, Menu, MenuItem, MessageStrip,
+  Bar, Button, CheckBox, Dialog, IllustratedMessage, Input, Label, List, ListItemStandard, Menu, MenuItem, MessageStrip,
   MultiComboBox, MultiComboBoxItem, Option, Select, StepInput, Table, TableCell, TableHeaderCell,
   TableHeaderRow, TableRow, TableRowAction, Text, Title,
 } from "@ui5/webcomponents-react";
@@ -403,6 +403,14 @@ function ParamDialog({ draft, tables, initial, isNew, onOk, onCancel }: {
         <div>
           <Label>Required when</Label>
           <ExprInput optional value={p.requiredWhen} model={draft} onChange={(v) => set({ requiredWhen: v })} />
+        </div>
+        <div>
+          <Label>Price formula</Label>
+          <ExprInput optional value={p.priceExpr} model={draft} onChange={(v) => set({ priceExpr: v })} />
+        </div>
+        <div style={{ alignSelf: "end" }}>
+          <CheckBox text="Read-only" checked={!!p.readonly}
+            onChange={(e) => set({ readonly: e.target.checked || undefined })} />
         </div>
 
         <Title level="H6" style={{ gridColumn: "1 / -1" }}>Help</Title>
