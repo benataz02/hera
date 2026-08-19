@@ -8,10 +8,12 @@ export const agentRequestStatus = pgEnum("agent_request_status", [
 
 // The single on-prem <-> cloud queue (replaces the old `outbox`). Two row shapes share it,
 // distinguished by `kind`:
-//   - 'quote'                  durable, deduplicated WRITE — the backbone proof. dedup_key set;
-//                              attempts/lease drive the agent's GET-before-POST; agent acks/nacks.
-//   - 'metadata'|'list'|'get'  on-demand request/reply (reads). dedup_key null; the browser parks
-//   |'create'|'update'         on requestChannel(id) for `result`; agent fulfills/fails.
+//   - 'write'                  durable, deduplicated WRITE. dedup_key = write:{entity}:{commandId};
+//                              attempts/lease drive the agent's GET-before-POST; agent acks/nacks
+//                              with attempt fencing. Browser watches requestChannel(id).
+//   - 'metadata'|'list'|'get'| on-demand request/reply (reads). dedup_key null; the browser parks
+//    'object-get'|'lookup'|…  on requestChannel(id) for `result`; agent fulfills/fails.
+//                              Never use fulfill/fail for 'write' rows.
 // dedup_key is nullable: Postgres treats NULLs as distinct in a unique index, so the same
 // (tenant_id, dedup_key) uniqueness that makes a re-enqueued write a no-op leaves reads unconstrained.
 export const agentRequest = pgTable(

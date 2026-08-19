@@ -22,16 +22,21 @@ export const ExtractFileZ = z.object({
 });
 export type ExtractFile = z.infer<typeof ExtractFileZ>;
 
-// Gemini call + validation, shared by the internal and portal `extract` handlers — both resolve
-// model/lookups/agent-readiness themselves first (portal additionally gates on model.portal).
-export async function extractSuggestions(model: { definition: ModelDef }, lookups: ResolvedLookups, file: ExtractFile) {
+// Gemini call, size check first (deterministic without env), then key check. Returns raw parsed
+// record without validation — validation is handled by callsite or by the extractSuggestions wrapper.
+export async function callExtraction(
+  model: { definition: ModelDef },
+  lookups: ResolvedLookups,
+  file: ExtractFile,
+): Promise<Record<string, { value?: unknown; evidence?: unknown }>> {
+  if (file.dataBase64.length > MAX_BASE64)
+    throw new ORPCError("BAD_REQUEST", { message: "The file exceeds the 15MB limit." });
+
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey)
     throw new ORPCError("SERVICE_UNAVAILABLE", {
       message: "Drawing extraction is not configured on this server (GEMINI_API_KEY is unset).",
     });
-  if (file.dataBase64.length > MAX_BASE64)
-    throw new ORPCError("BAD_REQUEST", { message: "The file exceeds the 15MB limit." });
 
   const { prompt, responseSchema } = buildExtractionRequest(model.definition, lookups.domains);
 
@@ -66,7 +71,15 @@ export async function extractSuggestions(model: { definition: ModelDef }, lookup
       message: "The extraction service returned an unreadable result. Retry, or enter the values manually.",
     });
   }
-  return { suggestions: validateSuggestions(model.definition, lookups.domains, raw) };
+
+  return raw as Record<string, { value?: unknown; evidence?: unknown }>;
+}
+
+// Gemini call + validation, shared by the internal and portal `extract` handlers — both resolve
+// model/lookups/agent-readiness themselves first (portal additionally gates on model.portal).
+export async function extractSuggestions(model: { definition: ModelDef }, lookups: ResolvedLookups, file: ExtractFile) {
+  const raw = await callExtraction(model, lookups, file);
+  return { suggestions: validateSuggestions(model.definition, lookups, {}, raw) };
 }
 
 export const extractionRouter = {

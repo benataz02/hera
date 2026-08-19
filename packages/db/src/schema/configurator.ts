@@ -74,7 +74,8 @@ export const configProject = pgTable(
 export type RunCandidate = { assignment: Entries; perBatch: { batchQty: number; outputs: Outputs }[] };
 export type RunSelection = { candidateIdx: number; batchQty: number; overrides?: OutputOverrides };
 
-// Immutable snapshot of one engine run. b1DocEntry/quotedAt are written by phase 5 (createQuote).
+// Immutable snapshot of one engine run.
+// b1DocEntry/quotedAt are written by configs.createQuote origin completion (sync.ack).
 export const configRun = pgTable(
   "config_run",
   {
@@ -86,12 +87,17 @@ export const configRun = pgTable(
     entries: jsonb("entries").$type<Entries>().notNull(),
     candidates: jsonb("candidates").$type<RunCandidate[]>().notNull(),
     selection: jsonb("selection").$type<RunSelection[]>(),
+    // Bumped under FOR UPDATE when configs.select / Chati selectCandidates lands; fences createQuote.
+    selectionVersion: integer("selection_version").notNull().default(0),
     b1DocEntry: integer("b1_doc_entry"),
     quotedAt: timestamp("quoted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("config_run_tenant_project_idx").on(t.tenantId, t.projectId)],
 );
+
+export type ConfigProject = typeof configProject.$inferSelect;
+export type ConfigRun = typeof configRun.$inferSelect;
 
 // Historic configuration rows pulled from the model's history query; wholesale-replaced per sync.
 // ponytail: jsonb row per record, ~tens of thousands of rows per model; real columns/pgvector if

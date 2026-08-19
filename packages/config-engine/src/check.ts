@@ -101,6 +101,8 @@ export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Iss
     checkExpr(p.defaultExpr, `parameters[${i}].defaultExpr`, base);
     checkExpr(p.visibleWhen, `parameters[${i}].visibleWhen`, base);
     checkExpr(p.requiredWhen, `parameters[${i}].requiredWhen`, base);
+    // base, not pricingScope: the badge is per-unit and shown before any batch exists.
+    checkExpr(p.priceExpr, `parameters[${i}].priceExpr`, base);
   });
   model.computed.forEach((c, i) => checkExpr(c.expr, `computed[${i}].expr`, base));
   model.constraints.forEach((c, i) => {

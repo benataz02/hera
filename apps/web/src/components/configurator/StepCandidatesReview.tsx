@@ -14,7 +14,7 @@ import { CandidatesMatrix } from "./CandidatesMatrix.tsx";
 // output panel below. Two computeOutputs passes per panel: the display pass ignores remove
 // flags (removed rows stay visible, struck through) and the totals pass applies everything —
 // the numbers shown are exactly what the server will recompute and store on Save selection.
-export function StepCandidatesReview({ model, lookups, runEntries, candidates, selection, onToggle, onChange, capped, widest, onSave, saving, error, saved }: {
+export function StepCandidatesReview({ model, lookups, runEntries, candidates, selection, onToggle, onChange, capped, widest, error, saved }: {
   model: ModelDef;
   lookups: ResolvedLookups;
   runEntries: Entries;
@@ -24,8 +24,6 @@ export function StepCandidatesReview({ model, lookups, runEntries, candidates, s
   onChange: (next: Sel[]) => void;
   capped: boolean;
   widest?: { key: string; size: number };
-  onSave: () => void;
-  saving: boolean;
   error: string | null;
   saved: boolean;
 }) {
@@ -204,17 +202,11 @@ export function StepCandidatesReview({ model, lookups, runEntries, candidates, s
       {error ? <MessageStrip design="Negative" hideCloseButton>{error}</MessageStrip> : null}
       {saved ? <MessageStrip design="Positive" hideCloseButton>Selection saved — totals recomputed on the server.</MessageStrip> : null}
       {panels}
-      <Bar design="FloatingFooter" className="hera-step-bar"
-        startContent={
-          <Text>
-            Total across {selection.length} line{selection.length === 1 ? "" : "s"}: <span style={{ fontWeight: 700 }}>{fmt(grand)}</span>
-          </Text>
-        }
-        endContent={
-          <Button design="Emphasized" disabled={saving || selection.length === 0} onClick={onSave}>
-            {saving ? "Saving…" : "Save selection"}
-          </Button>
-        } />
+      {selection.length > 0 ? (
+        <Text style={{ alignSelf: "flex-end", fontWeight: 700 }}>
+          Total across {selection.length} line{selection.length === 1 ? "" : "s"}: {fmt(grand)}
+        </Text>
+      ) : null}
     </div>
   );
 }

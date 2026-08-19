@@ -16,3 +16,15 @@ test("non-JSON body is kept raw instead of becoming statusText", () => {
 test("empty body falls back to statusText", () => {
   expect(parseSlError(400, "Bad Request", "").message).toBe("B1 400: Bad Request");
 });
+
+// Beas (and b1s/v1) wrap message as {lang,value}, echo the HTTP status as the code, and pad the
+// text with a leading space — the raw body used to reach the browser's MessageStrip verbatim.
+test("beas {lang,value} message, status echoed as code", () => {
+  const raw = JSON.stringify({
+    value: [],
+    error: { code: "404", message: { lang: "en-us", value: " Entity Collection 'Operations' not found" } },
+  });
+  const r = parseSlError(404, "Not Found", raw, "Beas");
+  expect(r.code).toBe("404");
+  expect(r.message).toBe("Beas 404: Entity Collection 'Operations' not found");
+});

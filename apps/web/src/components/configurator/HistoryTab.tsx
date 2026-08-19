@@ -1,18 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Button, Card, CardHeader, Label, MessageStrip, MultiComboBox, MultiComboBoxItem, Option, Select,
-  StepInput, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, TableRowAction, Tag, Text,
+  Button, FlexBox, Form, FormGroup, FormItem, Label, MessageStrip, MultiComboBox, MultiComboBoxItem,
+  ObjectPageSubSection, ObjectStatus, Option, Select, StepInput, Table, TableCell, TableHeaderCell,
+  TableHeaderRow, TableRow, TableRowAction, Text,
 } from "@ui5/webcomponents-react";
 import type { Issue, ModelDef } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
 import { issueFor } from "./useDraftModel.ts";
-import { QueryCard } from "./QueryEditor.tsx";
+import { QueryEditor } from "./QueryEditor.tsx";
 
 type Update = (fn: (d: ModelDef) => ModelDef) => void;
 type History = NonNullable<ModelDef["history"]>;
 const EMPTY: History = { mappings: [], display: [] };
 
-const BODY = { display: "flex", flexDirection: "column", gap: "0.75rem", padding: "1rem" } as const;
+// Same geometry as SettingsTab so the builder's tabs line up.
+const FORM = { labelSpan: "S12 M4", layout: "S1 M1 L2 XL2", accessibleMode: "Edit" } as const;
 
 // Admin config for the process page's help pane: which param is the SAP ItemCode (exact help),
 // the similarity query, param↔column mappings with match type + weight, and display columns.
@@ -33,10 +35,14 @@ export function HistoryTab({ draft, update, issues, modelId, dirty }: {
     onSuccess: () => qc.invalidateQueries({ queryKey: orpc.models.historyInfo.queryOptions({ input: { id: modelId } }).queryKey }),
   }));
 
-  const err = (path: string) => {
-    const i = issueFor(issues, path);
-    return i ? <MessageStrip key={path} design="Negative" hideCloseButton>{i.message}</MessageStrip> : null;
-  };
+  const errMsg = (path: string) => issueFor(issues, path)?.message;
+  const strip = (msg?: string, key?: string) =>
+    msg ? <MessageStrip key={key} design="Negative" hideCloseButton>{msg}</MessageStrip> : null;
+  // Field-level issues render on the field itself; valueStateMessage is a slot, so it needs an element.
+  const vs = (msg?: string) => ({
+    valueState: (msg ? "Negative" : "None") as "Negative" | "None",
+    valueStateMessage: msg ? <div>{msg}</div> : undefined,
+  });
 
   // Steps 3–5 need the query's columns; show what's missing rather than hiding the step.
   const needsFetch = !cols.length
@@ -44,62 +50,59 @@ export function HistoryTab({ draft, update, issues, modelId, dirty }: {
     : null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "1rem", padding: "1rem", maxWidth: "56rem" }}>
-      <Card
-        header={
-          <CardHeader titleText="1 · Exact help — past documents"
-            subtitleText="The customer comes from the configuration project itself; only the item code needs a parameter." />
-        }>
-        <div style={BODY}>
-          <div>
-            <Label>Parameter holding the SAP item code</Label>
-            <Select
-              value={h.itemCodeParam ?? ""}
-              onChange={(e) => setH({ itemCodeParam: (e.detail.selectedOption as HTMLElement).dataset.k || undefined })}>
-              <Option value="" data-k="">—</Option>
-              {draft.parameters.map((p) => <Option key={p.key} value={p.key} data-k={p.key}>{p.label} ({p.key})</Option>)}
-            </Select>
-          </div>
-          {err("history.itemCodeParam")}
-        </div>
-      </Card>
+    <>
+      <ObjectPageSubSection id="history-exact" titleText="1 · Exact help — past documents">
+        <FlexBox direction="Column" gap="1rem">
+          <MessageStrip design="Information" hideCloseButton>
+            The customer comes from the configuration project itself; only the item code needs a parameter.
+          </MessageStrip>
+          <Form {...FORM}>
+            <FormGroup>
+              <FormItem labelContent={<Label>Parameter holding the SAP item code</Label>}>
+                <Select
+                  value={h.itemCodeParam ?? ""}
+                  {...vs(errMsg("history.itemCodeParam"))}
+                  onChange={(e) => setH({ itemCodeParam: (e.detail.selectedOption as HTMLElement).dataset.k || undefined })}>
+                  <Option value="" data-k="">—</Option>
+                  {draft.parameters.map((p) => <Option key={p.key} value={p.key} data-k={p.key}>{p.label} ({p.key})</Option>)}
+                </Select>
+              </FormItem>
+            </FormGroup>
+          </Form>
+        </FlexBox>
+      </ObjectPageSubSection>
 
-      {h.query ? (
-        <QueryCard
-          title="2 · History query — similar configurations"
-          target={h.query.target} path={h.query.path} columns={h.query.columns}
-          onChange={(patch) => setH({ query: { ...h.query!, ...patch } })}
-          headerActions={
-            <Button design="Negative" onClick={() => setH({ query: undefined, mappings: [], display: [] })}>Remove</Button>
-          }>
-          {err("history.query")}
-          <Text>
-            {cols.length ? `Columns (from the response): ${cols.join(", ")}.` : "Run Test fetch to take the columns from the response."}
-          </Text>
-        </QueryCard>
-      ) : (
-        <Card header={<CardHeader titleText="2 · History query — similar configurations" subtitleText="Where past configurations are read from." />}>
-          <div style={BODY}>
-            <Button icon="add" style={{ alignSelf: "start" }}
-              onClick={() => setH({ query: { target: "b1", path: "", columns: [] } })}>
+      <ObjectPageSubSection id="history-query" titleText="2 · History query — similar configurations"
+        actions={h.query
+          ? <Button design="Negative" onClick={() => setH({ query: undefined, mappings: [], display: [] })}>Remove</Button>
+          : undefined}>
+        {h.query ? (
+          <QueryEditor
+            target={h.query.target} path={h.query.path} columns={h.query.columns}
+            onChange={(patch) => setH({ query: { ...h.query!, ...patch } })}>
+            {strip(errMsg("history.query"))}
+            <Text>
+              {cols.length ? `Columns (from the response): ${cols.join(", ")}.` : "Run Test fetch to take the columns from the response."}
+            </Text>
+          </QueryEditor>
+        ) : (
+          <FlexBox direction="Column" gap="1rem" alignItems="Start">
+            <Button icon="add" onClick={() => setH({ query: { target: "b1", path: "", columns: [] } })}>
               Add history query
             </Button>
-            {err("history.query")}
-          </div>
-        </Card>
-      )}
+            {strip(errMsg("history.query"))}
+          </FlexBox>
+        )}
+      </ObjectPageSubSection>
 
-      <Card
-        header={
-          <CardHeader titleText="3 · Parameter mappings" subtitleText="How this model's parameters line up with the query's columns."
-            action={
-              <Button icon="add" disabled={!cols.length || !draft.parameters.length}
-                onClick={() => setH({ mappings: [...h.mappings, { param: draft.parameters[0]!.key, column: cols[0]!, match: "exact", weight: 1 }] })}>
-                Add mapping
-              </Button>
-            } />
+      <ObjectPageSubSection id="history-mappings" titleText="3 · Parameter mappings"
+        actions={
+          <Button icon="add" disabled={!cols.length || !draft.parameters.length}
+            onClick={() => setH({ mappings: [...h.mappings, { param: draft.parameters[0]!.key, column: cols[0]!, match: "exact", weight: 1 }] })}>
+            Add mapping
+          </Button>
         }>
-        <div style={BODY}>
+        <FlexBox direction="Column" gap="1rem">
           {needsFetch}
           <Table noDataText="No mappings — add one." rowActionCount={1}
             onRowActionClick={(e) => {
@@ -141,47 +144,59 @@ export function HistoryTab({ draft, update, issues, modelId, dirty }: {
               );
             })}
           </Table>
-          {h.mappings.map((_, i) => err(`history.mappings[${i}]`))}
-        </div>
-      </Card>
+          {h.mappings.map((_, i) => strip(errMsg(`history.mappings[${i}]`), `m-${i}`))}
+        </FlexBox>
+      </ObjectPageSubSection>
 
-      <Card header={<CardHeader titleText="4 · Display columns" subtitleText="Shown on each result in the help pane." />}>
-        <div style={BODY}>
+      <ObjectPageSubSection id="history-display" titleText="4 · Display columns">
+        <FlexBox direction="Column" gap="1rem">
           {needsFetch}
-          <div>
-            <Label>Columns shown on each result</Label>
-            <MultiComboBox style={{ width: "100%" }}
-              onSelectionChange={(e) => setH({ display: e.detail.items.map((i) => (i as HTMLElement).getAttribute("text")!) })}>
-              {cols.map((c) => <MultiComboBoxItem key={c} text={c} selected={h.display.includes(c)} />)}
-            </MultiComboBox>
-          </div>
-          {h.display.map((_, i) => err(`history.display[${i}]`))}
-        </div>
-      </Card>
+          <Form {...FORM}>
+            <FormGroup>
+              <FormItem labelContent={<Label>Columns shown on each result</Label>}>
+                <MultiComboBox
+                  {...vs(h.display.map((_, i) => errMsg(`history.display[${i}]`)).find(Boolean))}
+                  onSelectionChange={(e) => setH({ display: e.detail.items.map((i) => (i as HTMLElement).getAttribute("text")!) })}>
+                  {cols.map((c) => <MultiComboBoxItem key={c} text={c} selected={h.display.includes(c)} />)}
+                </MultiComboBox>
+              </FormItem>
+            </FormGroup>
+          </Form>
+        </FlexBox>
+      </ObjectPageSubSection>
 
-      <Card
-        header={
-          <CardHeader titleText="5 · Data" subtitleText="The synced snapshot the help pane searches."
-            action={
-              // `!h.query` keeps the old behaviour now the card is always mounted: no query, no sync.
-              <Button icon="synchronize" disabled={sync.isPending || dirty || !h.query} onClick={() => sync.mutate({ id: modelId })}>
-                {sync.isPending ? "Syncing…" : "Sync now"}
-              </Button>
-            } />
+      <ObjectPageSubSection id="history-data" titleText="5 · Data"
+        actions={
+          // `!h.query` keeps the old behaviour: no query, no sync.
+          <Button icon="synchronize" disabled={sync.isPending || dirty || !h.query} onClick={() => sync.mutate({ id: modelId })}>
+            {sync.isPending ? "Syncing…" : "Sync now"}
+          </Button>
         }>
-        <div style={BODY}>
-          {sync.error ? <MessageStrip design="Negative" hideCloseButton>{sync.error.message}</MessageStrip> : null}
-          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-            {h.query && info.data ? <Tag design={info.data.count ? "Positive" : "Neutral"}>{`${info.data.count} rows`}</Tag> : null}
-            <Text>
-              {!h.query ? "Add a history query in step 2 first."
-                : dirty ? "Save the model first — sync runs the saved query."
-                : info.data ? `${info.data.lastSyncedAt ? `Last synced ${new Date(info.data.lastSyncedAt).toLocaleString()} · ` : ""}refreshes hourly`
-                : ""}
-            </Text>
-          </div>
-        </div>
-      </Card>
-    </div>
+        <FlexBox direction="Column" gap="1rem">
+          {strip(sync.error?.message)}
+          {!h.query
+            ? <MessageStrip design="Information" hideCloseButton>Add a history query in step 2 first.</MessageStrip>
+            : dirty
+            ? <MessageStrip design="Critical" hideCloseButton>Save the model first — sync runs the saved query.</MessageStrip>
+            : null}
+          {h.query && info.data ? (
+            <Form labelSpan={FORM.labelSpan} layout={FORM.layout}>
+              <FormGroup>
+                <FormItem labelContent={<Label>Rows</Label>}>
+                  <ObjectStatus state={info.data.count ? "Positive" : "None"}>{`${info.data.count}`}</ObjectStatus>
+                </FormItem>
+                <FormItem labelContent={<Label>Last synced</Label>}>
+                  <Text>
+                    {info.data.lastSyncedAt
+                      ? `${new Date(info.data.lastSyncedAt).toLocaleString()} · refreshes hourly`
+                      : "Never · refreshes hourly"}
+                  </Text>
+                </FormItem>
+              </FormGroup>
+            </Form>
+          ) : null}
+        </FlexBox>
+      </ObjectPageSubSection>
+    </>
   );
 }

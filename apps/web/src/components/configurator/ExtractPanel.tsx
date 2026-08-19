@@ -11,11 +11,11 @@ import { client } from "../../orpc.ts";
 // (out-of-domain) suggestions render with their reason and no Accept action.
 
 const MAX_BYTES = 15 * 1024 * 1024;
-const MIME_BY_EXT: Record<string, "application/pdf" | "image/png" | "image/jpeg"> = {
+export const MIME_BY_EXT: Record<string, "application/pdf" | "image/png" | "image/jpeg"> = {
   pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
 };
 
-async function toBase64(f: File): Promise<string> {
+export async function toBase64(f: File): Promise<string> {
   const buf = new Uint8Array(await f.arrayBuffer());
   let bin = "";
   for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));

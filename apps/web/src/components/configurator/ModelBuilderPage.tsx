@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useBlocker } from "@tanstack/react-router";
 import {
   Bar, Button, BusyIndicator, MessageStrip,
   ObjectPage, ObjectPageSection, ObjectPageTitle, ObjectStatus,
@@ -7,6 +8,8 @@ import {
 } from "@ui5/webcomponents-react";
 import type { Entries, Issue, ModelDef } from "@hera/config-engine";
 import { tabOf, useDraftModel, type TabKey } from "./useDraftModel.ts";
+import { useSectionParam } from "../../sectionParam.ts";
+import { confirm } from "../confirm.ts";
 import { SettingsTab } from "./SettingsTab.tsx";
 import { ParamsTab } from "./ParamsTab.tsx";
 import { RulesTab } from "./RulesTab.tsx";
@@ -28,10 +31,15 @@ const EMPTY_MODEL: ModelDef = {
 // Slide the preview pane open/closed by animating its flex-basis (see the SplitterLayout below).
 const PANE_ANIM = "flex-basis 0.28s cubic-bezier(0.2, 0, 0, 1)";
 
+// Section ids, in render order — also the allow-list for `?section=` (a stale link must not
+// select a tab that no longer exists, which would render an empty page).
+const TABS: TabKey[] = ["params", "rules", "bom", "routing", "tables", "history", "settings"];
+
 export function ModelBuilderPage({ id }: { id: string }) {
   const m = useDraftModel(id);
-  const [tab, setTab] = useState<TabKey>("params");
-  
+  const [section, setSection] = useSectionParam();
+  const tab = TABS.includes(section as TabKey) ? (section as TabKey) : "params";
+
   const [previewOpen, setPreviewOpen] = useState(true);
   // Animate flex-basis only during a button toggle, never while dragging the splitter (drag mutates the
   // size directly, and a transition there would feel laggy). Cleared on the slide's transitionend.
@@ -41,6 +49,24 @@ export function ModelBuilderPage({ id }: { id: string }) {
     setAnimating(true);
     setPreviewOpen((v) => !v);
   };
+
+  // Guard against losing an unsaved draft: intercept in-app navigation (including switching models,
+  // which remounts via key={id}) and confirm; enableBeforeUnload covers hard reload / tab close.
+  useBlocker({
+    shouldBlockFn: async ({ current, next }) => {
+      // Switching tabs is a search-param navigation on this same page (see useSectionParam) —
+      // never a reason to prompt; only leaving the builder is.
+      if (current.pathname === next.pathname) return false;
+      if (!m.dirty || m.saving) return false;
+      return !(await confirm({
+        title: "Discard changes?",
+        message: "This model has unsaved changes. Leave without saving?",
+        actionText: "Discard",
+        destructive: true,
+      }));
+    },
+    enableBeforeUnload: () => m.dirty,
+  });
 
   // The preview test-drives the draft with the real engine. While the draft has errors we keep
   // rendering the last valid one so a single bad keystroke doesn't blank the form.
@@ -79,14 +105,18 @@ export function ModelBuilderPage({ id }: { id: string }) {
         style={{ transition: animating ? PANE_ANIM : undefined }}
       >
 
-          {m.saveError && m.serverIssues.length === 0 ? (
-            <MessageStrip design="Negative" hideCloseButton>{m.saveError.message}</MessageStrip>
+          {m.saveError ? (
+            <MessageStrip design="Negative" hideCloseButton>
+              {m.serverIssues.length > 0
+                ? `Save failed — ${m.serverIssues.length} issue${m.serverIssues.length === 1 ? "" : "s"}; see the tab counts.`
+                : m.saveError.message}
+            </MessageStrip>
           ) : null}
 
           <ObjectPage
             mode="IconTabBar"
             selectedSectionId={tab}
-            onSelectedSectionChange={(e) => setTab(e.detail.selectedSectionId as TabKey)}
+            onSelectedSectionChange={(e) => setSection(e.detail.selectedSectionId)}
             titleArea={
               <ObjectPageTitle header={<Title level="H4">{draft.name || "Untitled model"}</Title>}
                 subHeader={m.dirty ? <ObjectStatus state="Critical">Unsaved changes</ObjectStatus> : undefined}

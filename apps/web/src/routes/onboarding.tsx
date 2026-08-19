@@ -1,6 +1,6 @@
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Input, Button, MessageStrip, BusyIndicator } from "@ui5/webcomponents-react";
 import { authClient } from "../auth-client.ts";
 import { AuthLayout } from "../components/AuthLayout.tsx";
@@ -25,6 +25,7 @@ const sanitizeSlug = (v: string) => v.toLowerCase().replace(/[^a-z0-9-]/g, "").s
 
 function Onboarding() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [company, setCompany] = useState("");
   const [slug, setSlug] = useState("");
   const [slugEdited, setSlugEdited] = useState(false);
@@ -69,6 +70,14 @@ function Onboarding() {
     },
     onSuccess: () => navigate({ to: "/" }), // apex dispatcher routes to the joined workspace
   });
+
+  // The only way off this page without an org: browser-back just re-runs the apex
+  // dispatcher, which sends a 0-org user straight back here.
+  const signOut = async () => {
+    await authClient.signOut();
+    queryClient.setQueryData(["session"], null);
+    navigate({ to: "/login" });
+  };
 
   const busy = create.isPending || accept.isPending;
   const error = create.error ?? accept.error;
@@ -128,6 +137,10 @@ function Onboarding() {
       >
         {create.isPending ? "Setting up…" : "Create company"}
       </Button>
+
+      <p className="auth-alt">
+        Not now? <a href="/login" onClick={(e) => { e.preventDefault(); void signOut(); }}>Sign out</a>
+      </p>
     </AuthLayout>
   );
 }

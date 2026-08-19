@@ -117,7 +117,14 @@ function Settings() {
                 })}
                 {source.length > shown.length ? <Text>…refine the filter to see more</Text> : null}
               </FlexBox>
-              <Button disabled={save.isPending} onClick={() => save.mutate({ entities: Object.values(selected) })}>
+              <Button
+                disabled={save.isPending}
+                onClick={() =>
+                  save.mutate({
+                    entities: Object.values(selected).map(({ name, editable }) => ({ name, editable })),
+                  })
+                }
+              >
                 {save.isPending ? "Saving…" : "Save selection"}
               </Button>
             </>

@@ -27,11 +27,23 @@ export const ListVariantDefZ = z.object({
 });
 export type ListVariantDef = z.infer<typeof ListVariantDefZ>;
 
-// An object view is pure presentation: which sections/fields show and in what order. The
-// single-record GET is unchanged (full record); only the layout differs.
+// An object view controls header + section layout (and later, fetch projection). Keys are not
+// seeded merely to make requests work — identity is injected at compile time.
+const FieldDefZ = z.object({
+  name: z.string(),
+  visible: z.boolean(),
+  label: z.string().optional(),
+  width: z.number().positive().max(2000).optional(),
+});
 export const ObjectVariantDefZ = z.object({
-  fields: z.array(z.object({ name: z.string(), visible: z.boolean() })),
-  sections: z.array(z.object({ id: z.string(), visible: z.boolean() })),
+  header: z.array(FieldDefZ),
+  sections: z.array(
+    z.object({
+      id: z.string(),
+      visible: z.boolean(),
+      fields: z.array(FieldDefZ),
+    }),
+  ),
 });
 export type ObjectVariantDef = z.infer<typeof ObjectVariantDefZ>;
 

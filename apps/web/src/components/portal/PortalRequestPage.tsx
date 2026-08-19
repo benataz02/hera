@@ -8,7 +8,7 @@ import "@ui5/webcomponents-icons/dist/paper-plane.js";
 import { propagate, type Entries } from "@hera/config-engine";
 import { client, orpc } from "../../orpc.ts";
 import { StepConfigure } from "../configurator/StepConfigure.tsx";
-import { StepBatches } from "../configurator/StepBatches.tsx";
+import { StepBatches } from "../configurator/ConfiguratorForm.tsx";
 import { StepCandidates } from "../configurator/StepCandidates.tsx";
 import { candidateLabel, fmt, openKeys, toggleSelection, type Sel } from "../configurator/runView.ts";
 import { portalStatusUi, type PortalStatus } from "./portalUi.ts";

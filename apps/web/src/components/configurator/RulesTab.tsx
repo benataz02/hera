@@ -1,11 +1,13 @@
 import { useState } from "react";
 import {
-  Bar, Button, Dialog, Input, Label, MultiComboBox, MultiComboBoxItem, Option, Select,
+  Bar, Button, Dialog, IllustratedMessage, Input, Label, MultiComboBox, MultiComboBoxItem, Option, Select,
   Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, TableRowAction, Text, Title,
 } from "@ui5/webcomponents-react";
+import "@ui5/webcomponents-fiori/dist/illustrations/NoData.js";
 import type { Constraint, Issue, ModelDef, ResolvedLookups, Val } from "@hera/config-engine";
 import { ExprInput } from "./ExprInput.tsx";
 import { issueFor } from "./useDraftModel.ts";
+import { confirm } from "../confirm.ts";
 
 type Update = (fn: (d: ModelDef) => ModelDef) => void;
 type TableConstraint = Extract<Constraint, { kind: "table" }>;
@@ -23,6 +25,14 @@ export function RulesTab({ draft, update, issues, lookups }: {
   const setC = (i: number, c: Constraint) =>
     update((d) => ({ ...d, constraints: d.constraints.map((x, j) => (j === i ? c : x)) }));
   const removeC = (i: number) => update((d) => ({ ...d, constraints: d.constraints.filter((_, j) => j !== i) }));
+  // Combination tables can hold a lot of hand-entered rows — confirm before discarding a non-empty one.
+  // Expression rows are a single line, so they delete without a prompt.
+  const removeTableC = async (i: number) => {
+    const c = draft.constraints[i];
+    const rows = c?.kind === "table" ? c.rows.length : 0;
+    if (rows === 0 || await confirm({ title: "Delete combination table", message: `Delete this combination table and its ${rows} row${rows === 1 ? "" : "s"}?`, actionText: "Delete", destructive: true }))
+      removeC(i);
+  };
 
   const exprs = draft.constraints.map((c, i) => [c, i] as const).filter(([c]) => c.kind === "expr");
   const tablesC = draft.constraints.map((c, i) => [c, i] as const).filter(([c]) => c.kind === "table");
@@ -31,7 +41,8 @@ export function RulesTab({ draft, update, issues, lookups }: {
     <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", padding: "1rem" }}>
       <Bar design="Subheader" startContent={<Title level="H5">Expression constraints</Title>}
         endContent={<Button icon="add" onClick={() => update((d) => ({ ...d, constraints: [...d.constraints, { kind: "expr", assert: "", message: "" }] }))}>Add constraint</Button>} />
-      <Table noDataText="No expression constraints." rowActionCount={1}
+      <Table noData={<IllustratedMessage name="NoData" design="Dot" titleText="No expression constraints"
+          subtitleText='Add rules like coating != "none" that must hold across the configuration.' />} rowActionCount={1}
         onRowActionClick={(e) => removeC(Number(((e.detail.row as unknown) as HTMLElement).dataset.idx))}
         headerRow={
           <TableHeaderRow>
@@ -65,11 +76,12 @@ export function RulesTab({ draft, update, issues, lookups }: {
           update((d) => ({ ...d, constraints: [...d.constraints, { kind: "table", params: [], rows: [], mode: "forbid" }] }));
           setEditingTable(draft.constraints.length); // index of the appended one
         }}>Add combination table</Button>} />
-      <Table noDataText="No combination tables." rowActionCount={2}
+      <Table noData={<IllustratedMessage name="NoData" design="Dot" titleText="No combination tables"
+          subtitleText="Add a table to allow or forbid specific combinations of parameter values." />} rowActionCount={2}
         onRowActionClick={(e) => {
           const i = Number(((e.detail.row as unknown) as HTMLElement).dataset.idx);
           const icon = ((e.detail.action as unknown) as HTMLElement).getAttribute("icon");
-          if (icon === "delete") removeC(i);
+          if (icon === "delete") void removeTableC(i);
           else setEditingTable(i);
         }}
         headerRow={

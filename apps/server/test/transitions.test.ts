@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { and, eq } from "drizzle-orm";
-import { db, configModel, configProject } from "@hera/db";
+import { db, configModel, configProject, configRun } from "@hera/db";
 import { call, makeTenant, makeUser, bindClient, tenantHeaders, TEST_MODEL } from "./harness.ts";
 import { router } from "../src/orpc/router.ts";
 
@@ -61,6 +61,15 @@ describe("spec test 3 — status transitions", () => {
     const { tenantId, id, ctx } = await calculatedProject();
     await call(router.portal.submit, { projectId: id, selection: sel }, ctx);
     // simulate the future internal createQuote: guarded flip requested → quoted
+    const [run] = await db
+      .select({ id: configRun.id })
+      .from(configRun)
+      .where(and(eq(configRun.projectId, id), eq(configRun.tenantId, tenantId)))
+      .limit(1);
+    await db
+      .update(configRun)
+      .set({ b1DocEntry: 1, quotedAt: new Date() })
+      .where(eq(configRun.id, run!.id));
     const quoted = await db.update(configProject)
       .set({ status: "quoted" })
       .where(and(eq(configProject.id, id), eq(configProject.status, "requested")))

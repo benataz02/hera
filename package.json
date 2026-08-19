@@ -14,8 +14,7 @@
     "typescript": "^7.0.2"
   },
   "scripts": {
-    "db:generate": "bun --env-file=../../.env --cwd packages/db drizzle-kit generate",
-    "db:migrate": "bun --env-file=../../.env --cwd packages/db drizzle-kit migrate",
+    "db:push": "bun --env-file=../../.env --cwd packages/db drizzle-kit push",
     "db:studio": "bun --env-file=../../.env --cwd packages/db drizzle-kit studio",
     "auth:generate": "bun --cwd apps/server better-auth-generate",
     "dev": "bun run --parallel dev:server dev:web dev:agent",
@@ -24,14 +23,14 @@
     "dev:agent": "bun run --hot apps/agent/src/index.ts",
     "build:web": "bun --cwd apps/web build",
     "build:agent": "bun build --compile --target=bun-windows-x64 --outfile apps/agent/dist/hera-agent.exe apps/agent/src/index.ts",
-    "seed:dev": "bun scripts/seed-dev.ts",
-    "seed:agent": "bun scripts/seed-agent.ts",
+    "seed:dev": "bun --env-file=.env scripts/seed-dev.ts",
+    "seed:agent": "bun --env-file=.env scripts/seed-agent.ts",
     "seed:portal-client": "bun --env-file=.env scripts/seed-portal-client.ts",
-    "seed:config": "bun scripts/seed-config.ts",
     "seed:standard": "bun scripts/seed-standard.ts",
     "e2e": "bun scripts/e2e.ts",
     "test:engine": "bun test packages/config-engine",
     "test:server": "bun test apps/server",
+    "test:web": "bun test apps/web",
     "kill": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/kill-dev.ps1"
   }
 }

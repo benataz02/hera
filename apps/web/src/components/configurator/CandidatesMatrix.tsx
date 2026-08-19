@@ -1,5 +1,5 @@
 import {
-  MessageStrip, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, Text, ToggleButton,
+  Icon, MessageStrip, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, Text, ToggleButton,
 } from "@ui5/webcomponents-react";
 import type { Entries, ModelDef } from "@hera/config-engine";
 import { bestByBatch, candidateLabel, fmt, isSelected, openKeys, type PricedCandidate, type Sel } from "./runView.ts";
@@ -45,12 +45,19 @@ export function CandidatesMatrix({ model, runEntries, candidates, selection, onT
             <TableCell><Text>{candidateLabel(keys, c.assignment)}</Text></TableCell>
             {c.perBatch.map((b) => (
               <TableCell key={b.batchQty} horizontalAlign="End">
-                <ToggleButton pressed={isSelected(selection, i, b.batchQty)}
-                  design={best[b.batchQty] === i ? "Positive" : "Default"}
-                  tooltip={best[b.batchQty] === i ? "Lowest price for this quantity" : undefined}
-                  onClick={(e) => { e.stopPropagation(); onToggle(i, b.batchQty); }}>
-                  {fmt(b.unitPrice)}
-                </ToggleButton>
+                {/* Selection = pressed state only; the green check marks the cheapest cell per column,
+                    so "selected" and "best price" can never be confused with each other. */}
+                <div style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem" }}>
+                  {best[b.batchQty] === i ? (
+                    <Icon name="accept" design="Positive" accessibleName="Lowest price for this quantity"
+                      style={{ width: "0.875rem", height: "0.875rem" }} />
+                  ) : null}
+                  <ToggleButton pressed={isSelected(selection, i, b.batchQty)}
+                    tooltip={best[b.batchQty] === i ? "Lowest price for this quantity" : undefined}
+                    onClick={(e) => { e.stopPropagation(); onToggle(i, b.batchQty); }}>
+                    {fmt(b.unitPrice)}
+                  </ToggleButton>
+                </div>
               </TableCell>
             ))}
           </TableRow>

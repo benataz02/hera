@@ -1,12 +1,15 @@
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
-import { RPCHandler } from "@orpc/server/fetch";
+import { RPCHandler, BodyLimitPlugin } from "@orpc/server/fetch";
 import { auth } from "./auth.ts";
 import { router } from "./orpc/router.ts";
 import { startHistorySync } from "./history-sync.ts";
 
 const app = new Hono();
-const rpc = new RPCHandler(router);
+// 22MB: Chati's attachment cap (15MB decoded, ~20MB base64-inflated) plus headroom for the rest
+// of the chat turn's JSON payload. Streams the body and rejects (PAYLOAD_TOO_LARGE) as soon as
+// the running byte count crosses the cap — before the request body is ever fully buffered/parsed.
+const rpc = new RPCHandler(router, { plugins: [new BodyLimitPlugin({ maxBodySize: 22 * 1024 * 1024 })] });
 
 startHistorySync();
 
