@@ -20,6 +20,10 @@ export const tenantIntegration = pgTable("tenant_integration", {
   // Create capabilities last reported by the on-prem agent (validated against EDMX there).
   writeCapabilities: jsonb("write_capabilities").$type<WriteCapability[] | null>(),
   writeCapabilitiesCheckedAt: timestamp("write_capabilities_checked_at", { withTimezone: true }),
+  // Maps a HERA user id to a B1 SalesEmployeeCode so the dashboard can scope to "my numbers".
+  // ponytail: jsonb map like enabledEntities — tens of entries, read once per request.
+  //           A real table only if this ever needs to be queried BY rep code.
+  salesReps: jsonb("sales_reps").$type<Record<string, number>>().notNull().default({}),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

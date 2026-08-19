@@ -1,4 +1,4 @@
-import { boolean, index, jsonb, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, jsonb, integer, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import type { Entries, ModelDef, OutputOverrides, Outputs, ResolvedLookups, Val } from "@hera/config-engine";
 
 // Configurator persistence: mutable model + immutable snapshot-on-run (model + lookups + computed
@@ -91,6 +91,13 @@ export const configRun = pgTable(
     selectionVersion: integer("selection_version").notNull().default(0),
     b1DocEntry: integer("b1_doc_entry"),
     quotedAt: timestamp("quoted_at", { withTimezone: true }),
+    // Engineered value/cost of the selected candidates, captured once when the quotation is
+    // confirmed. Stored rather than recomputed: recomputing needs modelSnapshot + lookupSnapshot
+    // per run, which is megabytes of jsonb for a 12-month dashboard window.
+    // ponytail: no backfill — runs quoted before this shipped stay null and are excluded from
+    //           the margin roll-up rather than counted as zero margin.
+    quotedValue: numeric("quoted_value", { precision: 18, scale: 4 }),
+    quotedCost: numeric("quoted_cost", { precision: 18, scale: 4 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("config_run_tenant_project_idx").on(t.tenantId, t.projectId)],
