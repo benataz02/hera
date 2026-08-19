@@ -3,6 +3,7 @@ import {
   buildCrossjoinPath,
   buildObjectHeaderPath,
   flattenCrossjoinRows,
+  nextLinkPath,
   projectFullRecord,
   type ObjectFetchRequest,
 } from "../src/service-layer-client.ts";
@@ -120,5 +121,31 @@ describe("crossjoin merge + full-record fallback", () => {
         { DocEntry: 142, LineNum: 1, ItemCode: "B2" },
       ],
     });
+  });
+});
+
+describe("nextLinkPath", () => {
+  const base = "https://b1.example.com:50000/b1s/v2";
+
+  test("returns undefined when there is no next link", () => {
+    expect(nextLinkPath(undefined, base)).toBeUndefined();
+    expect(nextLinkPath("", base)).toBeUndefined();
+    expect(nextLinkPath(42, base)).toBeUndefined();
+  });
+
+  test("prefixes a relative link with a slash", () => {
+    expect(nextLinkPath("Orders?$skip=20", base)).toBe("/Orders?$skip=20");
+  });
+
+  test("keeps an already-rooted relative link", () => {
+    expect(nextLinkPath("/Orders?$skip=20", base)).toBe("/Orders?$skip=20");
+  });
+
+  test("strips the service root from an absolute link", () => {
+    expect(nextLinkPath(`${base}/Orders?$skip=20&$top=5`, base)).toBe("/Orders?$skip=20&$top=5");
+  });
+
+  test("keeps the path when an absolute link does not share the service root", () => {
+    expect(nextLinkPath("https://other.example.com/Orders?$skip=20", base)).toBe("/Orders?$skip=20");
   });
 });

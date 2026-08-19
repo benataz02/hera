@@ -534,6 +534,17 @@ export function buildLookupListPath(opts: LookupListOpts): string {
   });
 }
 
+/** B1 returns @odata.nextLink either relative ("Orders?$skip=20") or absolute. Normalize to a
+ *  rawFetch path (rawFetch does baseUrl + path, so the service root must be stripped). */
+export function nextLinkPath(link: unknown, baseUrl: string): string | undefined {
+  if (typeof link !== "string" || link === "") return undefined;
+  if (!/^https?:\/\//i.test(link)) return link.startsWith("/") ? link : `/${link}`;
+  const u = new URL(link);
+  const root = new URL(baseUrl).pathname.replace(/\/$/, "");
+  const path = root && u.pathname.startsWith(root) ? u.pathname.slice(root.length) : u.pathname;
+  return `${path}${u.search}`;
+}
+
 /** DateTimeOffset for GetItemPrice only when the input parses as a real date. */
 export function normalizeItemPriceDate(date?: string): string | undefined {
   if (!date?.trim()) return undefined;
@@ -884,13 +895,33 @@ export class ServiceLayerClient {
     return { status: "found", record: rows[0]! };
   }
 
-  /** Generic read-only OData GET for the configurator "Query" data source. The path is admin-
-   *  authored (in the model) and GET-only, against this agent's B1 Service Layer base. */
+  /** Generic read-only OData GET for the configurator "Query" data source and the dashboard
+   *  snapshot. The path is server- or admin-authored and GET-only. Collection responses are
+   *  paged to exhaustion; anything else (aggregates, single entities) passes straight through.
+   *  ponytail: 20k-row ceiling with a console warning — raise it, or push the aggregation into
+   *  B1 with $apply, only if a real tenant hits it. */
   async queryRaw(path: string): Promise<unknown> {
     if (!path.startsWith("/")) throw new SlError(400, "BAD_PATH", "query path must start with /");
-    const res = await this.request("GET", path);
-    if (!res.ok) throw await this.toError(res);
-    return (await res.json()) as unknown;
+    const MAX_ROWS = 20_000;
+    let next: string | undefined = path;
+    let envelope: Record<string, unknown> | undefined;
+    const rows: unknown[] = [];
+
+    while (next) {
+      const res = await this.request("GET", next, undefined, { Prefer: "odata.maxpagesize=1000" });
+      if (!res.ok) throw await this.toError(res);
+      const json = (await res.json()) as Record<string, unknown>;
+      if (!Array.isArray(json.value)) return json;
+      envelope ??= json;
+      rows.push(...json.value);
+      if (rows.length >= MAX_ROWS) {
+        console.warn(`[sl] queryRaw hit the ${MAX_ROWS}-row cap for ${path}; result is truncated`);
+        break;
+      }
+      next = nextLinkPath(json["@odata.nextLink"], this.cfg.baseUrl);
+    }
+
+    return { ...envelope, value: rows, "@odata.nextLink": undefined };
   }
 
   /** Value-help page: server-fixed key/label fields only. */
