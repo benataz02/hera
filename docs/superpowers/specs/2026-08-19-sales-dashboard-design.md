@@ -63,7 +63,11 @@ Read from the code and the connected B1 v2 Service Layer, on 2026-08-19.
   their age.
 - **Aggregate in JS, not `$apply`.** Portable across HANA and MSSQL, and it makes the
   aggregation a pure function that tests can drive with fixtures.
-- **Margin is engineered margin**, from `computeOutputs`, not B1 gross profit.
+- **Margin is engineered margin**, from `computeOutputs`, not B1 gross profit — but it is
+  computed **once at quote time and stored**, not recomputed per dashboard load. Recomputing
+  would mean loading every quoted run's `modelSnapshot` and `lookupSnapshot` (a full `ModelDef`
+  plus every resolved lookup table, per run) for the whole window on every page view. Two
+  numeric columns on `config_run` replace megabytes of jsonb reads with two integers.
 - **Snapshot buckets by month and by `SalesPersonCode`**, so one fetch serves every time window
   and both scopes.
 - Add `@ui5/webcomponents-react-charts` for the two bar charts.
@@ -85,7 +89,7 @@ with an unanswered visible-and-required parameter.
 | Order value generated | B1 `Orders` headers | snapshot |
 | Quote-to-order conversion | B1 `Quotations.DocumentStatus` | snapshot |
 | Median quote turnaround | `config_project.events[created].at` → `config_run.quotedAt` | live SQL |
-| Gross margin | `computeOutputs()`, `unitPrice − unitCost` | live, pure |
+| Gross margin | `config_run.quotedValue` / `quotedCost`, captured at quote time | live SQL |
 | Config → order funnel | `config_project.status` + `b1DocEntry` ∩ snapshot orders | live SQL |
 | Open pipeline by age | B1 open `Quotations`; HERA slice via `b1DocEntry` | snapshot |
 | Quotes requiring attention | `config_project` requested / rejected / stale | live SQL |
@@ -195,6 +199,19 @@ salesReps: jsonb("sales_reps").$type<Record<string, number>>().notNull().default
 A jsonb map rather than a table, matching the `enabledEntities` and `writeCapabilities`
 precedent: admin-maintained, tens of entries, read once per request.
 `ponytail:` a real table if it ever needs to be queried by rep code.
+
+Two numeric columns on `config_run`, written inside the existing attempt-fenced `ack`
+transaction in `completeWriteOrigin` alongside `b1DocEntry` and `quotedAt`:
+
+```ts
+quotedValue: numeric("quoted_value", { precision: 18, scale: 4 }),
+quotedCost:  numeric("quoted_cost",  { precision: 18, scale: 4 }),
+```
+
+Both nullable. Runs quoted before this ships have neither, and are excluded from the margin
+roll-up rather than counted as zero-margin — the tile reports the covered run count so a
+partially-backfilled window is visible rather than silently wrong.
+`ponytail:` no backfill migration; the window rolls forward past the gap on its own.
 
 ## Server surface
 
