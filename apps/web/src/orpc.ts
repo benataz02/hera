@@ -8,3 +8,7 @@ import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 const link = new RPCLink({ url: `${window.location.origin}/rpc` });
 export const client: RouterClient<AppRouter> = createORPCClient(link);
 export const orpc = createTanstackQueryUtils(client);
+
+export type RouterOutputs = {
+  dashboard: { overview: Awaited<ReturnType<typeof client.dashboard.overview>> };
+};
