@@ -1,37 +1,28 @@
 import { describe, expect, test } from "bun:test";
-import {
-  buildCalculationUpdate,
-  CONFIG_PROCESS_STEP_IDS,
-  initialConfigProcessStep,
-  POST_RUN_STEP,
-  stepFromSection,
-} from "./configProcessState.ts";
+import { buildCalculationUpdate, needsCalculation } from "./configProcessState.ts";
 
-describe("config process navigation", () => {
-  test("draft project load lands on Configure", () => {
-    expect(CONFIG_PROCESS_STEP_IDS[initialConfigProcessStep("draft")]).toBe("configure");
-  });
+const ready = {
+  conflicted: false,
+  missingCount: 0,
+  batchCount: 1,
+  lookupsReady: true,
+  assistantBusy: false,
+  entriesDirty: false,
+  batchesDirty: false,
+  runReady: true,
+};
 
-  test("calculated project load lands on Candidates", () => {
-    expect(CONFIG_PROCESS_STEP_IDS[initialConfigProcessStep("calculated")]).toBe("candidates");
-  });
-
-  test("a successful run navigates to Candidates", () => {
-    expect(CONFIG_PROCESS_STEP_IDS[POST_RUN_STEP]).toBe("candidates");
-  });
-
-  test("?section= wins over the status default", () => {
-    expect(stepFromSection("configure", "calculated", false)).toBe(0);
-    expect(stepFromSection("candidates", "draft", false)).toBe(1);
-  });
-
-  test("an unknown or missing section falls back to the status default", () => {
-    expect(stepFromSection(undefined, "calculated", false)).toBe(1);
-    expect(stepFromSection("renamed-tab", "draft", false)).toBe(0);
-  });
-
-  test("a link to Candidates while that tab is locked falls back", () => {
-    expect(stepFromSection("candidates", "draft", true)).toBe(0);
+describe("needsCalculation", () => {
+  test("runs when dirty or not run-ready; skips when gated", () => {
+    expect(needsCalculation({ ...ready, entriesDirty: true })).toBe(true);
+    expect(needsCalculation({ ...ready, batchesDirty: true })).toBe(true);
+    expect(needsCalculation({ ...ready, runReady: false })).toBe(true);
+    expect(needsCalculation(ready)).toBe(false);
+    expect(needsCalculation({ ...ready, entriesDirty: true, conflicted: true })).toBe(false);
+    expect(needsCalculation({ ...ready, entriesDirty: true, missingCount: 1 })).toBe(false);
+    expect(needsCalculation({ ...ready, entriesDirty: true, batchCount: 0 })).toBe(false);
+    expect(needsCalculation({ ...ready, entriesDirty: true, lookupsReady: false })).toBe(false);
+    expect(needsCalculation({ ...ready, entriesDirty: true, assistantBusy: true })).toBe(false);
   });
 });
 

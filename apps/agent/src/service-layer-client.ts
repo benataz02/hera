@@ -4,16 +4,29 @@
 // entities. No $batch yet — add it when bulk writes matter.
 import { XMLParser } from "fast-xml-parser";
 
-export interface EdmProperty {
+export type EnumOption = { value: string; text: string; numericValue?: number };
+export type EntityProperty = {
   name: string;
   type: string;
   nullable: boolean;
-}
-export interface EntitySchema {
+  options?: EnumOption[];
+  lookup?: { entitySet: string; valueField: string; labelField?: string };
+};
+export type CollectionSchema = {
+  name: string;
+  typeName: string;
+  many: boolean;
+  properties: EntityProperty[];
+};
+export type EntitySchema = {
   name: string; // EntitySet name (what you query, e.g. "BusinessPartners")
+  typeName: string;
   keys: string[];
-  properties: EdmProperty[];
-}
+  properties: EntityProperty[];
+  collections: CollectionSchema[];
+};
+/** @deprecated use EntityProperty */
+export type EdmProperty = EntityProperty;
 
 // Find a child by local XML name, ignoring namespace prefix (edmx:Edmx, m:Something, ...).
 function pick(obj: Record<string, unknown> | undefined, local: string): unknown {
@@ -23,42 +36,292 @@ function pick(obj: Record<string, unknown> | undefined, local: string): unknown 
 }
 const asArray = <T>(v: T | T[] | undefined): T[] => (v == null ? [] : Array.isArray(v) ? v : [v]);
 
+function localName(qualified: string | undefined): string {
+  return (qualified ?? "").split(".").pop() ?? "";
+}
+
+function collectionInner(type: string): string | null {
+  const m = /^Collection\((.+)\)$/.exec(type);
+  return m ? m[1]! : null;
+}
+
+/**
+ * B1 enum members are Hungarian-prefixed: `tYES`, `psNo`, `cCustomer`, `bost_Open`,
+ * `dDocument_Items`. Drop the leading lowercase run (and its underscore) for display text; the
+ * exact member Name stays in `value` for round trips. All-lowercase members keep their name.
+ * ponytail: prefix strip only — no camel-case splitting until a label actually reads badly.
+ */
+export function enumText(name: string): string {
+  const stripped = name.replace(/^[a-z]+_?/, "").replace(/_/g, " ");
+  return stripped || name;
+}
+
+type RawProp = { name: string; type: string; nullable: boolean };
+type NavConstraint = { property: string; referencedProperty: string; targetType: string };
+
+/**
+ * Description column for a value help, from the target type's own properties. B1 names the pair
+ * conventionally (CardCode/CardName, ItemCode/ItemName, Code/Name), so the key's stem drives the
+ * guess before falling back to any *Name/*Description string field.
+ * ponytail: naming convention only — add a per-entity override if a target breaks the pattern.
+ */
+export function pickLabelField(props: RawProp[], valueField: string): string | undefined {
+  const strings = props.filter((p) => /string/i.test(p.type) && p.name !== valueField);
+  const names = new Set(strings.map((p) => p.name));
+  const stem = valueField.replace(/(Code|Entry|Number|Num|ID|Key)$/, "");
+  for (const c of [`${stem}Name`, `${stem}Description`, "Name", "Description"]) {
+    if (names.has(c)) return c;
+  }
+  return strings.find((p) => /(Name|Description)$/.test(p.name))?.name;
+}
+
 // Parse an OData $metadata (EDMX) document into per-EntitySet schemas. Handles both the v3
-// (b1s/v1) and v4 (b1s/v2) shapes — structurally the same for EntityType/Key/Property/EntitySet.
-// Exported so it has a runnable self-check (scripts/e2e.ts --unit) without a live B1.
+// (b1s/v1) and v4 (b1s/v2) shapes. One-level complex collections, enum members, and validated
+// lookup constraints; reverse entity-set navigations are excluded from owned collections.
 export function parseEdmx(xml: string): EntitySchema[] {
   const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: "@_",
     isArray: (name) =>
-      ["Schema", "EntityType", "EntitySet", "EntityContainer", "Property", "PropertyRef"].includes(name),
+      [
+        "Schema",
+        "EntityType",
+        "ComplexType",
+        "EnumType",
+        "Member",
+        "EntitySet",
+        "EntityContainer",
+        "Property",
+        "PropertyRef",
+        "NavigationProperty",
+        "ReferentialConstraint",
+      ].includes(name),
   });
   const doc = parser.parse(xml) as Record<string, unknown>;
-  const dataServices = pick(pick(doc, "Edmx") as Record<string, unknown>, "DataServices") as Record<string, unknown>;
-  const schemas = asArray(pick(dataServices, "Schema") as unknown);
+  const dataServices = pick(pick(doc, "Edmx") as Record<string, unknown>, "DataServices") as Record<
+    string,
+    unknown
+  >;
+  const schemas = asArray(pick(dataServices, "Schema") as unknown) as Record<string, unknown>[];
 
-  // EntityType (by local name) -> its keys + properties.
-  const types = new Map<string, { keys: string[]; properties: EdmProperty[] }>();
-  for (const schema of schemas as Record<string, unknown>[]) {
-    for (const et of asArray(pick(schema, "EntityType") as unknown) as Record<string, unknown>[]) {
+  // 1. Enum local name -> members (Name as value; numeric Value only in numericValue).
+  const enums = new Map<string, EnumOption[]>();
+  for (const schema of schemas) {
+    for (const et of asArray(pick(schema, "EnumType") as unknown) as Record<string, unknown>[]) {
       const name = et["@_Name"] as string;
-      const keys = asArray(pick(pick(et, "Key") as Record<string, unknown>, "PropertyRef") as unknown)
-        .map((r) => (r as Record<string, string>)["@_Name"]!);
-      const properties = asArray(pick(et, "Property") as unknown).map((p) => {
-        const pr = p as Record<string, string>;
-        return { name: pr["@_Name"]!, type: pr["@_Type"] ?? "Edm.String", nullable: pr["@_Nullable"] !== "false" };
+      const members = asArray(pick(et, "Member") as unknown).map((m) => {
+        const mr = m as Record<string, string>;
+        const memberName = mr["@_Name"]!;
+        const raw = mr["@_Value"];
+        const numericValue = raw != null && raw !== "" && !Number.isNaN(Number(raw)) ? Number(raw) : undefined;
+        return {
+          value: memberName,
+          text: enumText(memberName),
+          ...(numericValue !== undefined ? { numericValue } : {}),
+        };
       });
-      types.set(name, { keys, properties });
+      enums.set(name, members);
     }
   }
 
-  // EntitySet -> the EntityType it exposes.
-  const out: EntitySchema[] = [];
-  for (const schema of schemas as Record<string, unknown>[]) {
+  // 2. complex/entity type local name -> raw properties.
+  const typeProps = new Map<string, RawProp[]>();
+  const complexNames = new Set<string>();
+  const entityTypeNames = new Set<string>();
+
+  for (const schema of schemas) {
+    for (const ct of asArray(pick(schema, "ComplexType") as unknown) as Record<string, unknown>[]) {
+      const name = ct["@_Name"] as string;
+      complexNames.add(name);
+      typeProps.set(
+        name,
+        asArray(pick(ct, "Property") as unknown).map((p) => {
+          const pr = p as Record<string, string>;
+          return {
+            name: pr["@_Name"]!,
+            type: pr["@_Type"] ?? "Edm.String",
+            nullable: pr["@_Nullable"] !== "false",
+          };
+        }),
+      );
+    }
+    for (const et of asArray(pick(schema, "EntityType") as unknown) as Record<string, unknown>[]) {
+      const name = et["@_Name"] as string;
+      entityTypeNames.add(name);
+      typeProps.set(
+        name,
+        asArray(pick(et, "Property") as unknown).map((p) => {
+          const pr = p as Record<string, string>;
+          return {
+            name: pr["@_Name"]!,
+            type: pr["@_Type"] ?? "Edm.String",
+            nullable: pr["@_Nullable"] !== "false",
+          };
+        }),
+      );
+    }
+  }
+
+  // 3. entity type -> keys + navigation referential constraints.
+  const typeKeys = new Map<string, string[]>();
+  const typeNavs = new Map<string, NavConstraint[]>();
+  for (const schema of schemas) {
+    for (const et of asArray(pick(schema, "EntityType") as unknown) as Record<string, unknown>[]) {
+      const name = et["@_Name"] as string;
+      const keys = asArray(pick(pick(et, "Key") as Record<string, unknown>, "PropertyRef") as unknown).map(
+        (r) => (r as Record<string, string>)["@_Name"]!,
+      );
+      typeKeys.set(name, keys);
+      const navs: NavConstraint[] = [];
+      for (const nav of asArray(pick(et, "NavigationProperty") as unknown) as Record<string, unknown>[]) {
+        const targetType = localName(collectionInner((nav["@_Type"] as string) ?? "") ?? (nav["@_Type"] as string));
+        for (const rc of asArray(pick(nav, "ReferentialConstraint") as unknown) as Record<string, string>[]) {
+          if (rc["@_Property"] && rc["@_ReferencedProperty"]) {
+            navs.push({
+              property: rc["@_Property"],
+              referencedProperty: rc["@_ReferencedProperty"],
+              targetType,
+            });
+          }
+        }
+      }
+      typeNavs.set(name, navs);
+    }
+  }
+
+  // 4. entity type local name -> entity-set name(s).
+  const typeToSets = new Map<string, string[]>();
+  for (const schema of schemas) {
     for (const container of asArray(pick(schema, "EntityContainer") as unknown) as Record<string, unknown>[]) {
       for (const set of asArray(pick(container, "EntitySet") as unknown) as Record<string, string>[]) {
-        const t = types.get((set["@_EntityType"] ?? "").split(".").pop()!);
-        if (t) out.push({ name: set["@_Name"]!, keys: t.keys, properties: t.properties });
+        const typeName = localName(set["@_EntityType"]);
+        const list = typeToSets.get(typeName) ?? [];
+        list.push(set["@_Name"]!);
+        typeToSets.set(typeName, list);
+      }
+    }
+  }
+
+  const addressableTypes = new Set(typeToSets.keys());
+
+  /** Resolve one referential constraint to a lookup, or null when the target isn't a single set. */
+  function navLookup(nav: NavConstraint): EntityProperty["lookup"] | null {
+    const sets = typeToSets.get(nav.targetType) ?? [];
+    if (sets.length !== 1) return null;
+    const labelField = pickLabelField(typeProps.get(nav.targetType) ?? [], nav.referencedProperty);
+    return {
+      entitySet: sets[0]!,
+      valueField: nav.referencedProperty,
+      ...(labelField ? { labelField } : {}),
+    };
+  }
+
+  // Field name -> lookup, pooled across every EntityType in the document. ComplexTypes
+  // (DocumentLines and friends) declare no NavigationProperty, so a same-named constraint on an
+  // addressable type is the only metadata evidence for their FK fields — e.g. ItemCode carries
+  // ItemCode->Items on SpecialPrices. A name whose constraints disagree on the target is dropped
+  // (null) rather than guessed. Used ONLY for complex children; entity types keep their own
+  // precise per-type constraints so this can never invent a header lookup B1 doesn't declare.
+  const pooledLookups = new Map<string, EntityProperty["lookup"] | null>();
+  for (const navs of typeNavs.values()) {
+    for (const nav of navs) {
+      const candidate = navLookup(nav);
+      if (!candidate) continue;
+      if (!pooledLookups.has(nav.property)) {
+        pooledLookups.set(nav.property, candidate);
+        continue;
+      }
+      const seen = pooledLookups.get(nav.property);
+      if (!seen) continue; // already ambiguous
+      if (seen.entitySet !== candidate.entitySet || seen.valueField !== candidate.valueField) {
+        pooledLookups.set(nav.property, null);
+      }
+    }
+  }
+
+  /** Lookups for a ComplexType's children, by pooled field-name agreement. Scalars only. */
+  function pooledFor(raw: RawProp[]): Map<string, EntityProperty["lookup"]> {
+    const out = new Map<string, EntityProperty["lookup"]>();
+    for (const p of raw) {
+      const local = localName(collectionInner(p.type) ?? p.type);
+      if (complexNames.has(local) || entityTypeNames.has(local) || enums.has(local)) continue;
+      const hit = pooledLookups.get(p.name);
+      if (hit) out.set(p.name, hit);
+    }
+    return out;
+  }
+
+  function resolveProps(raw: RawProp[], lookups: Map<string, EntityProperty["lookup"]>): EntityProperty[] {
+    return raw.map((p) => {
+      const local = localName(p.type);
+      const options = enums.get(local);
+      const lookup = lookups.get(p.name);
+      return {
+        name: p.name,
+        type: p.type,
+        nullable: p.nullable,
+        ...(options ? { options } : {}),
+        ...(lookup ? { lookup } : {}),
+      };
+    });
+  }
+
+  function splitOwned(
+    raw: RawProp[],
+    lookups: Map<string, EntityProperty["lookup"]>,
+  ): { properties: EntityProperty[]; collections: CollectionSchema[] } {
+    const properties: EntityProperty[] = [];
+    const collections: CollectionSchema[] = [];
+    for (const p of raw) {
+      const innerQualified = collectionInner(p.type);
+      const many = innerQualified != null;
+      const targetQualified = innerQualified ?? p.type;
+      const targetLocal = localName(targetQualified);
+
+      // Owned collection/complex section: ComplexType only. Entity types with an EntitySet are
+      // reverse/addressable navigations (or would be) — never owned sections.
+      if (complexNames.has(targetLocal) && !addressableTypes.has(targetLocal)) {
+        const childRaw = typeProps.get(targetLocal) ?? [];
+        collections.push({
+          name: p.name,
+          typeName: targetLocal,
+          many: many || false,
+          properties: resolveProps(childRaw, pooledFor(childRaw)),
+        });
+        continue;
+      }
+      if (many && addressableTypes.has(targetLocal)) continue; // reverse entity-set collection prop
+      if (!many && entityTypeNames.has(targetLocal) && addressableTypes.has(targetLocal)) continue;
+
+      properties.push(...resolveProps([p], lookups));
+    }
+    return { properties, collections };
+  }
+
+  // 5. entity sets -> resolved EntitySchema.
+  const out: EntitySchema[] = [];
+  for (const schema of schemas) {
+    for (const container of asArray(pick(schema, "EntityContainer") as unknown) as Record<string, unknown>[]) {
+      for (const set of asArray(pick(container, "EntitySet") as unknown) as Record<string, string>[]) {
+        const typeName = localName(set["@_EntityType"]);
+        const raw = typeProps.get(typeName);
+        if (!raw) continue;
+
+        // Entity types use their OWN constraints only — never the pooled map.
+        const lookups = new Map<string, EntityProperty["lookup"]>();
+        for (const nav of typeNavs.get(typeName) ?? []) {
+          const lookup = navLookup(nav);
+          if (lookup) lookups.set(nav.property, lookup);
+        }
+
+        const { properties, collections } = splitOwned(raw, lookups);
+        out.push({
+          name: set["@_Name"]!,
+          typeName,
+          keys: typeKeys.get(typeName) ?? [],
+          properties,
+          collections,
+        });
       }
     }
   }
@@ -135,6 +398,199 @@ export function buildListPath(entity: string, opts: ListQuery): string {
   return `/${entity}?${params.join("&")}`;
 }
 
+/** Server-compiled object projection. Agent never invents select/join keys. */
+export type ObjectFetchRequest = {
+  entity: string;
+  key: string;
+  keyQuoted: boolean;
+  select: string[];
+  collections: Array<{
+    name: string;
+    select: string[];
+    parentKey: string;
+    childParentKey: string;
+    rowKey: string;
+  }>;
+  fullRecordFallback: boolean;
+};
+
+function assertIdent(name: string, label = "identifier"): void {
+  if (!IDENT.test(name)) throw new SlError(400, "BAD_IDENT", `Invalid ${label} '${name}'`);
+}
+
+/** OData key literal: quoted strings escape `'`; numerics stay bare. */
+export function odataKeyLiteral(key: string, quoted: boolean): string {
+  if (!quoted) return key;
+  return `'${String(key).replace(/'/g, "''")}'`;
+}
+
+export function buildObjectHeaderPath(
+  entity: string,
+  key: string,
+  keyQuoted: boolean,
+  select: string[],
+): string {
+  assertIdent(entity, "entity");
+  for (const f of select) assertIdent(f, "field");
+  const sel = select.length ? `?$select=${select.join(",")}` : "";
+  return `/${entity}(${odataKeyLiteral(key, keyQuoted)})${sel}`;
+}
+
+export function buildCrossjoinPath(opts: {
+  entity: string;
+  key: string;
+  keyQuoted: boolean;
+  collection: ObjectFetchRequest["collections"][number];
+}): string {
+  const { entity, key, keyQuoted, collection } = opts;
+  assertIdent(entity, "entity");
+  assertIdent(collection.name, "collection");
+  assertIdent(collection.parentKey, "field");
+  assertIdent(collection.childParentKey, "field");
+  assertIdent(collection.rowKey, "field");
+  for (const f of collection.select) assertIdent(f, "field");
+
+  const parentAlias = entity;
+  const childAlias = `${entity}/${collection.name}`;
+  const expand =
+    `${parentAlias}($select=${collection.parentKey}),` +
+    `${childAlias}($select=${collection.select.join(",")})`;
+  const keyLit = odataKeyLiteral(key, keyQuoted);
+  const filter =
+    `${parentAlias}/${collection.parentKey} eq ${childAlias}/${collection.childParentKey}` +
+    ` and ${parentAlias}/${collection.parentKey} eq ${keyLit}`;
+  return (
+    `/$crossjoin(${entity},${childAlias})` +
+    `?$expand=${expand}` +
+    `&$filter=${encodeURIComponent(filter)}`
+  );
+}
+
+/** Flatten OData crossjoin value rows into collection row objects. */
+export function flattenCrossjoinRows(
+  rows: Record<string, unknown>[],
+  entity: string,
+  collection: string,
+): Record<string, unknown>[] {
+  const childKey = `${entity}/${collection}`;
+  return rows.map((row) => {
+    const child = row[childKey];
+    return child && typeof child === "object" && !Array.isArray(child)
+      ? { ...(child as Record<string, unknown>) }
+      : {};
+  });
+}
+
+/** When fallback is on, keep only the compiled header/collection fields from a full GET. */
+export function projectFullRecord(
+  full: Record<string, unknown>,
+  request: ObjectFetchRequest,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const f of request.select) {
+    if (f in full) out[f] = full[f];
+  }
+  for (const col of request.collections) {
+    const raw = full[col.name];
+    if (!Array.isArray(raw)) {
+      out[col.name] = [];
+      continue;
+    }
+    out[col.name] = raw.map((row) => {
+      if (!row || typeof row !== "object") return {};
+      const r = row as Record<string, unknown>;
+      const projected: Record<string, unknown> = {};
+      for (const f of col.select) {
+        if (f in r) projected[f] = r[f];
+      }
+      return projected;
+    });
+  }
+  return out;
+}
+
+export type LookupListOpts = {
+  entity: string;
+  keyField: string;
+  labelField: string;
+  search: string;
+  skip: number;
+  top: number;
+};
+
+/** Paged OData list for value-help: key+label $select, contains search on both. */
+export function buildLookupListPath(opts: LookupListOpts): string {
+  assertIdent(opts.entity, "entity");
+  assertIdent(opts.keyField, "field");
+  assertIdent(opts.labelField, "field");
+  const select =
+    opts.keyField === opts.labelField ? [opts.keyField] : [opts.keyField, opts.labelField];
+  return buildListPath(opts.entity, {
+    top: opts.top,
+    skip: opts.skip,
+    q: opts.search || undefined,
+    fields: opts.search ? select : [],
+    select,
+  });
+}
+
+/** DateTimeOffset for GetItemPrice only when the input parses as a real date. */
+export function normalizeItemPriceDate(date?: string): string | undefined {
+  if (!date?.trim()) return undefined;
+  const t = date.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) {
+    const d = new Date(`${t}T00:00:00Z`);
+    if (Number.isNaN(d.getTime())) return undefined;
+    return `${t}T00:00:00Z`;
+  }
+  const d = new Date(t);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+export type ItemPriceInput = {
+  itemCode: string;
+  cardCode?: string;
+  inventoryQuantity?: number;
+  uomEntry?: number;
+  uomQuantity?: number;
+  date?: string;
+  currency?: string;
+  priceList?: number;
+};
+
+/** Pure body for POST /CompanyService_GetItemPrice — InventoryQuantity, never Quantity. */
+export function buildItemPriceBody(input: ItemPriceInput): {
+  ItemPriceParams: Record<string, unknown>;
+} {
+  const params: Record<string, unknown> = { ItemCode: input.itemCode };
+  if (input.cardCode != null && input.cardCode !== "") params.CardCode = input.cardCode;
+  if (input.inventoryQuantity != null) params.InventoryQuantity = input.inventoryQuantity;
+  if (input.uomEntry != null) params.UoMEntry = input.uomEntry;
+  if (input.uomQuantity != null) params.UoMQuantity = input.uomQuantity;
+  const date = normalizeItemPriceDate(input.date);
+  if (date) params.Date = date;
+  if (input.currency != null && input.currency !== "") params.Currency = input.currency;
+  if (input.priceList != null) params.PriceList = input.priceList;
+  return { ItemPriceParams: params };
+}
+
+export type LookupResult = {
+  rows: Array<{ key: string; label: string }>;
+  hasMore: boolean;
+};
+
+export type ItemContextAgentInput = {
+  itemCode: string;
+  select: string[];
+  price: ItemPriceInput;
+};
+
+export type ItemContextAgentResult = {
+  defaults: Record<string, unknown>;
+  price?: { value: number; currency?: string; discount?: number };
+};
+
 export class SlError extends Error {
   constructor(
     readonly status: number,
@@ -143,6 +599,14 @@ export class SlError extends Error {
   ) {
     super(message);
   }
+}
+
+/** Reject non-XML /$metadata payloads (JSON error bodies, HTML gateways, …). */
+export function requireXmlMetadata(contentType: string | null, body: string): void {
+  const ct = (contentType ?? "").toLowerCase();
+  if (ct.includes("xml")) return;
+  if (body.trimStart().startsWith("<")) return;
+  throw new SlError(502, "BAD_METADATA_RESPONSE", "Service Layer /$metadata did not return XML");
 }
 
 // Error shape: {error:{code,message}} — message is a plain string on b1s/v2 (OData 4) and a
@@ -290,9 +754,11 @@ export class ServiceLayerClient {
 
   /** Discover all entity sets + their field schemas from the Service Layer $metadata. */
   async metadata(): Promise<EntitySchema[]> {
-    const res = await this.request("POST", "/$metadata");
+    const res = await this.request("POST", "/$metadata", undefined, { Accept: "application/xml" });
     if (!res.ok) throw await this.toError(res);
-    return parseEdmx(await res.text());
+    const body = await res.text();
+    requireXmlMetadata(res.headers.get("content-type"), body);
+    return parseEdmx(body);
   }
 
   /** List a page of an entity set with the inline total. OData v4 server pagination (maxpagesize=100). */
@@ -325,6 +791,42 @@ export class ServiceLayerClient {
     return (await res.json()) as Record<string, unknown>;
   }
 
+  /** Header $select + profiled $crossjoin collections (or one full GET when fallback). */
+  async getEntityProjected(request: ObjectFetchRequest): Promise<Record<string, unknown>> {
+    this.assertEntity(request.entity);
+
+    if (request.fullRecordFallback) {
+      const res = await this.request(
+        "GET",
+        `/${request.entity}(${odataKeyLiteral(request.key, request.keyQuoted)})`,
+      );
+      if (!res.ok) throw await this.toError(res);
+      const full = (await res.json()) as Record<string, unknown>;
+      return projectFullRecord(full, request);
+    }
+
+    const headerRes = await this.request(
+      "GET",
+      buildObjectHeaderPath(request.entity, request.key, request.keyQuoted, request.select),
+    );
+    if (!headerRes.ok) throw await this.toError(headerRes);
+    const record = (await headerRes.json()) as Record<string, unknown>;
+
+    for (const col of request.collections) {
+      const path = buildCrossjoinPath({
+        entity: request.entity,
+        key: request.key,
+        keyQuoted: request.keyQuoted,
+        collection: col,
+      });
+      const res = await this.request("GET", path);
+      if (!res.ok) throw await this.toError(res);
+      const json = (await res.json()) as { value?: Record<string, unknown>[] };
+      record[col.name] = flattenCrossjoinRows(json.value ?? [], request.entity, col.name);
+    }
+    return record;
+  }
+
   /** Create a record. Returns B1's created entity body. */
   async createEntity(entity: string, data: Record<string, unknown>): Promise<Record<string, unknown>> {
     this.assertEntity(entity);
@@ -333,12 +835,53 @@ export class ServiceLayerClient {
     return (await res.json()) as Record<string, unknown>;
   }
 
-  /** Update a record by key. B1 PATCH returns 204 No Content. */
-  async updateEntity(entity: string, key: string, keyQuoted: boolean, data: Record<string, unknown>): Promise<{ ok: true }> {
+  /** Update a record by key. B1 PATCH returns 204 No Content.
+   *  Set replaceCollections when the payload includes a changed collection array. */
+  async updateEntity(
+    entity: string,
+    key: string,
+    keyQuoted: boolean,
+    data: Record<string, unknown>,
+    opts?: { replaceCollections?: boolean },
+  ): Promise<{ ok: true }> {
     this.assertEntity(entity);
-    const res = await this.request("PATCH", `/${entity}(${this.keyPredicate(key, keyQuoted)})`, data);
+    const headers = opts?.replaceCollections
+      ? { "B1S-ReplaceCollectionsOnPatch": "true" }
+      : undefined;
+    const res = await this.request(
+      "PATCH",
+      `/${entity}(${this.keyPredicate(key, keyQuoted)})`,
+      data,
+      headers,
+    );
     if (!res.ok) throw await this.toError(res);
     return { ok: true };
+  }
+
+  /** Dedup lookup for create redelivery / unique-conflict recovery. At most 2 rows.
+   *  Exactly one = found; zero = absent; two = invariant failure (DEDUP_AMBIGUOUS). */
+  async findByDedup(
+    entity: string,
+    field: string,
+    value: string,
+    resultKey: string,
+  ): Promise<{ status: "found"; record: Record<string, unknown> } | { status: "absent" }> {
+    this.assertEntity(entity);
+    assertIdent(field, "field");
+    assertIdent(resultKey, "field");
+    const filter = `${field} eq ${odataLiteral(value)}`;
+    const path =
+      `/${entity}?$filter=${encodeURIComponent(filter)}` +
+      `&$top=2&$select=${resultKey}`;
+    const res = await this.request("GET", path);
+    if (!res.ok) throw await this.toError(res);
+    const json = (await res.json()) as { value?: Record<string, unknown>[] };
+    const rows = json.value ?? [];
+    if (rows.length === 0) return { status: "absent" };
+    if (rows.length > 1) {
+      throw new SlError(500, "DEDUP_AMBIGUOUS", `Multiple rows for ${entity}.${field}=${value}`);
+    }
+    return { status: "found", record: rows[0]! };
   }
 
   /** Generic read-only OData GET for the configurator "Query" data source. The path is admin-
@@ -348,6 +891,63 @@ export class ServiceLayerClient {
     const res = await this.request("GET", path);
     if (!res.ok) throw await this.toError(res);
     return (await res.json()) as unknown;
+  }
+
+  /** Value-help page: server-fixed key/label fields only. */
+  async listLookup(opts: LookupListOpts): Promise<LookupResult> {
+    this.assertEntity(opts.entity);
+    assertIdent(opts.keyField, "field");
+    assertIdent(opts.labelField, "field");
+    const res = await this.request("GET", buildLookupListPath(opts), undefined, {
+      Prefer: "odata.maxpagesize=100",
+    });
+    if (!res.ok) throw await this.toError(res);
+    const json = (await res.json()) as {
+      value?: Record<string, unknown>[];
+      "@odata.nextLink"?: string;
+    };
+    const rows = (json.value ?? []).map((r) => {
+      const key = r[opts.keyField];
+      const label = r[opts.labelField] ?? key;
+      return { key: key == null ? "" : String(key), label: label == null ? "" : String(label) };
+    });
+    return { rows, hasMore: !!json["@odata.nextLink"] };
+  }
+
+  /** Selected Item master fields + CompanyService_GetItemPrice (InventoryQuantity). */
+  async getItemContext(input: ItemContextAgentInput): Promise<ItemContextAgentResult> {
+    this.assertEntity("Items");
+    for (const f of input.select) assertIdent(f, "field");
+
+    const select = input.select.filter((f) => IDENT.test(f));
+    const sel = select.length ? `?$select=${select.join(",")}` : "";
+    const itemRes = await this.request(
+      "GET",
+      `/Items(${odataKeyLiteral(input.itemCode, true)})${sel}`,
+    );
+    if (!itemRes.ok) throw await this.toError(itemRes);
+    const defaults = (await itemRes.json()) as Record<string, unknown>;
+
+    const priceRes = await this.request(
+      "POST",
+      "/CompanyService_GetItemPrice",
+      buildItemPriceBody({ ...input.price, itemCode: input.itemCode }),
+    );
+    if (!priceRes.ok) throw await this.toError(priceRes);
+    const priceJson = (await priceRes.json()) as {
+      Price?: number;
+      Currency?: string;
+      Discount?: number;
+    };
+    const price =
+      priceJson.Price != null
+        ? {
+            value: Number(priceJson.Price),
+            currency: priceJson.Currency || undefined,
+            discount: priceJson.Discount != null ? Number(priceJson.Discount) : undefined,
+          }
+        : undefined;
+    return { defaults, price };
   }
 
   private async toError(res: Response): Promise<SlError> {

@@ -61,6 +61,7 @@ export const variantsRouter = {
 
   // Upsert a view. Publishing/editing a shared view is admin-only. Setting a view as default clears
   // the previous default within the same owner scope (personal-per-user, or shared-tenant-wide).
+  // Names must be unique within personal-per-user or shared-tenant scope (case-insensitive).
   save: userProcedure.input(SaveZ).handler(async ({ input, context }) => {
     const isAdmin = context.role === "admin" || context.role === "owner";
     if (input.shared && !isAdmin) throw new ORPCError("FORBIDDEN", { message: "Only admins can publish shared views" });
@@ -74,13 +75,46 @@ export const variantsRouter = {
         isDefault: input.isDefault,
         updatedAt: new Date(),
       };
+      // Soft uniqueness within personal-per-user or shared-tenant scope (case-insensitive).
+      {
+        const scope = input.shared
+          ? and(
+              eq(uiVariant.tenantId, context.tenantId),
+              eq(uiVariant.page, input.page),
+              eq(uiVariant.entity, input.entity),
+              eq(uiVariant.shared, true),
+            )
+          : and(
+              eq(uiVariant.tenantId, context.tenantId),
+              eq(uiVariant.page, input.page),
+              eq(uiVariant.entity, input.entity),
+              eq(uiVariant.userId, context.userId),
+              eq(uiVariant.shared, false),
+            );
+        const peers = await tx
+          .select({ id: uiVariant.id, name: uiVariant.name })
+          .from(uiVariant)
+          .where(scope);
+        const key = input.name.trim().toLowerCase();
+        const clash = peers.find((p) => p.id !== id && p.name.trim().toLowerCase() === key);
+        if (clash) {
+          throw new ORPCError("CONFLICT", {
+            message: input.shared
+              ? "A shared view with this name already exists"
+              : "A personal view with this name already exists",
+          });
+        }
+      }
       if (id) {
         const [row] = await tx
-          .select({ userId: uiVariant.userId, shared: uiVariant.shared })
+          .select({ userId: uiVariant.userId, shared: uiVariant.shared, isStandard: uiVariant.isStandard, name: uiVariant.name })
           .from(uiVariant)
           .where(and(eq(uiVariant.id, id), eq(uiVariant.tenantId, context.tenantId)))
           .limit(1);
         if (!row) throw new ORPCError("NOT_FOUND");
+        if (row.isStandard && input.name !== "Standard") {
+          throw new ORPCError("FORBIDDEN", { message: "Standard view cannot be renamed" });
+        }
         const owns = row.userId === context.userId && !row.shared;
         if (!owns && !isAdmin) throw new ORPCError("FORBIDDEN", { message: "Not allowed to edit this view" });
         await tx.update(uiVariant).set(fields).where(eq(uiVariant.id, id));
@@ -105,15 +139,16 @@ export const variantsRouter = {
     });
   }),
 
-  // Delete a view: your own personal one, or any (incl. shared) if admin.
+  // Delete a view: your own personal one, or any (incl. shared) if admin. Standard is never deletable.
   remove: userProcedure.input(z.object({ id: z.string().uuid() })).handler(async ({ input, context }) => {
     const isAdmin = context.role === "admin" || context.role === "owner";
     const [row] = await db
-      .select({ userId: uiVariant.userId, shared: uiVariant.shared })
+      .select({ userId: uiVariant.userId, shared: uiVariant.shared, isStandard: uiVariant.isStandard })
       .from(uiVariant)
       .where(and(eq(uiVariant.id, input.id), eq(uiVariant.tenantId, context.tenantId)))
       .limit(1);
     if (!row) throw new ORPCError("NOT_FOUND");
+    if (row.isStandard) throw new ORPCError("FORBIDDEN", { message: "Standard view cannot be deleted" });
     const owns = row.userId === context.userId && !row.shared;
     if (!owns && !isAdmin) throw new ORPCError("FORBIDDEN", { message: "Not allowed to delete this view" });
     await db.delete(uiVariant).where(eq(uiVariant.id, input.id));

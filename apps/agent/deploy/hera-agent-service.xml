@@ -46,6 +46,8 @@
   <env name="B1_PASS"            value="__FILL_ME__"/>
   <!-- Optional. Set true only against a self-signed B1 cert. -->
   <env name="B1_INSECURE_TLS"    value="false"/>
+  <!-- Optional. Create prerequisites: EntitySet:UdfName pairs validated against $metadata. -->
+  <!-- <env name="B1_CREATE_CAPABILITIES" value="Quotations:U_HERA_DedupKey,Orders:U_HERA_DedupKey"/> -->
   <!-- Optional. Service Layer request timeout in ms (default 60000). -->
   <!-- <env name="B1_TIMEOUT_MS" value="60000"/> -->
 

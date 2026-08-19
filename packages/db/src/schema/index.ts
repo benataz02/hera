@@ -1,4 +1,5 @@
 export * from "./auth.ts";
+export * from "./entity.ts";
 export * from "./tenant.ts";
 export * from "./agent-request.ts";
 export * from "./variant.ts";

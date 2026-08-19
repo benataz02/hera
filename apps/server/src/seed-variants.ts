@@ -1,5 +1,7 @@
 import { and, eq } from "drizzle-orm";
-import { db, uiVariant } from "@hera/db";
+import { db, uiVariant, type EntityProfile, type EntitySchema } from "@hera/db";
+import { getEntityProfile } from "./entity-profiles.ts";
+import { isEmptyObjectDef, seedObjectDef } from "./objectSeed.ts";
 
 // Variant seeding lives here, not in routers/variants.ts, so it imports @hera/db and nothing else.
 // auth.ts calls it from the afterCreateOrganization hook, and routers/variants.ts pulls in base.ts
@@ -7,10 +9,19 @@ import { db, uiVariant } from "@hera/db";
 
 // Preseed the shared "Standard" view for both pages of an entity, idempotent via isStandard —
 // called when an admin enables a B1 entity, on tenant creation, and from scripts/seed-standard.ts.
-export async function ensureStandardVariants(tenantId: string, userId: string, entity: string) {
+// Empty object Standards (legacy `{ fields:[], sections:[] }` or new shape with no visible fields)
+// are replaced with a SAP-aware seed when schema is provided.
+export async function ensureStandardVariants(
+  tenantId: string,
+  userId: string,
+  entity: string,
+  schema?: EntitySchema | null,
+  profile?: EntityProfile | null,
+) {
+  const resolvedProfile = profile === undefined ? getEntityProfile(entity) : profile;
   for (const page of ["list", "object"] as const) {
     const [hit] = await db
-      .select({ id: uiVariant.id })
+      .select({ id: uiVariant.id, definition: uiVariant.definition })
       .from(uiVariant)
       .where(
         and(
@@ -21,7 +32,20 @@ export async function ensureStandardVariants(tenantId: string, userId: string, e
         ),
       )
       .limit(1);
-    if (hit) continue;
+
+    if (hit) {
+      if (page === "object" && schema && isEmptyObjectDef(hit.definition)) {
+        await db
+          .update(uiVariant)
+          .set({
+            definition: seedObjectDef(schema, resolvedProfile),
+            updatedAt: new Date(),
+          })
+          .where(eq(uiVariant.id, hit.id));
+      }
+      continue;
+    }
+
     await db.insert(uiVariant).values({
       tenantId,
       userId,
@@ -34,7 +58,9 @@ export async function ensureStandardVariants(tenantId: string, userId: string, e
       definition:
         page === "list"
           ? { select: [], filter: [], orderby: [], filterBar: [] }
-          : { fields: [], sections: [] },
+          : schema
+            ? seedObjectDef(schema, resolvedProfile)
+            : { header: [], sections: [] },
     });
   }
 }

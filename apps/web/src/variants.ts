@@ -1,11 +1,21 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ObjectVariantDef } from "@hera/db";
 import { orpc } from "./orpc.ts";
 import { EMPTY_SPEC, sameDef, type ListVariantDef, type FilterCond, type FilterOp } from "./listSpec.ts";
+import {
+  EMPTY_OBJECT_DEF,
+  findDuplicateVariantName,
+  normalizeObjectDef,
+  pickDefaultVariantId,
+  type SaveAsInput,
+  type VariantRow,
+} from "./components/objectVariantLogic.ts";
 
 // The pure list-view logic lives in listSpec.ts (no orpc import, so it's unit-testable); re-exported
 // here so pages have a single import path.
 export * from "./listSpec.ts";
+export type { SaveAsInput, VariantRow } from "./components/objectVariantLogic.ts";
 
 export type VariantPage = "list" | "object";
 
@@ -27,6 +37,178 @@ export function useVariants(page: VariantPage, entity: string) {
     setWidths,
   };
 }
+
+/** Object-page views: select by immutable id; draft definition stays separate from persisted rows. */
+export function useObjectVariants(entity: string, recordKey?: string) {
+  const qc = useQueryClient();
+  const { variants: raw, isAdmin, isLoading, save, remove } = useVariants("object", entity);
+  const variants: VariantRow[] = raw.map((v) => ({
+    id: v.id,
+    name: v.name,
+    shared: v.shared,
+    isDefault: v.isDefault,
+    isStandard: v.isStandard,
+    canManage: v.canManage,
+    definition: v.definition,
+    author: v.author,
+  }));
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [definition, setDefinition] = useState<ObjectVariantDef>(EMPTY_OBJECT_DEF);
+  const [initedFor, setInitedFor] = useState("");
+
+  useEffect(() => {
+    if (isLoading || initedFor === entity) return;
+    const id = pickDefaultVariantId(variants);
+    setSelectedId(id);
+    const row = variants.find((v) => v.id === id);
+    setDefinition(row ? normalizeObjectDef(row.definition) : EMPTY_OBJECT_DEF);
+    setInitedFor(entity);
+  }, [isLoading, entity, initedFor, variants]);
+
+  const selected = variants.find((v) => v.id === selectedId) ?? null;
+  const persisted = selected ? normalizeObjectDef(selected.definition) : null;
+
+  /** Same-id Save must refetch projection so newly visible fields appear. */
+  const invalidateObjectGet = (variantId: string) => {
+    if (!recordKey) return;
+    return qc.invalidateQueries({
+      queryKey: orpc.entities.get.queryOptions({
+        input: { entity, key: recordKey, variantId },
+      }).queryKey,
+    });
+  };
+
+  const select = (id: string) => {
+    const row = variants.find((v) => v.id === id);
+    if (!row) return;
+    setSelectedId(id);
+    setDefinition(normalizeObjectDef(row.definition));
+  };
+
+  const saveDef = async (def: ObjectVariantDef) => {
+    if (!selected) throw new Error("No view selected");
+    if (!selected.canManage) throw new Error("Not allowed to edit this view");
+    await save.mutateAsync({
+      id: selected.id,
+      page: "object",
+      entity,
+      name: selected.name,
+      definition: def,
+      shared: selected.shared,
+      isDefault: selected.isDefault,
+    });
+    setDefinition(def);
+    await invalidateObjectGet(selected.id);
+  };
+
+  const saveAs = async (input: SaveAsInput) => {
+    const name = input.name.trim();
+    if (!name) throw new Error("Name is required");
+    if (findDuplicateVariantName(variants, name, input.shared)) {
+      throw new Error(input.shared ? "A shared view with this name already exists" : "A personal view with this name already exists");
+    }
+    if (input.shared && !isAdmin) throw new Error("Only admins can publish shared views");
+    const { id } = await save.mutateAsync({
+      page: "object",
+      entity,
+      name,
+      definition,
+      shared: input.shared,
+      isDefault: input.isDefault,
+    });
+    setSelectedId(id);
+    await invalidateObjectGet(id);
+  };
+
+  const rename = async (id: string, name: string) => {
+    const row = variants.find((v) => v.id === id);
+    if (!row) throw new Error("View not found");
+    if (row.isStandard) throw new Error("Standard view cannot be renamed");
+    if (!row.canManage) throw new Error("Not allowed to edit this view");
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("Name is required");
+    if (findDuplicateVariantName(variants, trimmed, row.shared, id)) {
+      throw new Error(row.shared ? "A shared view with this name already exists" : "A personal view with this name already exists");
+    }
+    await save.mutateAsync({
+      id,
+      page: "object",
+      entity,
+      name: trimmed,
+      definition: normalizeObjectDef(row.definition),
+      shared: row.shared,
+      isDefault: row.isDefault,
+    });
+  };
+
+  const setDefault = async (id: string, value: boolean) => {
+    const row = variants.find((v) => v.id === id);
+    if (!row) throw new Error("View not found");
+    // Same gate as list VariantItem readOnly={!canManage || isStandard}.
+    if (!row.canManage || row.isStandard) throw new Error("Not allowed to edit this view");
+    await save.mutateAsync({
+      id,
+      page: "object",
+      entity,
+      name: row.name,
+      definition: normalizeObjectDef(row.definition),
+      shared: row.shared,
+      isDefault: value,
+    });
+  };
+
+  const setShared = async (id: string, value: boolean) => {
+    const row = variants.find((v) => v.id === id);
+    if (!row) throw new Error("View not found");
+    if (row.isStandard) throw new Error("Standard view cannot change sharing");
+    if (!isAdmin || !row.canManage) throw new Error("Only admins can publish shared views");
+    await save.mutateAsync({
+      id,
+      page: "object",
+      entity,
+      name: row.name,
+      definition: normalizeObjectDef(row.definition),
+      shared: value,
+      isDefault: row.isDefault,
+    });
+  };
+
+  const removeVariant = async (id: string) => {
+    const row = variants.find((v) => v.id === id);
+    if (!row) throw new Error("View not found");
+    if (row.isStandard) throw new Error("Standard view cannot be deleted");
+    if (!row.canManage) throw new Error("Not allowed to delete this view");
+    await remove.mutateAsync({ id });
+    if (selectedId === id) {
+      const rest = variants.filter((v) => v.id !== id);
+      const next = pickDefaultVariantId(rest);
+      setSelectedId(next);
+      const nextRow = rest.find((v) => v.id === next);
+      setDefinition(nextRow ? normalizeObjectDef(nextRow.definition) : EMPTY_OBJECT_DEF);
+    }
+  };
+
+  return {
+    variants,
+    selectedId,
+    definition,
+    setDefinition,
+    dirty: !sameDef(definition, persisted),
+    ready: initedFor === entity,
+    isAdmin,
+    isLoading,
+    select,
+    save: saveDef,
+    saveAs,
+    rename,
+    setDefault,
+    setShared,
+    remove: removeVariant,
+  };
+}
+
+export type ObjectVariants = ReturnType<typeof useObjectVariants>;
 
 // The applied view: it drives the query, the dirty marker and what a Save persists. Owned here so
 // the page can run its own query off `spec` while ListReport renders the chrome from the same state.

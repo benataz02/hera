@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar, Button, BusyIndicator, Dialog, DynamicSideContent, Label, MessageStrip, ObjectPage,
@@ -14,19 +14,14 @@ import { cleanOverrides, statusUi, toggleSelection, type Sel } from "./runView.t
 import { BatchEditor, ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
 import { ConfigGeneral, missingGeneral } from "./ConfigGeneral.tsx";
 import { StepCandidatesReview } from "./StepCandidatesReview.tsx";
+import { StepCreateQuote } from "./StepCreateQuote.tsx";
 import { InsightsRail } from "./InsightsRail.tsx";
 import { AssistantWindow } from "./AssistantWindow.tsx";
 import type { ChatChange } from "./assistantState.ts";
-import { ToBeDone } from "../Boundaries.tsx";
-import {
-  buildCalculationUpdate, CONFIG_PROCESS_STEP_IDS, POST_RUN_STEP, stepFromSection,
-} from "./configProcessState.ts";
+import { buildCalculationUpdate, needsCalculation } from "./configProcessState.ts";
 
-// The configuration process as an ObjectPage in IconTabBar mode: each step (
-// Configure → Candidates → Create quote) is an ObjectPageSection shown as a tab, gated left to
-// right like the old wizard (locked steps are disabled tabs); the config model's sections render
-// as ObjectPageSubSections inside Configure. The floating footer carries the step actions.
-// Local state overlays server state (override ?? server value) until a mutation persists it.
+// ObjectPage IconTabBar: Configure / Candidates / Create quote. Tabs are always enabled;
+// missing run or selection is an empty state. Local overlays (override ?? server) until persist.
 export function ConfigProcessPage({ id }: { id: string }) {
   const qc = useQueryClient();
   const q = useQuery(orpc.configs.get.queryOptions({ input: { id } }));
@@ -38,9 +33,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
     retry: false, // agent-offline should show its message, not spin
   });
 
-  // The current step is the ObjectPage section, and it lives in `?section=` (see useSectionParam).
   const [section, setSection] = useSectionParam();
-  const gotoStep = (i: number) => setSection(CONFIG_PROCESS_STEP_IDS[i]!);
   const [entriesOverride, setEntries] = useState<Entries | null>(null);
   const [batchesOverride, setBatches] = useState<number[] | null>(null);
   const [selOverride, setSel] = useState<Sel[] | null>(null);
@@ -60,13 +53,14 @@ export function ConfigProcessPage({ id }: { id: string }) {
     });
   // Chati: the floating assistant window is always mounted (so its conversation survives close)
   // and toggled via `chatOpen`. `aiMarks` drives the "AI" chip in ConfiguratorForm; `assistantBusy`
-  // gates form/batches/Calculate/Save-selection while a turn is in flight; `assistantProjectVersion`
+  // gates form/batches/auto-calc/Save-selection while a turn is in flight; `assistantProjectVersion`
   // tracks the project version Chati last observed (from its own `candidates` events) so a stale
   // browser tab doesn't reuse a version that predates the run it just triggered.
   const [chatOpen, setChatOpen] = useState(false);
   const [assistantBusy, setAssistantBusy] = useState(false);
   const [aiMarks, setAiMarks] = useState<Map<string, string>>(new Map());
   const [assistantProjectVersion, setAssistantProjectVersion] = useState<string | null>(null);
+  const [quoteFooter, setQuoteFooter] = useState<ReactElement | undefined>(undefined);
 
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: orpc.configs.get.queryOptions({ input: { id } }).queryKey });
@@ -80,24 +74,62 @@ export function ConfigProcessPage({ id }: { id: string }) {
         setRunMeta({ capped: r.capped, widest: r.widest });
         setSel([]); // a new run invalidates any previous candidate picks
         invalidate();
-        gotoStep(POST_RUN_STEP);
-        toast(`${r.candidateCount} candidate${r.candidateCount === 1 ? "" : "s"} calculated`);
       },
     }),
   );
   const select = useMutation(orpc.configs.select.mutationOptions({
-    onSuccess: () => { invalidate(); toast("Selection saved"); },
+    onSuccess: () => {
+      setSel(null); // use persisted selection after save
+      invalidate();
+      toast("Selection saved");
+      setSection("quote");
+    },
   }));
 
-  if (q.isPending) return <BusyIndicator active delay={0} style={{ width: "100%", marginTop: "4rem" }} />;
-  if (q.error)
-    return <MessageStrip design="Negative" hideCloseButton style={{ margin: "1rem" }}>{q.error.message}</MessageStrip>;
-  const { project, model, latestRun, createdByEmail } = q.data;
-
-  const entries = entriesOverride ?? project.entries;
-  const batches = batchesOverride ?? project.batches;
+  const project = q.data?.project;
+  const model = q.data?.model;
+  const latestRun = q.data?.latestRun;
+  const createdByEmail = q.data?.createdByEmail;
+  const entries = entriesOverride ?? project?.entries ?? {};
+  const batches = batchesOverride ?? project?.batches ?? [];
   const selection = selOverride ?? latestRun?.selection ?? [];
-  const runReady = !!latestRun && project.status !== "draft";
+  const runReady = !!latestRun && project?.status !== "draft";
+  const prop = model && lookups.data ? propagate(model.definition, lookups.data, entries) : null;
+  const conflicted = !!prop && prop.conflicts.length > 0;
+  const entriesDirty = !!project && JSON.stringify(entries) !== JSON.stringify(project.entries);
+  const batchesDirty = !!project && JSON.stringify(batches) !== JSON.stringify(project.batches);
+  const missing = missingGeneral({ name: project?.name ?? "", customer: project?.customer ?? null });
+  const calcBusy = update.isPending || run.isPending;
+  const shouldCalc = !!project && needsCalculation({
+    conflicted,
+    missingCount: missing.length,
+    batchCount: batches.length,
+    lookupsReady: !!lookups.data,
+    assistantBusy,
+    entriesDirty,
+    batchesDirty,
+    runReady,
+  });
+
+  const calculateRef = useRef<() => Promise<void>>(async () => {});
+  calculateRef.current = async () => {
+    if (!project) return;
+    try {
+      const updateInput = buildCalculationUpdate(
+        id, project.entries, entries, project.batches, batches,
+      );
+      if (updateInput) await update.mutateAsync(updateInput);
+      run.mutate({ projectId: id });
+    } catch {
+      /* update.error renders below */
+    }
+  };
+
+  useEffect(() => {
+    if (!shouldCalc || calcBusy) return;
+    const t = setTimeout(() => void calculateRef.current(), 1000);
+    return () => clearTimeout(t);
+  }, [shouldCalc, calcBusy, entries, batches]);
 
   const copyValues = (values: Record<string, Val>) => {
     const next = { ...entries };
@@ -141,49 +173,23 @@ export function ConfigProcessPage({ id }: { id: string }) {
     setAiMarks(nextMarks);
   };
 
-  // ConsistencyStatus renders the message; prop here only gates Calculate/navigation.
-  const prop = lookups.data ? propagate(model.definition, lookups.data, entries) : null;
-  const conflicted = !!prop && prop.conflicts.length > 0;
-  const entriesDirty = JSON.stringify(entries) !== JSON.stringify(project.entries);
-  const batchesDirty = JSON.stringify(batches) !== JSON.stringify(project.batches);
-  const staleRun = !!latestRun && (project.status === "draft" || entriesDirty || batchesDirty);
-
-  // The Candidates tab is disabled while inputs are dirty/stale (see tabRef on its section),
-  // so the only navigation the user can trigger here is back to Configure — which needs no save.
-  // Forward motion goes exclusively through Calculate (which awaits the update), so we never
-  // fire-and-forget a save that would flip status to "draft" and blank the step just landed on.
-  //
-  // A URL can still point at a locked step (bookmark to ?section=candidates on a since-reset
-  // project), so stepFromSection clamps it. Exception: while a refetch is in flight the lock
-  // verdict rests on stale data — right after Calculate the fresh run hasn't landed yet — so
-  // don't count it as locked, or the user gets bounced off Candidates and back a moment later.
-  const candidatesLocked = (!runReady || staleRun) && !q.isFetching;
-  const step = stepFromSection(section, project.status, candidatesLocked);
-  const calculate = async (calculationEntries: Entries = entries) => {
-    try {
-      const updateInput = buildCalculationUpdate(
-        id, project.entries, calculationEntries, project.batches, batches,
-      );
-      if (updateInput) await update.mutateAsync(updateInput);
-      run.mutate({ projectId: id });
-    } catch {
-      /* update.error renders below */
-    }
-  };
   const saveSelection = () => {
     if (!latestRun || selection.length === 0) return;
     select.mutate({
       runId: latestRun.id,
+      expectedSelectionVersion: latestRun.selectionVersion,
       selection: selection.map((s) => ({
         candidateIdx: s.candidateIdx, batchQty: s.batchQty, overrides: cleanOverrides(s.overrides),
       })),
     });
   };
 
-  const calcBusy = update.isPending || run.isPending;
+  if (q.isPending) return <BusyIndicator active delay={0} style={{ width: "100%", marginTop: "4rem" }} />;
+  if (q.error)
+    return <MessageStrip design="Negative" hideCloseButton style={{ margin: "1rem" }}>{q.error.message}</MessageStrip>;
+  if (!project || !model) return null;
 
-  // Mandatory General fields, judged on what is persisted — a half-typed name never counts.
-  const missing = missingGeneral({ name: project.name, customer: project.customer ?? null });
+  const sectionId = section ?? (project.status === "draft" ? "configure" : "candidates");
 
   const configureFooter = (
     <Bar design="FloatingFooter"
@@ -191,15 +197,11 @@ export function ConfigProcessPage({ id }: { id: string }) {
         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
           <ConsistencyStatus model={model.definition} lookups={lookups.data} entries={entries} />
           {missing.length ? <ObjectStatus state="Critical">{missing.join(" and ")} required</ObjectStatus> : null}
-          {staleRun ? <ObjectStatus state="Critical">inputs changed — calculate again</ObjectStatus> : null}
+          {shouldCalc || calcBusy ? <BusyIndicator active delay={0} size="S" /> : null}
         </div>
       }
       endContent={
-        <Button design="Emphasized"
-          disabled={conflicted || missing.length > 0 || lookups.isPending || batches.length === 0 || calcBusy || assistantBusy}
-          onClick={() => void calculate()}>
-          {calcBusy ? "Calculating…" : "Calculate"}
-        </Button>
+        <Button design="Emphasized" style={{ minWidth: "4rem" }} onClick={() => setSection("candidates")}>Next</Button>
       } />
   );
 
@@ -244,7 +246,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
   return (
     <>
     <DynamicSideContent
-      sideContentVisibility="AlwaysShow" hideSideContent={step === 2}
+      sideContentVisibility="AlwaysShow" hideSideContent={sectionId === "quote"}
       sideContent={
         <InsightsRail projectId={id} model={model.definition} lookups={lookups.data} entries={entries}
           onCopy={copyValues} open={openPanels} onToggle={togglePanel} />
@@ -254,7 +256,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
     <ObjectPage
       hidePinButton
       mode="IconTabBar"
-      selectedSectionId={CONFIG_PROCESS_STEP_IDS[step]}
+      selectedSectionId={sectionId}
       onSelectedSectionChange={(e) => setSection(e.detail.selectedSectionId)}
       titleArea={
         <ObjectPageTitle
@@ -282,11 +284,11 @@ export function ConfigProcessPage({ id }: { id: string }) {
           }
         />
       }
-      footerArea={step === 0 ? configureFooter : step === 1 ? candidatesFooter : undefined}
-      placeholder={calcBusy ? (
-        <BusyIndicator active delay={0} text="Calculating candidates — pricing up to 200 combinations…"
-          style={{ width: "100%", marginTop: "4rem" }} />
-      ) : undefined}
+      footerArea={
+        sectionId === "candidates" ? candidatesFooter
+        : sectionId === "quote" ? quoteFooter
+        : configureFooter
+      }
     >
       <ObjectPageSection id="configure" titleText="Configure" hideTitleText>
         <ObjectPageSubSection id="general" titleText="General">
@@ -310,11 +312,8 @@ export function ConfigProcessPage({ id }: { id: string }) {
           </ObjectPageSubSection>
         ))}
       </ObjectPageSection>
-      {/* wizard gating lives on the underlying ui5-tab: the inline tabRef re-runs every render,
-          keeping disabled in sync — a disabled tab can't be selected, like the old WizardStep. */}
-      <ObjectPageSection id="candidates" titleText="Candidates" hideTitleText
-        tabRef={(el) => { if (el) el.disabled = !runReady || staleRun; }}>
-        {runReady && latestRun ? (
+      <ObjectPageSection id="candidates" titleText="Candidates" hideTitleText>
+        {latestRun ? (
           <StepCandidatesReview model={latestRun.modelSnapshot} lookups={latestRun.lookupSnapshot}
             runEntries={latestRun.entries} candidates={latestRun.candidates}
             selection={selection}
@@ -323,11 +322,16 @@ export function ConfigProcessPage({ id }: { id: string }) {
             capped={runMeta?.capped ?? latestRun.candidates.length >= 200}
             widest={runMeta?.widest}
             error={select.error?.message ?? null} saved={select.isSuccess} />
-        ) : null}
+        ) : (
+          <Text>No candidates yet.</Text>
+        )}
       </ObjectPageSection>
-      <ObjectPageSection id="quote" titleText="Create quote" hideTitleText
-        tabRef={(el) => { if (el) el.disabled = true; }}>
-        <ToBeDone what="Quote creation" />
+      <ObjectPageSection id="quote" titleText="Create quote" hideTitleText>
+        {latestRun?.selection?.length || select.isSuccess ? (
+          <StepCreateQuote projectId={id} onFooterChange={setQuoteFooter} />
+        ) : (
+          <Text>Save a candidate selection to continue.</Text>
+        )}
       </ObjectPageSection>
     </ObjectPage>
     </DynamicSideContent>
@@ -356,8 +360,8 @@ export function ConfigProcessPage({ id }: { id: string }) {
       projectId={id} projectVersion={assistantProjectVersion ?? project.updatedAt.toISOString()}
       model={model.definition} lookups={lookups.data} entries={entries} batches={batches}
       onApply={applyAssistantChanges}
-      onCandidates={(e) => { invalidate(); setSel([]); gotoStep(POST_RUN_STEP); setAssistantProjectVersion(e.projectVersion); }}
-      onSelection={() => { invalidate(); setSel(null); }}
+      onCandidates={(e) => { invalidate(); setSel([]); setSection("candidates"); setAssistantProjectVersion(e.projectVersion); }}
+      onSelection={() => { invalidate(); setSel(null); setSection("quote"); }}
       onBusyChange={setAssistantBusy} />
     </>
   );

@@ -10,7 +10,7 @@ import {
   TextArea,
 } from "@ui5/webcomponents-react";
 import { fieldDisplayText } from "../objectSpec.ts";
-import { EntityValueHelp, type ValueHelpRow } from "./EntityValueHelp.tsx";
+import { EntityValueHelp, useLookupLabel, type ValueHelpRow } from "./EntityValueHelp.tsx";
 
 const fillStyle = { width: "100%" } as const;
 
@@ -68,6 +68,12 @@ export type EntityFieldProps = {
   /** Long free-text fields (Comments, …) use TextArea when editing. */
   multiline?: boolean;
   onChange?: (next: unknown) => void;
+  /**
+   * Replace a lookup key with its resolved description for display. Off in tables: there the code
+   * is the point, a sibling column already carries the description, and one query per cell would
+   * mean rows × lookup-columns round-trips.
+   */
+  resolveLabel?: boolean;
   /** Lookup value-help wiring (parent owns search / rows). */
   valueHelpLabel?: string;
   valueHelpRows?: ValueHelpRow[];
@@ -89,6 +95,7 @@ export function EntityField({
   readOnly,
   multiline,
   onChange,
+  resolveLabel = true,
   valueHelpLabel,
   valueHelpRows,
   onValueHelpSearch,
@@ -97,11 +104,19 @@ export function EntityField({
   valueState,
 }: EntityFieldProps) {
   const editable = mode === "edit" && !readOnly;
+  // Hook before any early return: lookup descriptions must resolve in display mode too.
+  const lookupLabel = useLookupLabel(
+    property.lookup && resolveLabel && value != null ? String(value) : undefined,
+    valueHelpLabel,
+    valueHelpRows ?? [],
+    onValueHelpSearch,
+  );
 
   if (!editable) {
     if (isBoolType(property.type)) {
       return <CheckBox checked={!!value} disabled displayOnly />;
     }
+    if (property.lookup && lookupLabel) return oneLineText(lookupLabel);
     return oneLineText(fieldDisplayText(property, value));
   }
 
@@ -111,7 +126,7 @@ export function EntityField({
       <EntityValueHelp
         id={id}
         value={value == null ? undefined : String(value)}
-        label={valueHelpLabel ?? (value == null ? "" : String(value))}
+        label={lookupLabel ?? (value == null ? "" : String(value))}
         rows={valueHelpRows ?? []}
         onSearch={onValueHelpSearch}
         onChange={(next) => {

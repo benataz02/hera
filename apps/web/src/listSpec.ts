@@ -36,10 +36,26 @@ export const isTextType = (t: string) => /string|char|memo|guid|text/i.test(t);
 
 export const EMPTY_SPEC: ListVariantDef = { select: [], filter: [], orderby: [], filterBar: [] };
 
-// The view's rendered column set = its explicit columns, or every column when it pins none
-// (Standard). SINGLE source of truth for both the OData $select sent to B1 and the table columns.
+// Rendered columns only — identity keys are merged separately via listSelect for the OData $select.
 export const visibleColumns = (spec: ListVariantDef, columns: ListColumn[]): string[] =>
   spec.select.length ? spec.select : columns.map((c) => c.name);
+
+/** Dedupe preserving first-seen order. */
+export const uniqueNames = (names: string[]): string[] => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const n of names) {
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+};
+
+/** Fetch $select = schema keys ∪ visible columns (keys stay fetch-only unless also visible).
+ *  Client sends visible columns as `select`; server applies this union for OData projection. */
+export const listSelect = (keys: string[], visibleCols: string[]): string[] =>
+  uniqueNames([...keys, ...visibleCols]);
 
 const compare = (a: unknown, b: unknown, type: string): number => {
   if (a == null && b == null) return 0;

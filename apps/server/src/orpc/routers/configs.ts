@@ -1,7 +1,10 @@
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { db, configModel, configProject, configRun, user, type ProjectEvent, type RunCandidate, type RunSelection } from "@hera/db";
+import {
+  db, configModel, configProject, configRun, tenantIntegration, user,
+  type ProjectEvent, type RunCandidate, type RunSelection,
+} from "@hera/db";
 import { assistantConversation } from "@hera/assistant/schema";
 import {
   computeOutputs, DslError, enumerate, EntriesZ, OutputOverridesZ, propagate,
@@ -14,7 +17,15 @@ import { resolveLookups, type QueryFetcher } from "../../lookups.ts";
 import { docHistoryPath, flattenDocs, sortDocRows } from "../../doc-history.ts";
 import { loadHistoryRows } from "../../history-sync.ts";
 import { scoreRows } from "../../similarity.ts";
-
+import {
+  assertConfigMutable,
+  buildQuoteSeed,
+  configDocumentCommandId,
+  validateSelectionPairs,
+} from "../../config-quote.ts";
+import { getEntityProfile } from "../../entity-profiles.ts";
+import { resolveWriteCapabilities, type WriteCapability } from "../../write-capabilities.ts";
+import { enqueueWrite, normalizeWriteInput } from "../../writes.ts";
 // The configuration process API: any member drives a project (draft -> calculated via run).
 // Trust model: browser propagates for preview; THESE handlers compute the numbers that get
 // stored. Lookups: ~5-min cache for interactive use, always fresh inside executeRun.
@@ -303,6 +314,7 @@ export const configsRouter = {
       }),
     )
     .handler(async ({ input, context }) => {
+      await assertConfigMutable(context.tenantId, input.id);
       const { id, ...rest } = input;
       const fields: Partial<typeof configProject.$inferInsert> = { ...rest, updatedAt: new Date() };
       // Changing what gets computed invalidates a previous run's "calculated" claim.
@@ -361,6 +373,7 @@ export const configsRouter = {
     .handler(({ input, context }) => searchSimilarRows(context.tenantId, input.id, input.entries)),
 
   run: userProcedure.input(z.object({ projectId: z.uuid() })).handler(async ({ input, context }) => {
+    await assertConfigMutable(context.tenantId, input.projectId);
     const [project] = await db
       .select({ modelId: configProject.modelId })
       .from(configProject)
@@ -373,23 +386,176 @@ export const configsRouter = {
   }),
 
   // Store the user's candidate/batch/override picks; totals are recomputed HERE from the
-  // run snapshot — client-sent numbers are never persisted.
+  // run snapshot — client-sent numbers are never persisted. Fenced by expectedSelectionVersion.
   select: userProcedure
-    .input(z.object({ runId: z.uuid(), selection: z.array(SelectionZ).min(1) }))
+    .input(z.object({
+      runId: z.uuid(),
+      selection: z.array(SelectionZ).min(1),
+      expectedSelectionVersion: z.number().int().min(0),
+    }))
     .handler(async ({ input, context }) => {
+      return db.transaction(async (tx) => {
+        const [run] = await tx
+          .select()
+          .from(configRun)
+          .where(and(eq(configRun.id, input.runId), eq(configRun.tenantId, context.tenantId)))
+          .for("update");
+        if (!run) throw new ORPCError("NOT_FOUND");
+        await assertConfigMutable(context.tenantId, run.projectId, tx);
+        if (run.selectionVersion !== input.expectedSelectionVersion) {
+          throw new ORPCError("CONFLICT", {
+            message: "Selection changed since expectedSelectionVersion; reload and retry",
+          });
+        }
+        validateSelectionPairs(run, input.selection);
+        const selections = applySelection(run, input.selection);
+        const selectionVersion = input.expectedSelectionVersion + 1;
+        await tx
+          .update(configRun)
+          .set({ selection: input.selection, selectionVersion })
+          .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, context.tenantId)));
+        return { selections, selectionVersion };
+      });
+    }),
+
+  // Canonical Quotations draft for the latest selected run (server-authoritative prices).
+  quoteDraft: userProcedure
+    .input(z.object({ projectId: z.uuid() }))
+    .handler(async ({ input, context }) => {
+      const [project] = await db
+        .select()
+        .from(configProject)
+        .where(and(eq(configProject.id, input.projectId), eq(configProject.tenantId, context.tenantId)))
+        .limit(1);
+      if (!project) throw new ORPCError("NOT_FOUND");
       const [run] = await db
         .select()
         .from(configRun)
-        .where(and(eq(configRun.id, input.runId), eq(configRun.tenantId, context.tenantId)))
+        .where(and(
+          eq(configRun.projectId, project.id),
+          eq(configRun.tenantId, context.tenantId),
+          sql`${configRun.selection} is not null`,
+        ))
+        .orderBy(desc(configRun.createdAt))
         .limit(1);
-      if (!run) throw new ORPCError("NOT_FOUND");
-      const selections = applySelection(run, input.selection);
-      const [updated] = await db
-        .update(configRun)
-        .set({ selection: input.selection, selectionVersion: sql`${configRun.selectionVersion} + 1` })
-        .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, context.tenantId)))
-        .returning({ selectionVersion: configRun.selectionVersion });
-      return { selections, selectionVersion: updated!.selectionVersion };
+      if (!run?.selection?.length) {
+        throw new ORPCError("BAD_REQUEST", { message: "Select candidates before creating a quote draft" });
+      }
+      const commandId = configDocumentCommandId({
+        tenantId: context.tenantId,
+        projectId: project.id,
+        runId: run.id,
+        selectionVersion: run.selectionVersion,
+      });
+      const entity = "Quotations";
+      const profile = getEntityProfile(entity);
+      const [ti] = await db
+        .select({ enabledEntities: tenantIntegration.enabledEntities })
+        .from(tenantIntegration)
+        .where(eq(tenantIntegration.tenantId, context.tenantId))
+        .limit(1);
+      const schema = (ti?.enabledEntities ?? []).find((e) => e.name === entity) ?? null;
+      return {
+        projectId: project.id,
+        runId: run.id,
+        selectionVersion: run.selectionVersion,
+        commandId,
+        data: buildQuoteSeed(project, run),
+        schema,
+        profile,
+      };
+    }),
+
+  // Enqueue a Quotations create with server-derived command id + config-document origin.
+  // Fenced: FOR UPDATE project (single-flight across runs) → FOR UPDATE run →
+  // status / assertConfigMutable / selectionVersion → enqueue on the same tx.
+  createQuote: userProcedure
+    .input(z.object({
+      projectId: z.uuid(),
+      runId: z.uuid(),
+      selectionVersion: z.number().int().min(0),
+      data: z.record(z.string(), z.unknown()),
+    }))
+    .handler(async ({ input, context }) => {
+      const entity = "Quotations";
+      const profile = getEntityProfile(entity);
+      if (!profile?.create) {
+        throw new ORPCError("BAD_REQUEST", { message: "Quotations profile does not support create" });
+      }
+      const [row] = await db
+        .select({
+          enabledEntities: tenantIntegration.enabledEntities,
+          writeCapabilities: tenantIntegration.writeCapabilities,
+          writeCapabilitiesCheckedAt: tenantIntegration.writeCapabilitiesCheckedAt,
+          lastSeenAt: tenantIntegration.lastSeenAt,
+        })
+        .from(tenantIntegration)
+        .where(eq(tenantIntegration.tenantId, context.tenantId))
+        .limit(1);
+      const schema = (row?.enabledEntities ?? []).find((e) => e.name === entity);
+      if (!schema?.editable) {
+        throw new ORPCError("FORBIDDEN", { message: `Entity '${entity}' is not enabled for write` });
+      }
+      const caps = resolveWriteCapabilities({
+        entity,
+        profile,
+        writeCapabilities: (row?.writeCapabilities ?? null) as WriteCapability[] | null,
+        checkedAt: row?.writeCapabilitiesCheckedAt ?? null,
+        lastSeenAt: row?.lastSeenAt ?? null,
+      });
+
+      return db.transaction(async (tx) => {
+        // Shared project lock first so two runs cannot both pass mutable + enqueue.
+        const [project] = await tx
+          .select()
+          .from(configProject)
+          .where(and(eq(configProject.id, input.projectId), eq(configProject.tenantId, context.tenantId)))
+          .for("update");
+        if (!project) throw new ORPCError("NOT_FOUND");
+
+        const [run] = await tx
+          .select()
+          .from(configRun)
+          .where(and(eq(configRun.id, input.runId), eq(configRun.tenantId, context.tenantId)))
+          .for("update");
+        if (!run || run.projectId !== input.projectId) throw new ORPCError("NOT_FOUND");
+
+        if (project.status !== "calculated" && project.status !== "requested") {
+          throw new ORPCError("BAD_REQUEST", {
+            message: "Only a calculated or requested configuration can be quoted",
+          });
+        }
+
+        // Same connection as the locked project/run: pending/in_flight config-document write blocks create.
+        await assertConfigMutable(context.tenantId, run.projectId, tx);
+
+        if (run.selectionVersion !== input.selectionVersion || !run.selection?.length) {
+          throw new ORPCError("CONFLICT", { message: "Selection changed; reload the quote draft" });
+        }
+
+        const commandId = configDocumentCommandId({
+          tenantId: context.tenantId,
+          projectId: project.id,
+          runId: run.id,
+          selectionVersion: run.selectionVersion,
+        });
+        const payload = normalizeWriteInput({
+          operation: "create",
+          entity,
+          data: input.data,
+          commandId,
+          origin: {
+            kind: "config-document",
+            projectId: project.id,
+            runId: run.id,
+            selectionVersion: run.selectionVersion,
+          },
+          schema,
+          profile,
+          canCreate: caps.canCreate,
+        });
+        return enqueueWrite(context.tenantId, payload, tx);
+      });
     }),
 
   // Internal reviewer sends a portal request back with a note. requested → rejected.

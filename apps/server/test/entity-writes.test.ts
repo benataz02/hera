@@ -106,6 +106,30 @@ describe("normalizeWriteInput", () => {
     expect(lines[0]).toEqual({ ItemCode: "A1", Quantity: 2, UnitPrice: 10 });
   });
 
+  test("strips OData annotations that ride along on the fetched record", () => {
+    const payload = normalizeWriteInput({
+      operation: "update",
+      entity: "Quotations",
+      key: "3884",
+      commandId: "cmd-etag",
+      data: {
+        "@odata.etag": 'W/"..."',
+        "@odata.context": "https://sl/$metadata#Quotations/$entity",
+        CardCode: "C1",
+        "DocDate@odata.type": "#DateTimeOffset",
+        DocumentLines: [{ ItemCode: "A1", Quantity: 1, "@odata.etag": 'W/"x"' }],
+      },
+      schema: quotationSchema,
+      profile,
+      canCreate: false,
+    });
+    expect(payload.data).not.toHaveProperty("@odata.etag");
+    expect(payload.data).not.toHaveProperty("@odata.context");
+    expect(payload.data).not.toHaveProperty("DocDate@odata.type");
+    expect(payload.data.CardCode).toBe("C1");
+    expect(payload.data.DocumentLines).toEqual([{ ItemCode: "A1", Quantity: 1 }]);
+  });
+
   test("rejects unknown and write-protected fields", () => {
     expect(() =>
       normalizeWriteInput({

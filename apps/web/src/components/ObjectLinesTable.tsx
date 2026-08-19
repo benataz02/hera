@@ -370,6 +370,7 @@ export function ObjectLinesTable({
                         value={row[f.name]}
                         mode={canEdit ? "edit" : "display"}
                         readOnly={!canEdit}
+                        resolveLabel={false}
                         valueHelpLabel={vhLabels[vhKey] ?? formatCell(row[f.name], prop.type)}
                         valueHelpRows={vhRows[vhKey] ?? []}
                         onValueHelpSearch={

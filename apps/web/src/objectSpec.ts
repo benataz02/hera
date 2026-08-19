@@ -224,6 +224,46 @@ export function visibleObjectSections(
   return out;
 }
 
+/**
+ * Section ids the schema can offer: General + every *owned* collection.
+ * ponytail: `many` only — single complex children (TaxExtension, AddressExtension) would need a
+ * sub-form, not a lines table. Add that when someone asks to edit one.
+ */
+export function availableObjectSections(schema: EntitySchema): { name: string; label: string }[] {
+  return [
+    { name: "general", label: "General" },
+    ...schema.collections.filter((c) => c.many).map((c) => ({ name: c.name, label: c.name })),
+  ];
+}
+
+/** First columns for a freshly added collection section (mirrors the server-side seed). */
+export function defaultSectionFields(schema: EntitySchema, sectionId: string): FieldDef[] {
+  const col = schema.collections.find((c) => c.name === sectionId);
+  if (!col) return [];
+  const keys = new Set(schema.keys);
+  return col.properties
+    .filter((p) => !keys.has(p.name))
+    .slice(0, 8)
+    .map((p) => ({ name: p.name, visible: true }));
+}
+
+/** Apply a section picker result onto a variant definition; new sections seed their columns. */
+export function applySectionPicker(
+  definition: ObjectVariantDef,
+  picked: Array<{ name: string; visible: boolean }>,
+  schema: EntitySchema,
+): ObjectVariantDef {
+  const existing = new Map(definition.sections.map((s) => [s.id, s]));
+  return {
+    ...definition,
+    sections: picked.map((p) => {
+      const hit = existing.get(p.name);
+      if (hit) return { ...hit, visible: p.visible };
+      return { id: p.name, visible: p.visible, fields: defaultSectionFields(schema, p.name) };
+    }),
+  };
+}
+
 /** Visible header facet fields (ObjectPageHeader), excluding schema keys unless opted in. */
 export function visibleHeaderFields(
   schema: EntitySchema,

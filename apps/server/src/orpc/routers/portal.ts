@@ -345,14 +345,19 @@ export const portalRouter = {
   }),
 
   // Final line prices for a quoted project. No DocNum, no PDF, no cost breakdown.
+  // Reads the specifically acknowledged run (b1DocEntry / quotedAt), not merely latest with selection.
   quotedResult: clientProcedure.input(z.object({ projectId: z.uuid() })).handler(async ({ input, context }) => {
     const p = await loadOwnProject(input.projectId, context);
     if (p.status !== "quoted") throw new ORPCError("NOT_FOUND");
     const [run] = await db
       .select()
       .from(configRun)
-      .where(and(eq(configRun.projectId, p.id), eq(configRun.tenantId, context.tenantId), sql`${configRun.selection} is not null`))
-      .orderBy(desc(configRun.createdAt))
+      .where(and(
+        eq(configRun.projectId, p.id),
+        eq(configRun.tenantId, context.tenantId),
+        sql`${configRun.b1DocEntry} is not null`,
+      ))
+      .orderBy(desc(configRun.quotedAt))
       .limit(1);
     if (!run || !run.selection) throw new ORPCError("NOT_FOUND");
     const lines = applySelection(run, run.selection).map((r) => ({

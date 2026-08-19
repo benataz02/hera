@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { EntityProfile, EntityProperty, EntitySchema, ObjectVariantDef } from "@hera/db";
 import { EMPTY_SPEC, listSelect, visibleColumns, type ListColumn } from "./listSpec.ts";
-import { autoColumnWidths, titleForRecord, visibleObjectSections } from "./objectSpec.ts";
+import {
+  applySectionPicker,
+  autoColumnWidths,
+  availableObjectSections,
+  titleForRecord,
+  visibleObjectSections,
+} from "./objectSpec.ts";
 
 const QUOTATION_SCHEMA: EntitySchema = {
   name: "Quotations",
@@ -312,5 +318,74 @@ describe("autoColumnWidths", () => {
     });
     expect(widths).toEqual({ Quantity: expect.any(Number) });
     expect(widths).not.toHaveProperty("ItemDescription");
+  });
+});
+
+describe("section picker", () => {
+  const MULTI_SCHEMA: EntitySchema = {
+    ...QUOTATION_SCHEMA,
+    collections: [
+      ...QUOTATION_SCHEMA.collections,
+      {
+        name: "DocumentReferences",
+        typeName: "DocumentReference",
+        many: true,
+        properties: [
+          { name: "DocEntry", type: "Edm.Int32", nullable: false },
+          { name: "RefDocEntr", type: "Edm.Int32", nullable: true },
+          { name: "RefObjType", type: "Edm.String", nullable: true },
+        ],
+      },
+      // Single complex child — a lines table can't render it, so it must not be offered.
+      {
+        name: "TaxExtension",
+        typeName: "TaxExtension",
+        many: false,
+        properties: [{ name: "Incoterms", type: "Edm.String", nullable: true }],
+      },
+    ],
+  };
+
+  test("offers General plus every many-collection, never single complex children", () => {
+    expect(availableObjectSections(MULTI_SCHEMA).map((s) => s.name)).toEqual([
+      "general",
+      "DocumentLines",
+      "DocumentReferences",
+    ]);
+  });
+
+  test("keeps existing section fields, seeds columns for a newly added one", () => {
+    const def: ObjectVariantDef = {
+      header: [{ name: "CardCode", visible: true }],
+      sections: [
+        { id: "general", visible: true, fields: [{ name: "Comments", visible: true }] },
+        { id: "DocumentLines", visible: true, fields: [{ name: "ItemCode", visible: true }] },
+      ],
+    };
+    const next = applySectionPicker(
+      def,
+      [
+        { name: "general", visible: true },
+        { name: "DocumentLines", visible: false },
+        { name: "DocumentReferences", visible: true },
+      ],
+      MULTI_SCHEMA,
+    );
+
+    expect(next.header).toEqual(def.header);
+    expect(next.sections[1]).toEqual({
+      id: "DocumentLines",
+      visible: false,
+      fields: [{ name: "ItemCode", visible: true }],
+    });
+    // Parent key (DocEntry) stays out of the seeded columns.
+    expect(next.sections[2]).toEqual({
+      id: "DocumentReferences",
+      visible: true,
+      fields: [
+        { name: "RefDocEntr", visible: true },
+        { name: "RefObjType", visible: true },
+      ],
+    });
   });
 });

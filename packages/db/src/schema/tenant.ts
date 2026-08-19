@@ -1,10 +1,8 @@
 import { pgTable, text, timestamp, jsonb } from "drizzle-orm/pg-core";
+import type { EnabledEntity } from "./entity.ts";
 
-// Autodiscovered B1 entity, trimmed to what list/forms need.
-export type EntityProperty = { name: string; type: string; nullable: boolean };
-export type EntitySchema = { name: string; keys: string[]; properties: EntityProperty[] };
-// What an admin enabled for the tenant: a schema + whether it's create/edit (vs read-only).
-export type EnabledEntity = EntitySchema & { editable: boolean };
+/** Agent-reported create prerequisites (entity + dedup UDF). Index uniqueness is operator-asserted. */
+export type WriteCapability = { entity: string; dedupField: string };
 
 // Per-tenant integration config. tenant_id == Better Auth organization id.
 // B1 credentials are NOT here — the on-prem agent holds them locally (see .env.example).
@@ -19,6 +17,9 @@ export const tenantIntegration = pgTable("tenant_integration", {
   // Entities the admin chose to expose, with their discovered schema. Drives the side-nav,
   // the read/write gate, and form rendering — no agent round-trip needed to read it.
   enabledEntities: jsonb("enabled_entities").$type<EnabledEntity[]>().notNull().default([]),
+  // Create capabilities last reported by the on-prem agent (validated against EDMX there).
+  writeCapabilities: jsonb("write_capabilities").$type<WriteCapability[] | null>(),
+  writeCapabilitiesCheckedAt: timestamp("write_capabilities_checked_at", { withTimezone: true }),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

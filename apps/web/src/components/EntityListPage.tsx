@@ -18,6 +18,10 @@ export function EntityListPage({ entity }: { entity: string }) {
 
   const columns = useMemo<ListColumn[]>(() => schema?.properties ?? [], [schema]);
   const visibleCols = useMemo(() => visibleColumns(spec, columns), [spec, columns]);
+  // Fetch identity: server unions schema.keys into $select. Send visible-only here so global
+  // search (q) never matches hidden string keys (e.g. ItemCode omitted from the view).
+  const select = useMemo(() => [...visibleCols].sort(), [visibleCols]);
+  const compositeKey = (schema?.keys.length ?? 0) !== 1;
 
   const list = useInfiniteQuery(
     orpc.entities.list.infiniteOptions({
@@ -26,7 +30,7 @@ export function EntityListPage({ entity }: { entity: string }) {
         top: 501,
         skip,
         q: spec.search || undefined,
-        select: [...visibleCols].sort(),
+        select,
         filter: spec.filter.length ? spec.filter : undefined,
         orderby: spec.orderby.length ? spec.orderby : undefined,
       }),
@@ -44,18 +48,29 @@ export function EntityListPage({ entity }: { entity: string }) {
   if (!schema) return <MessageStrip design="Negative" hideCloseButton style={{ margin: "1rem" }}>Entity “{entity}” is not enabled.</MessageStrip>;
 
   return (
-    <ListReport
-      listSpec={listSpec}
-      title={entity}
-      columns={columns}
-      keyField={schema.keys[0] ?? ""}
-      rows={rows}
-      total={list.data?.pages?.[0]?.count ?? rows.length}
-      loading={list.isFetching && !list.isFetchingNextPage}
-      error={list.error}
-      hasMore={list.hasNextPage && !list.isFetchingNextPage}
-      onLoadMore={() => list.fetchNextPage()}
-      onRowClick={(row) => navigate({ to: "/$entity/$id", params: { entity, id: String(row[schema.keys[0]!]) } })}
-    />
+    <>
+      {compositeKey ? (
+        <MessageStrip design="Information" hideCloseButton style={{ margin: "1rem 1rem 0" }}>
+          This entity uses a composite key, so rows cannot be opened yet.
+        </MessageStrip>
+      ) : null}
+      <ListReport
+        listSpec={listSpec}
+        title={entity}
+        columns={columns}
+        keyField={schema.keys[0] ?? ""}
+        rows={rows}
+        total={list.data?.pages?.[0]?.count ?? rows.length}
+        loading={list.isFetching && !list.isFetchingNextPage}
+        error={list.error}
+        hasMore={list.hasNextPage && !list.isFetchingNextPage}
+        onLoadMore={() => list.fetchNextPage()}
+        onRowClick={
+          compositeKey
+            ? () => {}
+            : (row) => navigate({ to: "/$entity/$id", params: { entity, id: String(row[schema.keys[0]!]) } })
+        }
+      />
+    </>
   );
 }

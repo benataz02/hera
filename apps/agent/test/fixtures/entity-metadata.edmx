@@ -11,6 +11,8 @@
         <Property Name="LineNum" Type="Edm.Int32"/>
         <Property Name="ItemCode" Type="Edm.String"/>
         <Property Name="Quantity" Type="Edm.Double"/>
+        <!-- Pooled lookups disagree on this name (Currency vs FakeCurrency) -> no inference. -->
+        <Property Name="Currency" Type="Edm.String"/>
       </ComplexType>
 
       <EntityType Name="Document">
@@ -38,9 +40,67 @@
         <NavigationProperty Name="Quotations" Type="Collection(SAPB1.Document)"/>
       </EntityType>
 
+      <EntityType Name="Item">
+        <Key>
+          <PropertyRef Name="ItemCode"/>
+        </Key>
+        <Property Name="ItemCode" Type="Edm.String" Nullable="false"/>
+        <Property Name="ItemName" Type="Edm.String"/>
+      </EntityType>
+
+      <EntityType Name="Currency">
+        <Key>
+          <PropertyRef Name="Code"/>
+        </Key>
+        <Property Name="Code" Type="Edm.String" Nullable="false"/>
+        <Property Name="Name" Type="Edm.String"/>
+      </EntityType>
+
+      <!-- ComplexTypes carry no NavigationProperty, so DocumentLine.ItemCode can only inherit a
+           lookup from a same-named constraint on an addressable type. This is that type. -->
+      <EntityType Name="SpecialPrice">
+        <Key>
+          <PropertyRef Name="AbsEntry"/>
+        </Key>
+        <Property Name="AbsEntry" Type="Edm.Int32" Nullable="false"/>
+        <Property Name="ItemCode" Type="Edm.String"/>
+        <Property Name="Currency" Type="Edm.String"/>
+        <NavigationProperty Name="Item" Type="SAPB1.Item">
+          <ReferentialConstraint Property="ItemCode" ReferencedProperty="ItemCode"/>
+        </NavigationProperty>
+        <NavigationProperty Name="Cur" Type="SAPB1.Currency">
+          <ReferentialConstraint Property="Currency" ReferencedProperty="Code"/>
+        </NavigationProperty>
+      </EntityType>
+
+      <!-- Second, conflicting Currency constraint: the pooled name must be dropped, while
+           SpecialPrices keeps its own precise one. -->
+      <EntityType Name="FakeCurrency">
+        <Key>
+          <PropertyRef Name="Code"/>
+        </Key>
+        <Property Name="Code" Type="Edm.String" Nullable="false"/>
+      </EntityType>
+
+      <EntityType Name="PriceRow">
+        <Key>
+          <PropertyRef Name="AbsEntry"/>
+        </Key>
+        <Property Name="AbsEntry" Type="Edm.Int32" Nullable="false"/>
+        <Property Name="Currency" Type="Edm.String"/>
+        <NavigationProperty Name="Cur" Type="SAPB1.FakeCurrency">
+          <ReferentialConstraint Property="Currency" ReferencedProperty="Code"/>
+        </NavigationProperty>
+      </EntityType>
+
       <EntityContainer Name="EntityContainer">
         <EntitySet Name="Quotations" EntityType="SAPB1.Document"/>
         <EntitySet Name="BusinessPartners" EntityType="SAPB1.BusinessPartner"/>
+        <EntitySet Name="Items" EntityType="SAPB1.Item"/>
+        <EntitySet Name="Currencies" EntityType="SAPB1.Currency"/>
+        <EntitySet Name="FakeCurrencies" EntityType="SAPB1.FakeCurrency"/>
+        <EntitySet Name="SpecialPrices" EntityType="SAPB1.SpecialPrice"/>
+        <EntitySet Name="PriceRows" EntityType="SAPB1.PriceRow"/>
       </EntityContainer>
     </Schema>
   </edmx:DataServices>

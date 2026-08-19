@@ -1,13 +1,25 @@
 // The agent's delivery decision, isolated from transport/env so it can be unit-tested
 // with a mock B1. This is where the "effectively once" guarantee is enforced.
-import type { ListQuery } from "./service-layer-client.ts";
+import type {
+  ItemContextAgentInput,
+  ListQuery,
+  LookupListOpts,
+  ObjectFetchRequest,
+} from "./service-layer-client.ts";
 
 // --- On-demand request/reply (reads + generic writes for autodiscovered entities) ---
 
 export interface RequestRow {
   id: string;
-  kind: string; // metadata | list | get | create | update | query | login
+  // Read/request-reply kinds only here. Durable writes use kind "write" → processWrite (write-sync.ts).
+  kind: string; // metadata | list | get | object-get | lookup | item-context | create | update | query | login
   payload: Record<string, unknown>;
+}
+
+export interface WriteRequestRow extends RequestRow {
+  kind: "write";
+  attempts: number;
+  dedupKey: string;
 }
 
 export interface SlReadPort {
@@ -15,8 +27,17 @@ export interface SlReadPort {
   metadata(): Promise<unknown>;
   listEntity(entity: string, opts: Omit<ListQuery, "skip"> & { skip?: number }): Promise<unknown>;
   getEntity(entity: string, key: string, keyQuoted: boolean): Promise<unknown>;
+  getEntityProjected(request: ObjectFetchRequest): Promise<unknown>;
+  listLookup(opts: LookupListOpts): Promise<unknown>;
+  getItemContext(input: ItemContextAgentInput): Promise<unknown>;
   createEntity(entity: string, data: Record<string, unknown>): Promise<unknown>;
-  updateEntity(entity: string, key: string, keyQuoted: boolean, data: Record<string, unknown>): Promise<unknown>;
+  updateEntity(
+    entity: string,
+    key: string,
+    keyQuoted: boolean,
+    data: Record<string, unknown>,
+    opts?: { replaceCollections?: boolean },
+  ): Promise<unknown>;
   queryRaw(path: string): Promise<unknown>;
 }
 
@@ -38,7 +59,7 @@ export async function processRequest(
   sl: SlReadPort,
   cloud: RequestCloudPort,
   beas?: BeasPort,
-): Promise<void> {
+): Promise<unknown> {
   try {
     const p = req.payload;
     let result: unknown;
@@ -62,12 +83,21 @@ export async function processRequest(
       case "get":
         result = await sl.getEntity(String(p.entity), String(p.key), Boolean(p.keyQuoted));
         break;
+      case "object-get":
+        result = await sl.getEntityProjected(p as unknown as ObjectFetchRequest);
+        break;
+      case "lookup":
+        result = await sl.listLookup(p as unknown as LookupListOpts);
+        break;
+      case "item-context":
+        result = await sl.getItemContext(p as unknown as ItemContextAgentInput);
+        break;
       case "create":
-        result = await sl.createEntity(String(p.entity), (p.data ?? {}) as Record<string, unknown>);
-        break;
       case "update":
-        result = await sl.updateEntity(String(p.entity), String(p.key), Boolean(p.keyQuoted), (p.data ?? {}) as Record<string, unknown>);
-        break;
+        // Blind sync create/update removed — durable writes go through kind="write" / processWrite.
+        throw new Error(
+          `Request kind '${req.kind}' is removed; use durable write (kind=write)`,
+        );
       case "query":
         if (p.target === "beas") {
           if (!beas) throw new Error("Beas is not configured on this agent (set BEAS_BASE_URL in .env)");
@@ -85,7 +115,9 @@ export async function processRequest(
         throw new Error(`Unknown request kind '${req.kind}'`);
     }
     await cloud.fulfill({ id: req.id, result });
+    return result;
   } catch (err) {
     await cloud.fail({ id: req.id, error: msg(err) });
+    return undefined;
   }
 }

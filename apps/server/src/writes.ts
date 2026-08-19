@@ -45,6 +45,15 @@ export type WriteResult = {
 
 const UI_ONLY = new Set(["priceSource", "__draftKey"]);
 
+/**
+ * Drop keys that are never writable document fields: local UI state, and the OData annotations
+ * (`@odata.etag`, `Field@odata.type`) that ride along on every Service Layer read and land in the
+ * draft. B1 field names are `[A-Za-z0-9_]`, so an `@` anywhere is unambiguously an annotation.
+ */
+function skipField(k: string): boolean {
+  return UI_ONLY.has(k) || k.includes("@");
+}
+
 export type NormalizeWriteInput = {
   operation: "create" | "update";
   entity: string;
@@ -81,7 +90,7 @@ export function normalizeWriteInput(input: NormalizeWriteInput): WritePayload {
   const data: Record<string, unknown> = {};
 
   for (const [k, v] of Object.entries(input.data)) {
-    if (UI_ONLY.has(k)) continue;
+    if (skipField(k)) continue;
     if (k in input.profile.collections || schemaColls.has(k)) continue; // collections below
     if (readOnly.has(k)) continue; // form echo of computed/read-only — strip
     if (editableHeader.has(k)) {
@@ -111,7 +120,7 @@ export function normalizeWriteInput(input: NormalizeWriteInput): WritePayload {
       }
       const out: Record<string, unknown> = {};
       for (const [fk, fv] of Object.entries(row as Record<string, unknown>)) {
-        if (UI_ONLY.has(fk)) continue;
+        if (skipField(fk)) continue;
         if (!allowed.has(fk)) continue; // strip non-editable line fields (LineTotal etc.)
         out[fk] = fv;
       }
@@ -120,7 +129,7 @@ export function normalizeWriteInput(input: NormalizeWriteInput): WritePayload {
   }
 
   for (const k of Object.keys(input.data)) {
-    if (UI_ONLY.has(k) || readOnly.has(k) || editableHeader.has(k)) continue;
+    if (skipField(k) || readOnly.has(k) || editableHeader.has(k)) continue;
     if (k in input.profile.collections) continue;
     if (schemaColls.has(k)) {
       throw new ORPCError("BAD_REQUEST", { message: `Collection '${k}' is write-protected` });

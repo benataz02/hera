@@ -16,6 +16,35 @@ import {
 
 export type ValueHelpRow = { key: string; label: string; defaults?: Record<string, unknown> };
 
+/**
+ * Resolve a stored lookup key into its description. Records hold only the key, and callers pass
+ * that raw key as the committed label until a pick happens, so an exact-key query on mount is what
+ * turns "C20000" into "Maxi Teq" — in display mode as well as edit.
+ * Pass `value: undefined` to opt out (tables do — see EntityField's `resolveLabel`).
+ * ponytail: one query per resolving field per record; batch in `entities.get` if that grows.
+ */
+export function useLookupLabel(
+  value: string | undefined,
+  committed: string | undefined,
+  rows: ValueHelpRow[],
+  onSearch?: (q: string) => void,
+): string | undefined {
+  const uncommitted = !committed || committed === value;
+  const [resolved, setResolved] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (value && uncommitted) onSearch?.(value);
+  }, []);
+
+  useEffect(() => {
+    if (resolved || !value) return;
+    const hit = rows.find((r) => r.key === value);
+    if (hit?.label && hit.label !== hit.key) setResolved(hit.label);
+  }, [rows, value, resolved]);
+
+  return uncommitted ? (resolved ?? undefined) : committed;
+}
+
 // Kill dialog content padding so the table sits flush (same as configurator ValueHelp).
 if (typeof document !== "undefined" && !document.getElementById("hera-evh-style")) {
   const el = document.createElement("style");
@@ -78,6 +107,7 @@ export function EntityValueHelp({
     if (timer.current) clearTimeout(timer.current);
   }, []);
 
+  // `label` is already resolved by the caller (see useLookupLabel).
   const shown = typed ?? (value ? label || value : "");
 
   const pick = (row: ValueHelpRow | undefined) => {
