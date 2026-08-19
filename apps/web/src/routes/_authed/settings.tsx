@@ -7,6 +7,7 @@ import {
   Title, Text, Toast,
 } from "@ui5/webcomponents-react";
 import type { EnabledEntity, EntitySchema } from "@hera/db";
+import { authClient } from "../../auth-client.ts";
 import { orpc } from "../../orpc.ts";
 
 export const Route = createFileRoute("/_authed/settings")({ component: Settings });
@@ -174,6 +175,8 @@ function Settings() {
         </FlexBox>
       </Card>
 
+      <SalesRepMapping />
+
       <Dialog open={inviteOpen} headerText="Invite portal client" onClose={() => setInviteOpen(false)}
         footer={
           <Bar design="Footer" endContent={
@@ -232,3 +235,54 @@ function Settings() {
     </div>
   );
 }
+
+function SalesRepMapping() {
+  const qc = useQueryClient();
+  const reps = useQuery(orpc.dashboard.salesReps.get.queryOptions());
+  const members = useQuery({
+    queryKey: ["org-members"],
+    queryFn: async () => (await authClient.organization.listMembers()).data?.members ?? [],
+  });
+  const save = useMutation(orpc.dashboard.salesReps.set.mutationOptions({
+    onSuccess: () => void qc.invalidateQueries({ queryKey: orpc.dashboard.salesReps.get.queryOptions().queryKey }),
+  }));
+
+  return (
+    <Card header={<CardHeader titleText="SAP sales employees" subtitleText="Link members to their SAP sales employee so the dashboard can show their own figures" />}>
+      <FlexBox direction="Column" style={{ padding: "1rem", gap: "1rem" }}>
+        <Text>
+          Members left unlinked see workspace-wide figures.
+        </Text>
+        <Table
+          noDataText="No members yet."
+          headerRow={
+            <TableHeaderRow>
+              <TableHeaderCell><span>Member</span></TableHeaderCell>
+              <TableHeaderCell><span>SalesEmployeeCode</span></TableHeaderCell>
+            </TableHeaderRow>
+          }
+        >
+          {(members.data ?? []).map((m) => (
+            <TableRow key={m.userId} rowKey={m.userId}>
+              <TableCell><Text>{m.user?.email ?? m.userId}</Text></TableCell>
+              <TableCell>
+                {/* ponytail: a plain number input rather than a SalesPersons value help — the code is a
+                    small integer an admin already knows, and a value help needs the entity enabled.
+                    Swap in EntityValueHelp if admins start guessing. */}
+                <Input
+                  type="Number"
+                  value={String(reps.data?.reps[m.userId] ?? "")}
+                  onChange={(e) => {
+                    const raw = e.target.value.trim();
+                    save.mutate({ userId: m.userId, salesPersonCode: raw === "" ? null : Number(raw) });
+                  }}
+                />
+              </TableCell>
+            </TableRow>
+          ))}
+        </Table>
+      </FlexBox>
+    </Card>
+  );
+}
+
