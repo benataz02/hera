@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="SAPB1" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EnumType Name="BoStatus">
+        <Member Name="bost_Open" Value="0"/>
+        <Member Name="bost_Close" Value="1"/>
+      </EnumType>
+
+      <ComplexType Name="DocumentLine">
+        <Property Name="LineNum" Type="Edm.Int32"/>
+        <Property Name="ItemCode" Type="Edm.String"/>
+        <Property Name="Quantity" Type="Edm.Double"/>
+      </ComplexType>
+
+      <EntityType Name="Document">
+        <Key>
+          <PropertyRef Name="DocEntry"/>
+        </Key>
+        <Property Name="DocEntry" Type="Edm.Int32" Nullable="false"/>
+        <Property Name="CardCode" Type="Edm.String"/>
+        <Property Name="DocumentStatus" Type="SAPB1.BoStatus"/>
+        <Property Name="DocumentLines" Type="Collection(SAPB1.DocumentLine)"/>
+        <NavigationProperty Name="BusinessPartner" Type="SAPB1.BusinessPartner">
+          <ReferentialConstraint Property="CardCode" ReferencedProperty="CardCode"/>
+        </NavigationProperty>
+      </EntityType>
+
+      <EntityType Name="BusinessPartner">
+        <Key>
+          <PropertyRef Name="CardCode"/>
+        </Key>
+        <Property Name="CardCode" Type="Edm.String" Nullable="false"/>
+        <Property Name="CardName" Type="Edm.String"/>
+        <!-- Property-typed Collection of an addressable EntityType: must NOT become an owned section. -->
+        <Property Name="RelatedQuotations" Type="Collection(SAPB1.Document)"/>
+        <!-- Reverse entity-set NavigationProperty: also must NOT become an owned collection section. -->
+        <NavigationProperty Name="Quotations" Type="Collection(SAPB1.Document)"/>
+      </EntityType>
+
+      <EntityContainer Name="EntityContainer">
+        <EntitySet Name="Quotations" EntityType="SAPB1.Document"/>
+        <EntitySet Name="BusinessPartners" EntityType="SAPB1.BusinessPartner"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>
