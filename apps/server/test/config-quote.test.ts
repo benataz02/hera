@@ -14,7 +14,10 @@ import { router } from "../src/orpc/router.ts";
 import {
   buildQuoteSeed,
   configDocumentCommandId,
+  quotedTotals,
+  type ConfigRunRow,
 } from "../src/config-quote.ts";
+import { computeOutputs } from "@hera/config-engine";
 import type { EnabledEntity } from "@hera/db";
 
 const code = (p: Promise<unknown>) =>
@@ -696,5 +699,50 @@ describe("portal.quotedResult", () => {
     expect(Object.keys(res.lines[0]!).sort()).toEqual(["assignment", "batchQty", "total", "unitPrice"]);
     // Acknowledged run selected batch 100, newer selected 500
     expect(res.lines[0]!.batchQty).toBe(100);
+  });
+});
+
+/** A configRun row with only the fields quotedTotals reads. lookupSnapshot is empty because
+ *  TEST_MODEL's price expression does not reference lookup tables. */
+function makeRun(over: Partial<ConfigRunRow>): ConfigRunRow {
+  return {
+    id: "r1", tenantId: "t1", projectId: "p1",
+    modelSnapshot: TEST_MODEL,
+    lookupSnapshot: { domains: {}, tables: {} },
+    entries: {},
+    candidates: [{ assignment: { material: "steel", coated: false }, perBatch: [{ batchQty: 10, outputs: {} as never }] }],
+    selection: [{ candidateIdx: 0, batchQty: 10 }],
+    selectionVersion: 0, b1DocEntry: null, quotedAt: null,
+    quotedValue: null, quotedCost: null,
+    createdAt: new Date(),
+    ...over,
+  } as ConfigRunRow;
+}
+
+describe("quotedTotals", () => {
+  test("sums value and cost across every selected candidate and batch", () => {
+    const run = makeRun({
+      candidates: [
+        { assignment: { material: "steel", coated: false }, perBatch: [{ batchQty: 10, outputs: {} as never }] },
+        { assignment: { material: "steel", coated: true }, perBatch: [{ batchQty: 5, outputs: {} as never }] },
+      ],
+      selection: [
+        { candidateIdx: 0, batchQty: 10 },
+        { candidateIdx: 1, batchQty: 5 },
+      ],
+    });
+    const { value, cost } = quotedTotals(run);
+    // computeOutputs is re-run per selection; totals are unitPrice*qty and unitCost*qty summed.
+    expect(value).toBeGreaterThan(cost);
+    expect(value).toBeCloseTo(
+      computeOutputs(run.modelSnapshot, run.lookupSnapshot, { material: "steel", coated: false }, 10).unitPrice * 10 +
+        computeOutputs(run.modelSnapshot, run.lookupSnapshot, { material: "steel", coated: true }, 5).unitPrice * 5,
+      6,
+    );
+  });
+
+  test("returns zeros when nothing is selected", () => {
+    expect(quotedTotals(makeRun({ selection: [] }))).toEqual({ value: 0, cost: 0 });
+    expect(quotedTotals(makeRun({ selection: null }))).toEqual({ value: 0, cost: 0 });
   });
 });

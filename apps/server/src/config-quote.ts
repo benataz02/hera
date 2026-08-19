@@ -79,6 +79,21 @@ export function buildQuoteSeed(project: ConfigProjectRow, run: ConfigRunRow): Re
   return seed;
 }
 
+/** Engineered value and cost of the selected candidates, using the same computation
+ *  buildQuoteSeed prices from — so the stored margin matches the quotation that was sent. */
+export function quotedTotals(run: ConfigRunRow): { value: number; cost: number } {
+  let value = 0;
+  let cost = 0;
+  for (const s of run.selection ?? []) {
+    const cand = run.candidates[s.candidateIdx];
+    if (!cand) continue;
+    const out = computeOutputs(run.modelSnapshot, run.lookupSnapshot, cand.assignment, s.batchQty, s.overrides);
+    value += out.unitPrice * s.batchQty;
+    cost += out.unitCost * s.batchQty;
+  }
+  return { value, cost };
+}
+
 /** Selection pairs must exist on the run and must not duplicate. */
 export function validateSelectionPairs(
   run: { candidates: RunCandidate[] },
@@ -184,9 +199,21 @@ export async function completeWriteOrigin(
     return;
   }
 
+  let totals = { value: 0, cost: 0 };
+  try {
+    totals = quotedTotals(run);
+  } catch {
+    // ponytail: margin is reporting-only — never fail a confirmed SAP write over it.
+    //           Nulls here just exclude the run from the margin roll-up.
+  }
   await tx
     .update(configRun)
-    .set({ b1DocEntry: docEntry, quotedAt: new Date() })
+    .set({
+      b1DocEntry: docEntry,
+      quotedAt: new Date(),
+      quotedValue: totals.value ? String(totals.value) : null,
+      quotedCost: totals.cost ? String(totals.cost) : null,
+    })
     .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, tenantId)));
 
   await tx
