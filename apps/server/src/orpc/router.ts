@@ -6,6 +6,7 @@ import { modelsRouter } from "./routers/models.ts";
 import { configsRouter } from "./routers/configs.ts";
 import { extractionRouter } from "./routers/extraction.ts";
 import { portalClientsRouter, portalRouter } from "./routers/portal.ts";
+import { dashboardRouter } from "./routers/dashboard.ts";
 import { userProcedure } from "./base.ts";
 
 export const router = {
@@ -17,6 +18,7 @@ export const router = {
   extraction: extractionRouter,
   portal: portalRouter,
   portalClients: portalClientsRouter,
+  dashboard: dashboardRouter,
   assist: createAssistantRouter(),
 };
 
