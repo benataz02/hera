@@ -40,6 +40,14 @@ export const EMPTY_SPEC: ListVariantDef = { select: [], filter: [], orderby: [],
 export const visibleColumns = (spec: ListVariantDef, columns: ListColumn[]): string[] =>
   spec.select.length ? spec.select : columns.map((c) => c.name);
 
+/** Select for the list fetch / table. `null` until a view has been applied — EMPTY_SPEC
+ *  otherwise falls back to every discovered column. */
+export const listFetchSelect = (
+  ready: boolean,
+  spec: ListVariantDef,
+  columns: ListColumn[],
+): string[] | null => (ready ? visibleColumns(spec, columns) : null);
+
 /** Dedupe preserving first-seen order. */
 export const uniqueNames = (names: string[]): string[] => {
   const seen = new Set<string>();

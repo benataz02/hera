@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelDef } from "@hera/config-engine";
-import { applyMove, canDrop, parseRowKey, placeParam, removeFromStructure, unplacedParams } from "./structureOps.ts";
+import { applyMove, canDrop, duplicateParam, parseRowKey, placeParam, removeFromStructure, unplacedParams } from "./structureOps.ts";
 
 const def = {
   name: "m",
@@ -63,5 +63,20 @@ describe("structureOps", () => {
     const out = placeParam(def, "loose", 1, 0);
     expect(out.structure.sections[1]!.groups[0]!.params).toEqual(["c", "loose"]);
     expect(unplacedParams(out)).toEqual([]);
+  });
+
+  test("duplicateParam clones after the source and uniquifies the key", () => {
+    const out = duplicateParam(def, "a");
+    expect(out.structure.sections[0]!.groups[0]!.params).toEqual(["a", "a2", "b"]);
+    expect(out.parameters.find((p) => p.key === "a2")).toMatchObject({ label: "A", type: "string", ui: "input" });
+  });
+
+  test("duplicateParam on an unplaced param stays unplaced", () => {
+    const out = duplicateParam(def, "loose");
+    expect(unplacedParams(out)).toEqual(expect.arrayContaining(["loose", "loose2"]));
+  });
+
+  test("duplicateParam missing key is a no-op", () => {
+    expect(duplicateParam(def, "nope")).toBe(def);
   });
 });

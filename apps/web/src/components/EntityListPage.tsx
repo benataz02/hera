@@ -3,7 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { BusyIndicator, MessageStrip } from "@ui5/webcomponents-react";
 import { orpc } from "../orpc.ts";
-import { useListSpec, visibleColumns, type ListColumn } from "../variants.ts";
+import { useListSpec, listFetchSelect, type ListColumn } from "../variants.ts";
 import { ListReport } from "./ListReport.tsx";
 
 // The B1 half of the list report: an autodiscovered entity schema supplies the columns, and the
@@ -17,7 +17,7 @@ export function EntityListPage({ entity }: { entity: string }) {
   const { spec, ready } = listSpec;
 
   const columns = useMemo<ListColumn[]>(() => schema?.properties ?? [], [schema]);
-  const visibleCols = useMemo(() => visibleColumns(spec, columns), [spec, columns]);
+  const visibleCols = useMemo(() => listFetchSelect(ready, spec, columns) ?? [], [ready, spec, columns]);
   // Fetch identity: server unions schema.keys into $select. Send visible-only here so global
   // search (q) never matches hidden string keys (e.g. ItemCode omitted from the view).
   const select = useMemo(() => [...visibleCols].sort(), [visibleCols]);
@@ -44,7 +44,7 @@ export function EntityListPage({ entity }: { entity: string }) {
 
   const rows = useMemo(() => (list.data?.pages ?? []).flatMap((p) => p.rows ?? []), [list.data]);
 
-  if (enabled.isPending) return <BusyIndicator active />;
+  if (enabled.isPending || !ready) return <BusyIndicator active />;
   if (!schema) return <MessageStrip design="Negative" hideCloseButton style={{ margin: "1rem" }}>Entity “{entity}” is not enabled.</MessageStrip>;
 
   return (

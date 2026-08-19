@@ -147,7 +147,7 @@ export function AppShell() {
               </>
             }
             primaryTitle="HERA"
-            logo={<img alt="SAP Logo" src="https://ui5.github.io/webcomponents/images/sap-logo-svg.svg" />}
+            logo={<img alt="HERA" src="/hera.png" />}
             onLogoClick={() => navigate({ to: "/" })}
             content={isClient ? undefined : <GlobalSearch entries={searchEntries} isAdmin={isAdmin} />}
             profile={<Avatar id="user-menu-opener" initials='BA' />}

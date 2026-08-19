@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { applySpec, formatCell, EMPTY_SPEC, type ListColumn, type ListVariantDef } from "./listSpec.ts";
+import { applySpec, formatCell, EMPTY_SPEC, listFetchSelect, type ListColumn, type ListVariantDef } from "./listSpec.ts";
 
 const COLUMNS: ListColumn[] = [
   { name: "name", type: "string" },
@@ -16,6 +16,21 @@ const ROWS = [
 
 const spec = (over: Partial<ListVariantDef>): ListVariantDef => ({ ...EMPTY_SPEC, ...over });
 const names = (rows: { name: string }[]) => rows.map((r) => r.name);
+
+test("list fetch select is withheld until the view is ready", () => {
+  const discovered: ListColumn[] = [
+    { name: "ItemCode", type: "string" },
+    { name: "ItemName", type: "string" },
+    { name: "U_Custom", type: "string" },
+  ];
+  // EMPTY_SPEC.select is [] which visibleColumns treats as "all columns" — that fallback
+  // must not drive the OData $select or the table/filter chrome before a view is applied.
+  expect(listFetchSelect(false, EMPTY_SPEC, discovered)).toBeNull();
+  expect(listFetchSelect(true, spec({ select: ["ItemCode", "ItemName"] }), discovered)).toEqual([
+    "ItemCode",
+    "ItemName",
+  ]);
+});
 
 test("empty spec returns the input array untouched", () => {
   const out = applySpec(ROWS, EMPTY_SPEC, COLUMNS);

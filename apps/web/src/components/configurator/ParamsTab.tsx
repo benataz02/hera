@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import {
   Bar, Button, CheckBox, Dialog, IllustratedMessage, Input, Label, List, ListItemStandard, Menu, MenuItem, MessageStrip,
   MultiComboBox, MultiComboBoxItem, Option, Select, StepInput, Table, TableCell, TableHeaderCell,
   TableHeaderRow, TableRow, TableRowAction, Text, Title,
+  type TableHeaderRowDomRef,
 } from "@ui5/webcomponents-react";
 import "@ui5/webcomponents-fiori/dist/illustrations/AddColumn.js";
 import { refKeyCols } from "@hera/config-engine";
@@ -11,7 +12,7 @@ import { client } from "../../orpc.ts";
 import { confirm } from "../confirm.ts";
 import { ExprInput } from "./ExprInput.tsx";
 import { issueFor } from "./useDraftModel.ts";
-import { applyMove, canDrop, parseRowKey, placeParam, removeFromStructure, rowKeyOf, unplacedParams, type Placement, type RowRef } from "./structureOps.ts";
+import { applyMove, canDrop, duplicateParam, parseRowKey, placeParam, removeFromStructure, rowKeyOf, unplacedParams, type Placement, type RowRef } from "./structureOps.ts";
 
 type Tables = { name: string; columns: { key: string }[] }[];
 type Update = (fn: (d: ModelDef) => ModelDef) => void;
@@ -23,6 +24,50 @@ const emptyParam = (): Param => ({ key: "", label: "", type: "string", ui: "sele
 // Dashed hairline above the first formula row — the "soft visual link" tying the global
 // formulas (rendered at param level) to the structure above them.
 const SEP = { borderBlockStart: "1px dashed var(--sapList_BorderColor)", paddingBlockStart: "0.25rem" } as const;
+// UI5 cozy icon-button min width — reserved so leaf labels indent past group labels.
+const TOGGLE = "2.25rem";
+
+function Gutter({ depth, children, collapse, style }: {
+  depth: number;
+  children: ReactNode;
+  collapse?: { collapsed: boolean; onToggle: () => void };
+  style?: CSSProperties;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", paddingInlineStart: `${depth * 1.5}rem`, ...style }}>
+      {collapse ? (
+        // Chevron is a real button, indented with the level; stopPropagation so a toggle never enters edit (onRowClick).
+        <Button design="Transparent" style={{ flex: "0 0 auto" }}
+          icon={collapse.collapsed ? "slim-arrow-right" : "slim-arrow-down"}
+          tooltip={collapse.collapsed ? "Expand" : "Collapse"}
+          accessibilityAttributes={{ expanded: collapse.collapsed ? "false" : "true" }}
+          onClick={(e) => { e.stopPropagation(); collapse.onToggle(); }} />
+      ) : (
+        <span style={{ flex: `0 0 ${TOGGLE}`, inlineSize: TOGGLE }} aria-hidden />
+      )}
+      {children}
+    </div>
+  );
+}
+
+// Param-row actions only: section/group/formula stay visible. Touch keeps param actions
+// visible — no hover, and opacity:0 would make delete/dup untappable.
+if (typeof document !== "undefined" && !document.getElementById("hera-params-row-actions")) {
+  const el = document.createElement("style");
+  el.id = "hera-params-row-actions";
+  el.textContent = `@media (hover: hover){.hera-params-struct [ui5-table-row][row-key^="p:"] [ui5-table-row-action]{opacity:0;pointer-events:none}.hera-params-struct [ui5-table-row][row-key^="p:"]:hover [ui5-table-row-action],.hera-params-struct [ui5-table-row][row-key^="p:"]:focus-within [ui5-table-row-action]{opacity:1;pointer-events:auto}}`;
+  document.head.appendChild(el);
+}
+
+// UI5 clips the actions-column header (a11y-only "Row Actions") inside the header-row shadow.
+function revealActionsHeader(el: TableHeaderRowDomRef | null) {
+  const sr = el?.shadowRoot;
+  if (!sr || sr.getElementById("hera-actions-hdr")) return;
+  const style = document.createElement("style");
+  style.id = "hera-actions-hdr";
+  style.textContent = `#actions-cell-content{position:static;clip:auto;font-size:0}#actions-cell-content::after{content:"Actions";font-size:var(--sapFontSize);font-family:var(--sapFontSemiboldDuplexFamily);color:var(--sapList_HeaderTextColor)}`;
+  sr.appendChild(style);
+}
 
 export function ParamsTab({ draft, update, issues, tables }: {
   draft: ModelDef; update: Update; issues: Issue[]; tables: Tables;
@@ -136,23 +181,21 @@ export function ParamsTab({ draft, update, issues, tables }: {
     ...d,
     computed: [...d.computed, { key: addKey("value", [...d.parameters.map((p) => p.key), ...d.computed.map((c) => c.key)]), expr: "0" }],
   }));
-  // The group a param sits in, so its "add" action drops a sibling into the same group.
-  const groupOfParam = (key: string) => {
-    for (let s = 0; s < draft.structure.sections.length; s++)
-      for (let g = 0; g < draft.structure.sections[s]!.groups.length; g++)
-        if (draft.structure.sections[s]!.groups[g]!.params.includes(key)) return { s, g };
-    return undefined;
+  const lastGroup = () => {
+    for (let s = draft.structure.sections.length - 1; s >= 0; s--) {
+      const g = draft.structure.sections[s]!.groups.length - 1;
+      if (g >= 0) return { s, g };
+    }
   };
-  // "add" row action: section → group, group/param → parameter (dialog targeted to the group).
+  // "add" row action: section → group, group → parameter (dialog targeted to the group).
   const addUnder = (ref: RowRef) => {
     if (ref.kind === "section") addGroup(ref.s);
     else if (ref.kind === "group") setEditing({ param: emptyParam(), isNew: true, place: { s: ref.s, g: ref.g } });
-    else setEditing({ param: emptyParam(), isNew: true, place: groupOfParam(ref.key) });
   };
 
-  const rowActions = (add: string) => (
+  const rowActions = (text: string, act: "add" | "dup" = "add") => (
     <>
-      <TableRowAction icon="add" text={add} data-act="add" />
+      <TableRowAction icon={act === "dup" ? "copy" : "add"} text={text} data-act={act} />
       <TableRowAction icon="delete" text="Delete" data-act="delete" />
     </>
   );
@@ -170,12 +213,14 @@ export function ParamsTab({ draft, update, issues, tables }: {
         endContent={
           <>
             <Button icon="add" onClick={addSection}>Add section</Button>
+            <Button icon="add" onClick={() => setEditing({ param: emptyParam(), isNew: true, place: lastGroup() })}>Add parameter</Button>
             <Button icon="add" onClick={addFormula}>Add formula</Button>
           </>
         }
       />
 
       <Table
+        className="hera-params-struct"
         noData={
           <IllustratedMessage name="AddColumn" design="Dot" titleText="No structure yet"
             subtitleText="Add a section to start structuring the form, then add groups and parameters." />
@@ -207,6 +252,7 @@ export function ParamsTab({ draft, update, issues, tables }: {
           }
           const ref = parseRowKey(rowKey);
           if (act === "delete") void confirmDelete(ref);
+          else if (act === "dup" && ref.kind === "param") update((d) => duplicateParam(d, ref.key));
           else addUnder(ref);
         }}
         onRowClick={(e) => {
@@ -222,7 +268,7 @@ export function ParamsTab({ draft, update, issues, tables }: {
           }
         }}
         headerRow={
-          <TableHeaderRow>
+          <TableHeaderRow ref={revealActionsHeader}>
             <TableHeaderCell width="45%"><span>Structure</span></TableHeaderCell>
             <TableHeaderCell><span>Details</span></TableHeaderCell>
           </TableHeaderRow>
@@ -232,11 +278,11 @@ export function ParamsTab({ draft, update, issues, tables }: {
           r.kind === "formula" ? (
             <TableRow key={r.key} rowKey={r.key} actions={rowActions("Add formula")}>
               <TableCell>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", paddingInlineStart: "3rem", ...(r.idx === 0 ? SEP : {}) }}>
+                <Gutter depth={2} style={r.idx === 0 ? SEP : undefined}>
                   <span style={{ color: "var(--sapContent_LabelColor)", fontStyle: "italic", flex: "0 0 auto" }}>ƒ</span>
                   <Input style={{ width: "100%" }} value={draft.computed[r.idx]!.key}
                     onInput={(e) => update((d) => ({ ...d, computed: d.computed.map((x, j) => (j === r.idx ? { ...x, key: e.target.value } : x)) }))} />
-                </div>
+                </Gutter>
               </TableCell>
               <TableCell>
                 <div style={r.idx === 0 ? SEP : undefined}>
@@ -248,16 +294,12 @@ export function ParamsTab({ draft, update, issues, tables }: {
             </TableRow>
           ) : (
             <TableRow key={r.key} rowKey={r.key} movable interactive
-              actions={rowActions(r.ref.kind === "section" ? "Add group" : "Add parameter")}>
+              actions={r.ref.kind === "param" ? rowActions("Duplicate parameter", "dup")
+                : rowActions(r.ref.kind === "section" ? "Add group" : "Add parameter")}>
               <TableCell>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", paddingInlineStart: `${r.depth * 1.5}rem` }}>
-                  {r.collapseId ? (
-                    // Chevron is a real button, indented with the level; stopPropagation so a toggle never enters edit (onRowClick).
-                    <Button design="Transparent" style={{ flex: "0 0 auto" }}
-                      icon={collapsed.has(r.collapseId) ? "slim-arrow-right" : "slim-arrow-down"}
-                      tooltip={collapsed.has(r.collapseId) ? "Expand" : "Collapse"}
-                      onClick={(e) => { e.stopPropagation(); toggle(r.collapseId!); }} />
-                  ) : null}
+                <Gutter depth={r.depth} collapse={r.collapseId
+                  ? { collapsed: collapsed.has(r.collapseId), onToggle: () => toggle(r.collapseId!) }
+                  : undefined}>
                   {titleEdit?.key === r.key && r.ref.kind !== "param" ? (
                     <Input
                       value={r.label}
@@ -272,7 +314,7 @@ export function ParamsTab({ draft, update, issues, tables }: {
                   ) : (
                     <Text style={{ fontWeight: r.depth === 0 ? "bold" : "normal" }}>{r.label}</Text>
                   )}
-                </div>
+                </Gutter>
               </TableCell>
               <TableCell><Text>{r.detail}</Text></TableCell>
             </TableRow>

@@ -128,3 +128,28 @@ export function unplacedParams(def: ModelDef): string[] {
   const placed = new Set(def.structure.sections.flatMap((s) => s.groups.flatMap((g) => g.params)));
   return def.parameters.map((p) => p.key).filter((k) => !placed.has(k));
 }
+
+/** Clone a param, uniquify its key, and insert it after the source (same group if placed). */
+export function duplicateParam(def: ModelDef, key: string): ModelDef {
+  const src = def.parameters.find((p) => p.key === key);
+  if (!src) return def;
+  const taken = [...def.parameters.map((p) => p.key), ...def.computed.map((c) => c.key)];
+  let copyKey = key, n = 2;
+  while (taken.includes(copyKey)) copyKey = `${key}${n++}`;
+  const copy = { ...structuredClone(src), key: copyKey };
+  const at = def.parameters.findIndex((p) => p.key === key);
+  return {
+    ...def,
+    parameters: [...def.parameters.slice(0, at + 1), copy, ...def.parameters.slice(at + 1)],
+    structure: {
+      sections: def.structure.sections.map((s) => ({
+        ...s,
+        groups: s.groups.map((g) => {
+          const i = g.params.indexOf(key);
+          if (i < 0) return g;
+          return { ...g, params: [...g.params.slice(0, i + 1), copyKey, ...g.params.slice(i + 1)] };
+        }),
+      })),
+    },
+  };
+}
