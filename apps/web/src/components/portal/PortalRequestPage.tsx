@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar, BusyIndicator, Button, Card, CardHeader, Dialog, MessageStrip, ObjectStatus, Table, TableCell,
   TableHeaderCell, TableHeaderRow, TableRow, Text, Title, Wizard, WizardStep,
@@ -14,6 +14,8 @@ import { candidateLabel, fmt, openKeys, toggleSelection, type Sel } from "../con
 import { portalStatusUi, type PortalStatus } from "./portalUi.ts";
 import { PortalCandidateDetail } from "./PortalCandidateDetail.tsx";
 import { PortalRequestSummary } from "./PortalRequestSummary.tsx";
+import { sameEntries } from "../configurator/configProcessState.ts";
+import { mergeQueryPicks, setQueryPick, type QueryPicks } from "../configurator/formHelpers.ts";
 
 // The client's request flow: Configure → Quantities → Prices → Submit while editable;
 // a read-only summary once submitted. Mirrors ConfigProcessPage's state overlay pattern.
@@ -22,12 +24,15 @@ export function PortalRequestPage({ id }: { id: string }) {
   const q = useQuery(orpc.portal.projects.get.queryOptions({ input: { id } }));
   const modelId = q.data?.project.modelId;
   const lookups = useQuery({
-    ...orpc.portal.lookups.queryOptions({ input: { modelId: modelId! } }),
+    ...orpc.portal.lookups.queryOptions({ input: { modelId: modelId!, entries: q.data?.project.entries ?? {} } }),
+    queryKey: orpc.portal.lookups.queryOptions({ input: { modelId: modelId! } }).queryKey,
     enabled: !!modelId,
     staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
     retry: false,
   });
 
+  const [picks, setPicks] = useState<QueryPicks>({});
   const [stepOverride, setStep] = useState<number | null>(null);
   const [entriesOverride, setEntries] = useState<Entries | null>(null);
   const [batchesOverride, setBatches] = useState<number[] | null>(null);
@@ -70,9 +75,10 @@ export function PortalRequestPage({ id }: { id: string }) {
   const runReady = !!latestRun && status === "calculated";
   const step = stepOverride ?? (status === "draft" ? 0 : 2);
 
-  const prop = lookups.data ? propagate(model.definition, lookups.data, entries) : null;
+  const lk = lookups.data ? mergeQueryPicks(lookups.data, picks) : undefined;
+  const prop = lk ? propagate(model.definition, lk, entries) : null;
   const conflicted = !!prop && prop.conflicts.length > 0;
-  const entriesDirty = JSON.stringify(entries) !== JSON.stringify(project.entries);
+  const entriesDirty = !sameEntries(entries, project.entries);
   const batchesDirty = JSON.stringify(batches) !== JSON.stringify(project.batches);
 
   const goto = (i: number) => {
@@ -107,8 +113,12 @@ export function PortalRequestPage({ id }: { id: string }) {
       <Wizard contentLayout="MultipleSteps" style={{ flex: 1, minHeight: 0 }}
         onStepChange={(e) => goto(Number((e.detail.step as HTMLElement).dataset.idx))}>
         <WizardStep titleText="Configure" icon="settings" data-idx="0" selected={step === 0}>
-          <StepConfigure model={model.definition} modelId={project.modelId} lookups={lookups} entries={entries}
-            onChange={setEntries} onNext={() => goto(1)} saving={update.isPending} conflicted={conflicted}
+          <StepConfigure model={model.definition} modelId={project.modelId}
+            lookups={lookups.data} lk={lk} prop={prop} lookupError={lookups.error} onRetryLookups={() => void lookups.refetch()}
+            entries={entries}
+            onChange={setEntries}
+            onQueryPick={(k, t, sel) => setPicks((p) => setQueryPick(p, k, t, sel))}
+            onNext={() => goto(1)} saving={update.isPending} conflicted={conflicted}
             extract={(input) => client.portal.extract(input)} />
         </WizardStep>
         <WizardStep titleText="Quantities" icon="multiselect-all" data-idx="1" selected={step === 1} disabled={conflicted}>

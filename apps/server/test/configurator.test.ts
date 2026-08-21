@@ -92,4 +92,106 @@ describe.skipIf(!process.env.DATABASE_URL)("configurator run + select (integrati
     // out-of-range candidate index is rejected
     expect(() => applySelection(run!, [{ candidateIdx: 99, batchQty: 10 }])).toThrow();
   });
+
+  test("a persisted off-page selection is enriched for derived values and stored in the run snapshot", async () => {
+    const offPageModel: ModelDef = {
+      name: "Off-page material",
+      parameters: [{
+        key: "material", label: "Material", type: "string", ui: "select",
+        domain: { kind: "options", ref: { source: "query", table: "items", valueCol: "ItemCode", columns: ["Price"] } },
+      }],
+      structure: { sections: [{ key: "main", title: "Main", groups: [{ key: "g", title: "G", params: ["material"] }] }] },
+      computed: [],
+      constraints: [],
+      bom: [{ id: "body", itemCode: "material", qty: "1", price: "material_Price", scrapPct: 0 }],
+      routing: [],
+      queryTables: [{ name: "items", target: "b1", path: "/Items?$select=ItemCode,Price", columns: ["ItemCode", "Price"] }],
+      pricing: { priceExpr: "unitCost", quoteItemCode: "BOX" },
+      batchDefaults: [1],
+    };
+    const [m] = await db.insert(configModel)
+      .values({ tenantId, name: offPageModel.name, definition: offPageModel })
+      .returning({ id: configModel.id });
+    const [p] = await db.insert(configProject)
+      .values({ tenantId, modelId: m!.id, name: "off-page", batches: [1], entries: { material: "B" }, createdBy: "tester" })
+      .returning({ id: configProject.id });
+
+    const paths: string[] = [];
+    const fetcher: QueryFetcher = async (_target, path, opts) => {
+      expect(opts).toEqual({ all: false });
+      paths.push(path);
+      const encoded = /[?&]\$filter=([^&]*)/.exec(path)?.[1];
+      if (!encoded) return { value: [{ ItemCode: "A", Price: 3 }] };
+      expect(decodeURIComponent(encoded)).toBe("ItemCode eq 'B'");
+      return { value: [{ ItemCode: "B", Price: 11 }] };
+    };
+
+    const result = await executeRun(tenantId, p!.id, fetcher);
+    const [run] = await db.select().from(configRun)
+      .where(and(eq(configRun.id, result.runId), eq(configRun.tenantId, tenantId))).limit(1);
+
+    expect(paths).toHaveLength(2);
+    expect(run!.lookupSnapshot.domains.material).toEqual([{ value: "A", label: "3" }]);
+    expect(run!.lookupSnapshot.tables.items!.rows).toEqual([["A", 3], ["B", 11]]);
+    expect(run!.candidates[0]!.perBatch[0]!.outputs.unitCost).toBe(11);
+  });
+
+  // The auto-calculate on the process page fires a run ~1s after every field edit. Each run used to
+  // re-GET every query table through the agent; this counts the fetches so that regression is loud.
+  test("recalculating does not re-fetch query tables: reuse short-circuits, and the cache absorbs the rest", async () => {
+    const [m] = await db
+      .insert(configModel)
+      .values({ tenantId, name: model.name, definition: model })
+      .returning({ id: configModel.id });
+    const [p] = await db
+      .insert(configProject)
+      .values({ tenantId, modelId: m!.id, name: "no-refetch", batches: [10], entries: {}, createdBy: "tester" })
+      .returning({ id: configProject.id });
+
+    let fetches = 0;
+    const counting: QueryFetcher = async (target, path) => {
+      fetches++;
+      return fakeFetch(target, path);
+    };
+
+    const first = await executeRun(tenantId, p!.id, counting);
+    expect(fetches).toBe(1);
+
+    // Nothing changed: the same run comes back, and the reuse check must return before any
+    // lookup resolution — so the fetch count cannot move.
+    const again = await executeRun(tenantId, p!.id, counting);
+    expect(again.runId).toBe(first.runId);
+    expect(fetches).toBe(1);
+
+    // A real edit: a genuinely new run, but the model is untouched so its lookups come from cache.
+    await db.update(configProject).set({ entries: { size: "S" } }).where(eq(configProject.id, p!.id));
+    const edited = await executeRun(tenantId, p!.id, counting);
+    expect(edited.runId).not.toBe(first.runId);
+    expect(fetches).toBe(1);
+  });
+
+  test("one configuration = one run: recalculating replaces the row instead of appending", async () => {
+    const [m] = await db
+      .insert(configModel)
+      .values({ tenantId, name: model.name, definition: model })
+      .returning({ id: configModel.id });
+    const [p] = await db
+      .insert(configProject)
+      .values({ tenantId, modelId: m!.id, name: "one-run", batches: [10], entries: {}, createdBy: "tester" })
+      .returning({ id: configProject.id });
+
+    const first = await executeRun(tenantId, p!.id, fakeFetch);
+
+    // Different entries → a genuinely different calculation, so the reuse check cannot short-circuit.
+    await db.update(configProject).set({ entries: { size: "S" } }).where(eq(configProject.id, p!.id));
+    const second = await executeRun(tenantId, p!.id, fakeFetch);
+    expect(second.runId).not.toBe(first.runId);
+
+    const rows = await db
+      .select({ id: configRun.id })
+      .from(configRun)
+      .where(and(eq(configRun.projectId, p!.id), eq(configRun.tenantId, tenantId)));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.id).toBe(second.runId);
+  });
 });

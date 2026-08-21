@@ -38,7 +38,7 @@ export interface SlReadPort {
     data: Record<string, unknown>,
     opts?: { replaceCollections?: boolean },
   ): Promise<unknown>;
-  queryRaw(path: string): Promise<unknown>;
+  queryRaw(path: string, all?: boolean): Promise<unknown>;
 }
 
 export interface RequestCloudPort {
@@ -47,7 +47,7 @@ export interface RequestCloudPort {
 }
 
 export interface BeasPort {
-  get(path: string): Promise<unknown>;
+  get(path: string, all?: boolean): Promise<unknown>;
 }
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -99,11 +99,13 @@ export async function processRequest(
           `Request kind '${req.kind}' is removed; use durable write (kind=write)`,
         );
       case "query":
+        // Whole table by default — LOOKUP, enumeration, history sync and the dashboard snapshot
+        // all consume every row. Only value help opts out (all:false) and retains nextLink.
         if (p.target === "beas") {
           if (!beas) throw new Error("Beas is not configured on this agent (set BEAS_BASE_URL in .env)");
-          result = await beas.get(String(p.path));
+          result = await beas.get(String(p.path), p.all !== false);
         } else {
-          result = await sl.queryRaw(String(p.path));
+          result = await sl.queryRaw(String(p.path), p.all !== false);
         }
         break;
       case "login":

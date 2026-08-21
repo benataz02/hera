@@ -32,6 +32,25 @@ test("query with target beas goes to the Beas client", async () => {
   expect(f.fulfilled).toHaveLength(1);
 });
 
+test("query forwards all-page mode to the Beas client", async () => {
+  const f = fakes();
+  const modes: Array<boolean | undefined> = [];
+  const beas = { get: async (_path: string, all?: boolean) => void modes.push(all) };
+  await processRequest(
+    { id: "3a", kind: "query", payload: { target: "beas", path: "/api/all" } },
+    f.sl,
+    f.cloud,
+    beas,
+  );
+  await processRequest(
+    { id: "3b", kind: "query", payload: { target: "beas", path: "/api/page", all: false } },
+    f.sl,
+    f.cloud,
+    beas,
+  );
+  expect(modes).toEqual([true, false]);
+});
+
 test("beas target without a configured client fails with the env hint", async () => {
   const f = fakes();
   await processRequest({ id: "4", kind: "query", payload: { target: "beas", path: "/api/x" } }, f.sl, f.cloud);

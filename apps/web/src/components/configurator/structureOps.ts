@@ -21,6 +21,12 @@ export function parseRowKey(k: string): RowRef {
 
 export type Placement = "Before" | "After" | "On";
 
+export function uniqueKey(base: string, taken: string[]): string {
+  let k = base, n = 2;
+  while (taken.includes(k)) k = `${base}${n++}`;
+  return k;
+}
+
 export function canDrop(_def: ModelDef, srcKey: string, dstKey: string, placement: Placement): boolean {
   const src = parseRowKey(srcKey);
   const dst = parseRowKey(dstKey);
@@ -80,20 +86,23 @@ export function applyMove(def: ModelDef, srcKey: string, dstKey: string, placeme
     const sections = def.structure.sections.map((s, si) =>
       si === src.s ? { ...s, groups: s.groups.filter((_, gi) => gi !== src.g) } : s,
     );
+    const into = (si: number) => {
+      const taken = sections[si]!.groups.map((g) => g.key);
+      return src.s === si ? grp : { ...grp, key: uniqueKey(grp.key, taken) };
+    };
     if (dst.kind === "section")
-      return { ...def, structure: { sections: sections.map((s, si) => (si === dst.s ? { ...s, groups: [...s.groups, grp] } : s)) } };
-    // Before/After another group: recompute dst indices against the filtered array
+      return { ...def, structure: { sections: sections.map((s, si) => (si === dst.s ? { ...s, groups: [...s.groups, into(dst.s)] } : s)) } };
     const dstGrp = dst as { s: number; g: number };
-    const dstGrpKey = def.structure.sections[dstGrp.s]!.groups[dstGrp.g]!.key;
+    let di = dstGrp.g;
+    if (src.s === dstGrp.s && src.g < dstGrp.g) di -= 1;
+    const at = di + (placement === "After" ? 1 : 0);
+    const moved = into(dstGrp.s);
     return {
       ...def,
       structure: {
-        sections: sections.map((s) => {
-          const gi = s.groups.findIndex((g) => g.key === dstGrpKey);
-          if (gi < 0) return s;
-          const at = gi + (placement === "After" ? 1 : 0);
-          return { ...s, groups: [...s.groups.slice(0, at), grp, ...s.groups.slice(at)] };
-        }),
+        sections: sections.map((s, si) =>
+          si !== dstGrp.s ? s : { ...s, groups: [...s.groups.slice(0, at), moved, ...s.groups.slice(at)] },
+        ),
       },
     };
   }

@@ -18,8 +18,8 @@ type Cell = Exclude<Val, string[]>;
 export const parseLit = (s: string): Cell =>
   s === "" ? null : s === "true" ? true : s === "false" ? false : !Number.isNaN(Number(s)) ? Number(s) : s;
 
-export function RulesTab({ draft, update, issues, lookups }: {
-  draft: ModelDef; update: Update; issues: Issue[]; lookups?: ResolvedLookups;
+export function RulesTab({ draft, update, issues, lookups, tables = [] }: {
+  draft: ModelDef; update: Update; issues: Issue[]; lookups?: ResolvedLookups; tables?: { name: string; columns: string[] }[];
 }) {
   const [editingTable, setEditingTable] = useState<number | null>(null);
   const setC = (i: number, c: Constraint) =>
@@ -54,12 +54,12 @@ export function RulesTab({ draft, update, issues, lookups }: {
         {exprs.map(([c, i]) => c.kind === "expr" ? (
           <TableRow key={i} rowKey={`ec-${i}`} data-idx={String(i)} actions={<TableRowAction icon="delete" text="Delete" />}>
             <TableCell>
-              <ExprInput optional value={c.when} model={draft} fieldId={`expr-constraints[${i}].when`}
+              <ExprInput optional value={c.when} model={draft} tables={tables} fieldId={`expr-constraints[${i}].when`}
                 issue={issueFor(issues, `constraints[${i}].when`)}
                 onChange={(v) => setC(i, { ...c, when: v })} />
             </TableCell>
             <TableCell>
-              <ExprInput value={c.assert} model={draft} fieldId={`expr-constraints[${i}].assert`}
+              <ExprInput value={c.assert} model={draft} tables={tables} fieldId={`expr-constraints[${i}].assert`}
                 issue={issueFor(issues, `constraints[${i}].assert`)} placeholder='e.g. coating != "none" || material == "steel"'
                 onChange={(v) => setC(i, { ...c, assert: v ?? "" })} />
             </TableCell>
@@ -125,8 +125,9 @@ function ComboTableDialog({ draft, lookups, value, onOk, onCancel }: {
     if (p?.type === "boolean") return [true, false];
     // Combination-eligible params carry scalar option values; narrow the wider Val to Cell.
     if (p?.domain?.kind === "options" && p.domain.ref.source === "manual") return p.domain.ref.options.map((o) => o.value as Cell);
+    // Empty (a query domain the preview no longer resolves eagerly) falls back to free text.
     const dom = lookups?.domains[key];
-    return dom ? dom.map((o) => o.value as Cell) : null;
+    return dom?.length ? dom.map((o) => o.value as Cell) : null;
   };
 
   const setParams = (params: string[]) =>

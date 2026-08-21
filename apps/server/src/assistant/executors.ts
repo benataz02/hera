@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db, configRun, type RunCandidate, type RunSelection } from "@hera/db";
 import {
   propagate, enumerate, computeOutputs,
@@ -202,7 +202,7 @@ export function createExecutors(
         });
         return {
           ok: true as const, stale: false as const, runId: r.runId, projectVersion: r.projectVersion,
-          selectionVersion: r.selectionVersion, reused: r.reused, candidateCount: r.candidateCount, top,
+          reused: r.reused, candidateCount: r.candidateCount, top,
         };
       } catch (e) {
         if (e instanceof ORPCError && e.code === "CONFLICT")
@@ -212,23 +212,17 @@ export function createExecutors(
     },
 
     async selectCandidates(input: {
-      runId: string; expectedSelectionVersion: number;
+      runId: string;
       selections: { candidateId: string; batchQty: number }[]; mode: "add" | "replace";
     }) {
       return db.transaction(async (tx) => {
         const [run] = await tx.select().from(configRun)
           .where(and(eq(configRun.id, input.runId), eq(configRun.tenantId, ctx.tenantId)))
           .for("update");
-        if (!run) return err("INVALID_ARGUMENTS", "Run not found");
-
-        const [latest] = await tx.select({ id: configRun.id }).from(configRun)
-          .where(and(eq(configRun.projectId, run.projectId), eq(configRun.tenantId, ctx.tenantId)))
-          .orderBy(desc(configRun.createdAt)).limit(1);
-        if (latest?.id !== run.id || JSON.stringify(run.entries) !== JSON.stringify(ctx.working.entries))
+        // A recalculate replaces the project's run row, so a runId that no longer resolves means
+        // exactly that: this turn's run is stale.
+        if (!run || JSON.stringify(run.entries) !== JSON.stringify(ctx.working.entries))
           return err("STALE_RUN", "This run is no longer the project's current configuration; recalculate");
-
-        if (run.selectionVersion !== input.expectedSelectionVersion)
-          return err("SELECTION_CHANGED", "Selection changed since expectedSelectionVersion; reload and retry");
 
         const validBatchQtys = new Set(run.candidates[0]?.perBatch.map((b) => b.batchQty) ?? []);
         const parsed: { candidateIdx: number; batchQty: number }[] = [];
@@ -257,12 +251,11 @@ export function createExecutors(
           return mapInfra(e);
         }
 
-        const selectionVersion = input.expectedSelectionVersion + 1;
-        await tx.update(configRun).set({ selection: next, selectionVersion })
+        await tx.update(configRun).set({ selection: next })
           .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, ctx.tenantId)));
 
         return {
-          ok: true as const, stale: false as const, runId: run.id, selectionVersion,
+          ok: true as const, stale: false as const, runId: run.id,
           selections: next.map((s) => ({ candidateId: `c${s.candidateIdx}`, batchQty: s.batchQty })),
         };
       });

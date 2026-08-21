@@ -1,6 +1,6 @@
 import { describe, expect, it, test } from "bun:test";
 import type { ModelDef } from "@hera/config-engine";
-import { complete, matches, scopeSuggestions, trailingIdent } from "./exprHelpers.ts";
+import { complete, matches, scopeSuggestions, trailingIdent, modelWithParam } from "./exprHelpers.ts";
 
 const model = {
   name: "m",
@@ -58,5 +58,36 @@ describe("exprHelpers", () => {
     });
     const texts = scopeSuggestions(m).map((s) => s.text);
     expect(texts).toContain("item_Name");
+  });
+
+  it("suggests every extra tenant-table column even when display is a subset", () => {
+    const m = structuredClone(model);
+    m.parameters.push({
+      key: "item", label: "Item", type: "string", ui: "select",
+      domain: { kind: "options", ref: { source: "table", table: "items", valueCol: "Code", columns: ["Name"] } },
+    });
+    const texts = scopeSuggestions(m, [], [{ name: "items", columns: ["Code", "Name", "Price"] }]).map((s) => s.text);
+    expect(texts).toContain("item_Name");
+    expect(texts).toContain("item_Price");
+  });
+
+  it("includes an in-progress table param that is not on the model yet", () => {
+    const p = {
+      key: "mat", label: "Material", type: "string" as const, ui: "select" as const,
+      domain: { kind: "options" as const, ref: { source: "table" as const, table: "mats", valueCol: "code" } },
+    };
+    const texts = scopeSuggestions(modelWithParam(model, p), [], [{ name: "mats", columns: ["code", "density"] }]).map((s) => s.text);
+    expect(texts).toContain("mat_density");
+  });
+
+  it("matches a derived key by its column fragment", () => {
+    const m = structuredClone(model);
+    m.parameters.push({
+      key: "mat", label: "Material", type: "string", ui: "select",
+      domain: { kind: "options", ref: { source: "table", table: "mats", valueCol: "code" } },
+    });
+    const all = scopeSuggestions(m, [], [{ name: "mats", columns: ["code", "density"] }]);
+    expect(matches(all, "dens").map((s) => s.text)).toContain("mat_density");
+    expect(matches(all, "mat_").map((s) => s.text)).toContain("mat_density");
   });
 });

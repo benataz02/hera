@@ -16,7 +16,6 @@ import {
 const host = "acme.lvh.me:5173";
 const projectId = "11111111-1111-4111-8111-111111111111";
 const runId = "22222222-2222-4222-8222-222222222222";
-const selectionVersion = 3;
 const commandId = "cmd-abc";
 
 function seed(lines = 2): Record<string, unknown> {
@@ -34,57 +33,54 @@ function seed(lines = 2): Record<string, unknown> {
 }
 
 describe("quote session key", () => {
-  test("includes tenant host, project, run, and selection version", () => {
-    expect(quoteSessionKey(host, projectId, runId, selectionVersion)).toBe(
-      `hera:quoteDraft:${host}:${projectId}:${runId}:${selectionVersion}`,
+  test("includes tenant host, project, and run", () => {
+    expect(quoteSessionKey(host, projectId, runId)).toBe(
+      `hera:quoteDraft:${host}:${projectId}:${runId}`,
     );
   });
 });
 
 describe("session restore / discard", () => {
-  test("restores editable draft when run id and selection version match", () => {
+  test("restores editable draft when run id and commandId match", () => {
     const stored: QuoteSessionStored = {
       runId,
-      selectionVersion,
       commandId,
       data: seed(),
       requestId: null,
       lastStatus: null,
     };
-    const restored = restoreQuoteSession(stored, { runId, selectionVersion, commandId });
+    const restored = restoreQuoteSession(stored, { runId, commandId });
     expect(restored).toEqual(stored);
   });
 
-  test("discards stale draft when selection version differs", () => {
+  // commandId is a hash of the stored selection, so a changed selection invalidates the draft.
+  test("discards stale draft when commandId differs", () => {
     const stored: QuoteSessionStored = {
       runId,
-      selectionVersion: 2,
       commandId: "old",
       data: seed(1),
       requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       lastStatus: "pending",
     };
-    expect(restoreQuoteSession(stored, { runId, selectionVersion: 3, commandId })).toBeNull();
+    expect(restoreQuoteSession(stored, { runId, commandId })).toBeNull();
   });
 
   test("discards stale draft when run id differs", () => {
     const stored: QuoteSessionStored = {
       runId: "33333333-3333-4333-8333-333333333333",
-      selectionVersion,
       commandId,
       data: seed(1),
       requestId: null,
       lastStatus: null,
     };
-    expect(restoreQuoteSession(stored, { runId, selectionVersion, commandId })).toBeNull();
+    expect(restoreQuoteSession(stored, { runId, commandId })).toBeNull();
   });
 
   test("round-trips through sessionStorage for a matching key", () => {
-    const key = quoteSessionKey(host, projectId, runId, selectionVersion);
+    const key = quoteSessionKey(host, projectId, runId);
     clearQuoteSession(key);
     const stored: QuoteSessionStored = {
       runId,
-      selectionVersion,
       commandId,
       data: seed(),
       requestId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",

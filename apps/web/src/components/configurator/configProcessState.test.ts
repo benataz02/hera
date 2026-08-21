@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildCalculationUpdate, needsCalculation } from "./configProcessState.ts";
+import { buildCalculationUpdate, needsCalculation, sameEntries } from "./configProcessState.ts";
 
 const ready = {
   conflicted: false,
@@ -34,4 +34,18 @@ test("calculation persists the assistant-proposed entries before the run snapsho
 
   expect(update?.entries).toEqual(assistantProposed);
   expect(update?.entries).not.toEqual(beforeTurn);
+});
+
+test("reordered keys from jsonb are not a dirty change", () => {
+  const typed = { material: "steel", width: 10 };
+  const fromPg = { width: 10, material: "steel" };
+  expect(JSON.stringify(typed) === JSON.stringify(fromPg)).toBe(false);
+  expect(sameEntries(typed, fromPg)).toBe(true);
+  expect(buildCalculationUpdate("p", fromPg, typed, [1], [1])).toBeNull();
+});
+
+test("a real value change still persists", () => {
+  expect(sameEntries({ material: "steel" }, { material: "aluminium" })).toBe(false);
+  expect(buildCalculationUpdate("p", { material: "steel" }, { material: "aluminium" }, [1], [1])?.entries)
+    .toEqual({ material: "aluminium" });
 });

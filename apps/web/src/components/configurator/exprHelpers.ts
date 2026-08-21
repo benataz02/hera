@@ -1,4 +1,4 @@
-import { FUNCS, refColumns, derivedKey, type ModelDef } from "@hera/config-engine";
+import { FUNCS, derivedColumns, derivedKey, type ModelDef, type Param } from "@hera/config-engine";
 
 // Suggestion machinery for ExprInput. Completion targets the TRAILING identifier of the
 // value — the common typing flow. // ponytail: caret-aware mid-expression completion needs
@@ -7,18 +7,40 @@ import { FUNCS, refColumns, derivedKey, type ModelDef } from "@hera/config-engin
 export type Suggestion = {
   text: string;
   kind: "param" | "computed" | "var" | "function" | "derived";
-  /** human label shown as secondary text (params only) */
+  /** human label shown as secondary text (params and derived columns) */
   label?: string;
 };
 
-export function scopeSuggestions(model: ModelDef, extraVars: string[] = []): Suggestion[] {
-  // ponytail: tenant-table columns aren't available here, so default-all tenant refs get no
-  // derived suggestions (checkModel still validates them); pass tables through if it ever matters.
-  const colsOf = (name: string) => model.queryTables.find((q) => q.name === name)?.columns;
+export type TableCols = { name: string; columns: string[] };
+
+export function mergeTableCols(...sources: (TableCols[] | undefined)[]): TableCols[] {
+  const by = new Map<string, string[]>();
+  for (const src of sources) {
+    for (const t of src ?? []) {
+      by.set(t.name, [...new Set([...(by.get(t.name) ?? []), ...t.columns])]);
+    }
+  }
+  return [...by].map(([name, columns]) => ({ name, columns }));
+}
+
+/** Overlay a param being edited (including unsaved new ones) so its derived keys are in scope. */
+export function modelWithParam(model: ModelDef, p: Param): ModelDef {
+  if (!p.key) return model;
+  return { ...model, parameters: [...model.parameters.filter((x) => x.key !== p.key), p] };
+}
+
+export function scopeSuggestions(model: ModelDef, extraVars: string[] = [], tables: TableCols[] = []): Suggestion[] {
+  const colsOf = (name: string) =>
+    tables.find((t) => t.name === name)?.columns ??
+    model.queryTables.find((q) => q.name === name)?.columns;
   const derived = model.parameters.flatMap((p) => {
     const ref = p.domain?.kind === "options" ? p.domain.ref : undefined;
     if (!ref || ref.source === "manual") return [];
-    return refColumns(ref, colsOf(ref.table)).map((c) => ({ text: derivedKey(p.key, c), kind: "derived" as const }));
+    return derivedColumns(ref, colsOf(ref.table)).map((c) => ({
+      text: derivedKey(p.key, c),
+      kind: "derived" as const,
+      label: c,
+    }));
   });
   return [
     ...model.parameters.map((p) => ({ text: p.key, kind: "param" as const, label: p.label })),
@@ -37,7 +59,12 @@ export function matches(all: Suggestion[], src: string): Suggestion[] {
   const frag = trailingIdent(src);
   if (!frag) return [];
   const lower = frag.toLowerCase();
-  return all.filter((s) => s.text.toLowerCase().startsWith(lower) && s.text !== frag);
+  const col = `_${lower}`;
+  return all.filter((s) => {
+    if (s.text === frag) return false;
+    const t = s.text.toLowerCase();
+    return t.startsWith(lower) || (s.kind === "derived" && t.includes(col));
+  });
 }
 
 export function complete(src: string, s: Suggestion): string {

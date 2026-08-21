@@ -3,9 +3,7 @@ import { z } from "zod";
 import { GoogleGenAI, type Schema } from "@google/genai";
 import { buildExtractionRequest, type ModelDef, type ResolvedLookups } from "@hera/config-engine";
 import { userProcedure } from "../base.ts";
-import { assertAgentReady } from "./entities.ts";
-import { agentFetcher } from "./models.ts";
-import { freshLookups, loadModel, needsAgent } from "./configs.ts";
+import { cachedLookups, loadModel } from "./configs.ts";
 import { validateSuggestions } from "../../extraction.ts";
 
 // Drawing → per-parameter suggestions. Stateless: the drawing is never stored; suggestions
@@ -87,8 +85,7 @@ export const extractionRouter = {
     .input(z.object({ modelId: z.uuid(), file: ExtractFileZ }))
     .handler(async ({ input, context }) => {
       const model = await loadModel(context.tenantId, input.modelId);
-      if (needsAgent(model.definition)) await assertAgentReady(context.tenantId);
-      const lookups = await freshLookups(context.tenantId, model.definition, agentFetcher(context.tenantId));
+      const lookups = await cachedLookups(context.tenantId, model);
       return extractSuggestions(model, lookups, input.file);
     }),
 };

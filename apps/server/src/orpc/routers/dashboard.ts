@@ -26,21 +26,16 @@ async function loadProjects(tenantId: string, userId: string | null): Promise<Pr
         ? and(eq(configProject.tenantId, tenantId), eq(configProject.createdBy, userId))
         : eq(configProject.tenantId, tenantId),
     );
-  // numeric comes back as string; a project with several runs keeps the quoted one.
-  const byProject = new Map<string, ProjectRow>();
-  for (const r of rows) {
-    const row: ProjectRow = {
-      id: r.id, name: r.name, status: r.status, source: r.source,
-      createdBy: r.createdBy, createdAt: r.createdAt,
-      customerName: r.customer?.cardName ?? null,
-      quotedAt: r.quotedAt, b1DocEntry: r.b1DocEntry,
-      quotedValue: r.quotedValue === null ? null : Number(r.quotedValue),
-      quotedCost: r.quotedCost === null ? null : Number(r.quotedCost),
-    };
-    const prev = byProject.get(r.id);
-    if (!prev || (row.quotedAt && !prev.quotedAt)) byProject.set(r.id, row);
-  }
-  return [...byProject.values()];
+  // One run per project (config_run_project_uq), so the join is 1:0..1 - no de-duplication needed.
+  // numeric comes back as string.
+  return rows.map((r) => ({
+    id: r.id, name: r.name, status: r.status, source: r.source,
+    createdBy: r.createdBy, createdAt: r.createdAt,
+    customerName: r.customer?.cardName ?? null,
+    quotedAt: r.quotedAt, b1DocEntry: r.b1DocEntry,
+    quotedValue: r.quotedValue === null ? null : Number(r.quotedValue),
+    quotedCost: r.quotedCost === null ? null : Number(r.quotedCost),
+  }));
 }
 
 export const dashboardRouter = {

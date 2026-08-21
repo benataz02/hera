@@ -48,7 +48,6 @@ export function StepCreateQuote({ projectId, onFooterChange }: Props) {
   const [dirtyPaths, setDirtyPaths] = useState<Set<string>>(() => new Set());
   const [commandId, setCommandId] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
-  const [selectionVersion, setSelectionVersion] = useState<number | null>(null);
   const [requestId, setRequestId] = useState<string | null>(null);
   const [writeStatus, setWriteStatus] = useState<WriteUiStatus>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
@@ -59,16 +58,15 @@ export function StepCreateQuote({ projectId, onFooterChange }: Props) {
 
   const draftRef = useRef(draft);
   draftRef.current = draft;
-  const metaRef = useRef({ runId, selectionVersion, commandId, requestId, writeStatus, docEntry });
-  metaRef.current = { runId, selectionVersion, commandId, requestId, writeStatus, docEntry };
+  const metaRef = useRef({ runId, commandId, requestId, writeStatus, docEntry });
+  metaRef.current = { runId, commandId, requestId, writeStatus, docEntry };
 
   const persist = (patch: Partial<QuoteSessionStored> & { data: Record<string, unknown> }) => {
     const m = metaRef.current;
-    if (!m.runId || m.selectionVersion == null || !m.commandId) return;
-    const key = quoteSessionKey(window.location.host, projectId, m.runId, m.selectionVersion);
+    if (!m.runId || !m.commandId) return;
+    const key = quoteSessionKey(window.location.host, projectId, m.runId);
     const stored: QuoteSessionStored = {
       runId: m.runId,
-      selectionVersion: m.selectionVersion,
       commandId: m.commandId,
       data: patch.data,
       requestId: patch.requestId !== undefined ? patch.requestId : m.requestId,
@@ -81,8 +79,8 @@ export function StepCreateQuote({ projectId, onFooterChange }: Props) {
 
   const clearSession = () => {
     const m = metaRef.current;
-    if (!m.runId || m.selectionVersion == null) return;
-    clearQuoteSession(quoteSessionKey(window.location.host, projectId, m.runId, m.selectionVersion));
+    if (!m.runId) return;
+    clearQuoteSession(quoteSessionKey(window.location.host, projectId, m.runId));
   };
 
   const watchRequest = async (rid: string) => {
@@ -127,23 +125,16 @@ export function StepCreateQuote({ projectId, onFooterChange }: Props) {
   useEffect(() => {
     const seed = draftQ.data;
     if (!seed) return;
-    const fence = `${seed.runId}:${seed.selectionVersion}:${seed.commandId}`;
+    const fence = `${seed.runId}:${seed.commandId}`;
     if (fence === seededKey) return;
 
-    const key = quoteSessionKey(
-      window.location.host,
-      projectId,
-      seed.runId,
-      seed.selectionVersion,
-    );
+    const key = quoteSessionKey(window.location.host, projectId, seed.runId);
     const restored = restoreQuoteSession(readQuoteSession(key), {
       runId: seed.runId,
-      selectionVersion: seed.selectionVersion,
       commandId: seed.commandId,
     });
 
     setRunId(seed.runId);
-    setSelectionVersion(seed.selectionVersion);
     setCommandId(seed.commandId);
     setDirtyPaths(new Set());
     setSaveErrors([]);
@@ -167,7 +158,6 @@ export function StepCreateQuote({ projectId, onFooterChange }: Props) {
       setDocEntry(null);
       writeQuoteSession(key, {
         runId: seed.runId,
-        selectionVersion: seed.selectionVersion,
         commandId: seed.commandId,
         data,
         requestId: null,
@@ -188,7 +178,7 @@ export function StepCreateQuote({ projectId, onFooterChange }: Props) {
   const createQuote = async () => {
     const data = draftRef.current;
     const m = metaRef.current;
-    if (!data || !m.commandId || !m.runId || m.selectionVersion == null) return;
+    if (!data || !m.commandId || !m.runId) return;
     if (shouldDisableSave(m.writeStatus) || m.docEntry) return;
     const profile = draftQ.data?.profile ?? null;
     const missing = missingRequiredFields(profile, data);
@@ -208,7 +198,7 @@ export function StepCreateQuote({ projectId, onFooterChange }: Props) {
       const { requestId: rid } = await client.configs.createQuote({
         projectId,
         runId: m.runId,
-        selectionVersion: m.selectionVersion,
+        commandId: m.commandId,
         data,
       });
       setRequestId(rid);

@@ -656,17 +656,23 @@ export interface SlConfig {
   pass: string;
   insecureTls?: boolean;
   timeoutMs?: number;
+  /** Rows per collection GET (`Prefer: odata.maxpagesize`). B1's own default is 20. */
+  pageSize?: number;
 }
 
 export class ServiceLayerClient {
   private cookie = "";
   private loginInFlight: Promise<void> | null = null;
   private readonly timeoutMs: number;
+  private readonly pageSize: number;
 
   constructor(private readonly cfg: SlConfig) {
     // B1 document/master-data POSTs can be genuinely slow (10s+ on some instances),
     // so the cap is high — it exists to catch true hangs, not to bound normal writes.
     this.timeoutMs = cfg.timeoutMs ?? 60_000;
+    if (cfg.pageSize !== undefined && (!Number.isInteger(cfg.pageSize) || cfg.pageSize <= 0))
+      throw new Error("B1_PAGE_SIZE must be a positive integer");
+    this.pageSize = cfg.pageSize ?? 100;
   }
 
   private async rawFetch(path: string, init: RequestInit): Promise<Response> {
@@ -737,7 +743,9 @@ export class ServiceLayerClient {
     if (body !== undefined) {
       init.body = JSON.stringify(body);
       headers["content-type"] = "application/json";
-      headers["odatamaxpagesize"] = "1000"; // B1 v2 default is 20, which is too small for many lists
+      // Sizes the collection a POST/PATCH echoes back (document lines &c.), not a query — so it
+      // stays fixed instead of following B1_PAGE_SIZE. B1 v2's own default of 20 is too small.
+      headers["odatamaxpagesize"] = "1000";
     }
     if (Object.keys(headers).length) init.headers = headers;
     let res = await this.rawFetch(path, init);
@@ -772,26 +780,31 @@ export class ServiceLayerClient {
     return parseEdmx(body);
   }
 
-  /** List a page of an entity set with the inline total. OData v4 server pagination (maxpagesize=100). */
+  /** One collection GET — every read path goes through here. `pageSize` 0 tells B1 to switch server
+   *  paging off and return the whole collection in one response. nextLink comes back normalized to
+   *  a re-requestable path, never followed: paging is the caller's (ultimately the user's) call. */
+  private async getCollection(path: string, pageSize = this.pageSize) {
+    const res = await this.request("GET", path, undefined, { Prefer: `odata.maxpagesize=${pageSize}` });
+    if (!res.ok) throw await this.toError(res);
+    const json = (await res.json()) as Record<string, unknown>;
+    return {
+      json,
+      rows: (Array.isArray(json.value) ? json.value : []) as Record<string, unknown>[],
+      count: json["@odata.count"] != null ? Number(json["@odata.count"]) : null,
+      nextLink: nextLinkPath(json["@odata.nextLink"] ?? json["odata.nextLink"], this.cfg.baseUrl),
+    };
+  }
+
+  /** List a page of an entity set with the inline total. */
   async listEntity(
     entity: string,
     opts: Omit<ListQuery, "skip"> & { skip?: number },
   ): Promise<{ rows: Record<string, unknown>[]; count: number | null; hasMore: boolean }> {
     this.assertEntity(entity);
-    const res = await this.request(
-      "GET",
+    const { rows, count, nextLink } = await this.getCollection(
       buildListPath(entity, { ...opts, skip: opts.skip ?? 0 }),
-      undefined,
-      { Prefer: "odata.maxpagesize=100" },
     );
-    if (!res.ok) throw await this.toError(res);
-    const json = (await res.json()) as {
-      value?: Record<string, unknown>[];
-      "@odata.count"?: number | string;
-      "@odata.nextLink"?: string;
-    };
-    const count = json["@odata.count"] != null ? Number(json["@odata.count"]) : null;
-    return { rows: json.value ?? [], count, hasMore: !!json["@odata.nextLink"] };
+    return { rows, count, hasMore: !!nextLink };
   }
 
   /** Fetch one record by key. */
@@ -897,52 +910,31 @@ export class ServiceLayerClient {
 
   /** Generic read-only OData GET for the configurator "Query" data source and the dashboard
    *  snapshot. The path is server- or admin-authored and GET-only. Collection responses are
-   *  paged to exhaustion; anything else (aggregates, single entities) passes straight through.
-   *  ponytail: 20k-row ceiling with a console warning — raise it, or push the aggregation into
-   *  B1 with $apply, only if a real tenant hits it. */
-  async queryRaw(path: string): Promise<unknown> {
+   *  returned as one page plus its `@odata.nextLink` (the caller pages by re-querying that path);
+   *  anything else (aggregates, single entities) passes straight through.
+   *  `all` = the caller consumes the whole table (pricing LOOKUP, constraint enumeration, history
+   *  sync, dashboard snapshot) — maxpagesize=0 makes B1 return it in one response. ponytail: no row
+   *  ceiling on that path; push the aggregation into B1 with $apply if a tenant's table gets silly. */
+  async queryRaw(path: string, all = false): Promise<unknown> {
     if (!path.startsWith("/")) throw new SlError(400, "BAD_PATH", "query path must start with /");
-    const MAX_ROWS = 20_000;
-    let next: string | undefined = path;
-    let envelope: Record<string, unknown> | undefined;
-    const rows: unknown[] = [];
-
-    while (next) {
-      const res = await this.request("GET", next, undefined, { Prefer: "odata.maxpagesize=1000" });
-      if (!res.ok) throw await this.toError(res);
-      const json = (await res.json()) as Record<string, unknown>;
-      if (!Array.isArray(json.value)) return json;
-      envelope ??= json;
-      rows.push(...json.value);
-      if (rows.length >= MAX_ROWS) {
-        console.warn(`[sl] queryRaw hit the ${MAX_ROWS}-row cap for ${path}; result is truncated`);
-        break;
-      }
-      next = nextLinkPath(json["@odata.nextLink"], this.cfg.baseUrl);
-    }
-
-    return { ...envelope, value: rows, "@odata.nextLink": undefined };
+    const { json, rows, nextLink } = await this.getCollection(path, all ? 0 : this.pageSize);
+    if (!Array.isArray(json.value)) return json;
+    return { ...json, value: rows, "@odata.nextLink": nextLink };
   }
 
-  /** Value-help page: server-fixed key/label fields only. */
+  /** Value-help page: `listEntity` narrowed to a fixed key/label $select, projected to key+label
+   *  strings so the on-prem→cloud payload stays two fields wide instead of whole records. */
   async listLookup(opts: LookupListOpts): Promise<LookupResult> {
     this.assertEntity(opts.entity);
     assertIdent(opts.keyField, "field");
     assertIdent(opts.labelField, "field");
-    const res = await this.request("GET", buildLookupListPath(opts), undefined, {
-      Prefer: "odata.maxpagesize=100",
-    });
-    if (!res.ok) throw await this.toError(res);
-    const json = (await res.json()) as {
-      value?: Record<string, unknown>[];
-      "@odata.nextLink"?: string;
-    };
-    const rows = (json.value ?? []).map((r) => {
+    const page = await this.getCollection(buildLookupListPath(opts));
+    const rows = page.rows.map((r) => {
       const key = r[opts.keyField];
       const label = r[opts.labelField] ?? key;
       return { key: key == null ? "" : String(key), label: label == null ? "" : String(label) };
     });
-    return { rows, hasMore: !!json["@odata.nextLink"] };
+    return { rows, hasMore: !!page.nextLink };
   }
 
   /** Selected Item master fields + CompanyService_GetItemPrice (InventoryQuantity). */

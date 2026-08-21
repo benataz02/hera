@@ -1,5 +1,14 @@
 import type { Entries } from "@hera/config-engine";
 
+export function sameEntries(a: Entries, b: Entries): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  for (const k of keys) {
+    if (!Object.hasOwn(b, k) || JSON.stringify(a[k]) !== JSON.stringify(b[k])) return false;
+  }
+  return true;
+}
+
 export function needsCalculation(p: {
   conflicted: boolean;
   missingCount: number;
@@ -21,7 +30,7 @@ export function buildCalculationUpdate(
   persistedBatches: number[],
   nextBatches: number[],
 ) {
-  const entriesDirty = JSON.stringify(nextEntries) !== JSON.stringify(persistedEntries);
+  const entriesDirty = !sameEntries(nextEntries, persistedEntries);
   const batchesDirty = JSON.stringify(nextBatches) !== JSON.stringify(persistedBatches);
   return entriesDirty || batchesDirty ? { id, entries: nextEntries, batches: nextBatches } : null;
 }

@@ -16,7 +16,7 @@ export const LookupRefZ = z.discriminatedUnion("source", [
     table: z.string(),
     valueCol: z.string(),
     labelCol: z.string().optional(),
-    /** extra columns exposed as `<param>_<col>` and shown in pickers; absent = all except valueCol */
+    /** extra columns shown in pickers; absent = all extra. Derived keys always use every extra column. */
     columns: z.array(z.string()).optional(),
   }),
   z.object({
@@ -137,7 +137,7 @@ export const ModelDefZ = z.object({
 export type ModelDef = z.infer<typeof ModelDefZ>;
 
 export type Option = { value: Val; label: string };
-export type ResolvedTable = { columns: string[]; rows: Val[][] };
+export type ResolvedTable = { columns: string[]; rows: Val[][]; nextLink?: string };
 /** Everything external, already fetched: engine never sees source kinds. */
 export type ResolvedLookups = {
   domains: Record<string, Option[]>;
@@ -154,12 +154,18 @@ export function refKeyCols(ref: LookupRef, all: string[] | undefined): { valueCo
   return { valueCol: ref.valueCol, labelCol: ref.labelCol };
 }
 
-/** The source columns a ref exposes (display + derived values). */
-export function refColumns(ref: LookupRef, all: string[] | undefined): string[] {
+/** Extra source columns bound as `<param>_<col>`; ignores `ref.columns`. */
+export function derivedColumns(ref: LookupRef, all: string[] | undefined): string[] {
   if (ref.source === "manual") return [];
-  if (ref.columns) return ref.columns;
   const { valueCol } = refKeyCols(ref, all);
   return (all ?? []).filter((c) => c !== valueCol);
+}
+
+/** Extra columns shown in pickers; `ref.columns` is the visibility subset. */
+export function displayColumns(ref: LookupRef, all: string[] | undefined): string[] {
+  if (ref.source === "manual") return [];
+  if (ref.columns) return ref.columns;
+  return derivedColumns(ref, all);
 }
 
 /** Derived value key for a param's source column, e.g. material_density. */

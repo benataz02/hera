@@ -1,20 +1,24 @@
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
-  Bar, Button, CheckBox, Dialog, IllustratedMessage, Input, Label, List, ListItemStandard, Menu, MenuItem, MessageStrip,
+  Bar, Button, BusyIndicator, CheckBox, Dialog, DynamicSideContent, IllustratedMessage, Input, Label,
+  List, ListItemStandard, Menu, MenuItem, MessageStrip,
   MultiComboBox, MultiComboBoxItem, Option, Select, StepInput, Table, TableCell, TableHeaderCell,
   TableHeaderRow, TableRow, TableRowAction, Text, Title,
   type TableHeaderRowDomRef,
 } from "@ui5/webcomponents-react";
 import "@ui5/webcomponents-fiori/dist/illustrations/AddColumn.js";
-import { refKeyCols } from "@hera/config-engine";
+import { propagate, refKeyCols, type Entries, type ResolvedLookups } from "@hera/config-engine";
 import type { Issue, LookupRef, ModelDef, Option as EngineOption, Param } from "@hera/config-engine";
 import { client } from "../../orpc.ts";
 import { confirm } from "../confirm.ts";
 import { ExprInput } from "./ExprInput.tsx";
+import { modelWithParam, mergeTableCols } from "./exprHelpers.ts";
+import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
+import { mergeQueryPicks, setQueryPick, type QueryPicks } from "./formHelpers.ts";
 import { issueFor } from "./useDraftModel.ts";
 import { applyMove, canDrop, duplicateParam, parseRowKey, placeParam, removeFromStructure, rowKeyOf, unplacedParams, type Placement, type RowRef } from "./structureOps.ts";
 
-type Tables = { name: string; columns: { key: string }[] }[];
+type Tables = { name: string; columns: string[] }[];
 type Update = (fn: (d: ModelDef) => ModelDef) => void;
 
 const UI_KINDS = ["input", "select", "radio", "checkbox", "multicombo", "step"] as const;
@@ -69,8 +73,9 @@ function revealActionsHeader(el: TableHeaderRowDomRef | null) {
   sr.appendChild(style);
 }
 
-export function ParamsTab({ draft, update, issues, tables }: {
+export function ParamsTab({ draft, update, issues, tables, lookups, lookupsError, onRetryLookups }: {
   draft: ModelDef; update: Update; issues: Issue[]; tables: Tables;
+  lookups?: ResolvedLookups; lookupsError?: Error | null; onRetryLookups: () => void;
 }) {
   const [editing, setEditing] = useState<{ param: Param; isNew: boolean; place?: { s: number; g: number } } | null>(null);
   // Inline title edit: keep the original so Escape can revert (edits apply live per keystroke).
@@ -81,6 +86,10 @@ export function ParamsTab({ draft, update, issues, tables }: {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggle = (id: string) =>
     setCollapsed((c) => { const n = new Set(c); n.delete(id) || n.add(id); return n; });
+  const suggestTables = mergeTableCols(
+    tables,
+    draft.queryTables.map((q) => ({ name: q.name, columns: q.columns })),
+  );
 
   type StructRow = { kind: "struct"; key: string; depth: number; label: string; detail: string; ref: RowRef; collapseId?: string };
   type Row = StructRow | { kind: "formula"; key: string; idx: number };
@@ -201,6 +210,11 @@ export function ParamsTab({ draft, update, issues, tables }: {
   );
 
   return (
+    <DynamicSideContent equalSplit sideContentVisibility="AlwaysShow" style={{ height: "100%", minHeight: "28rem" }}
+      sideContent={
+        <PreviewPane draft={draft} issues={issues} lookups={lookups}
+          lookupsError={lookupsError} onRetryLookups={onRetryLookups} />
+      }>
     <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", padding: "1rem" }}>
       {modelIssues.length ? (
         <MessageStrip design="Negative" hideCloseButton>
@@ -286,7 +300,7 @@ export function ParamsTab({ draft, update, issues, tables }: {
               </TableCell>
               <TableCell>
                 <div style={r.idx === 0 ? SEP : undefined}>
-                  <ExprInput value={draft.computed[r.idx]!.expr} model={draft} fieldId={`expr-computed[${r.idx}].expr`}
+                  <ExprInput value={draft.computed[r.idx]!.expr} model={draft} tables={suggestTables} fieldId={`expr-computed[${r.idx}].expr`}
                     issue={issueFor(issues, `computed[${r.idx}].expr`)}
                     onChange={(v) => update((d) => ({ ...d, computed: d.computed.map((x, j) => (j === r.idx ? { ...x, expr: v ?? "" } : x)) }))} />
                 </div>
@@ -369,17 +383,55 @@ export function ParamsTab({ draft, update, issues, tables }: {
 
       {editing ? (
         <ParamDialog
-          draft={draft} tables={tables} initial={editing.param} isNew={editing.isNew}
+          draft={draft} tables={tables} suggestTables={suggestTables} initial={editing.param} isNew={editing.isNew}
           onCancel={() => setEditing(null)}
           onOk={(p) => { saveParam(p, editing.isNew, editing.place); setEditing(null); }}
         />
       ) : null}
     </div>
+    </DynamicSideContent>
   );
 }
 
-function ParamDialog({ draft, tables, initial, isNew, onOk, onCancel }: {
-  draft: ModelDef; tables: Tables; initial: Param; isNew: boolean;
+function PreviewPane({ slot, draft, issues, lookups, lookupsError, onRetryLookups }: {
+  slot?: string; draft: ModelDef; issues: Issue[];
+  lookups?: ResolvedLookups; lookupsError?: Error | null; onRetryLookups: () => void;
+}) {
+  const [entries, setEntries] = useState<Entries>({});
+  const [picks, setPicks] = useState<QueryPicks>({});
+  const lastGood = useRef(draft);
+  if (issues.length === 0) lastGood.current = draft;
+  const previewModel = issues.length === 0 ? draft : lastGood.current;
+  const lk = lookups ? mergeQueryPicks(lookups, picks) : undefined;
+  const prop = lk ? propagate(previewModel, lk, entries) : null;
+
+  return (
+    <div slot={slot} style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      {issues.length > 0 ? (
+        <MessageStrip design="Critical" hideCloseButton>
+          Showing the last valid version — fix {issues.length} error{issues.length === 1 ? "" : "s"} to preview the current draft.
+        </MessageStrip>
+      ) : null}
+      {lookupsError ? (
+        <div style={{ padding: "0 1rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <MessageStrip design="Negative" hideCloseButton style={{ flex: 1 }}>{lookupsError.message}</MessageStrip>
+          <Button onClick={onRetryLookups}>Retry</Button>
+        </div>
+      ) : null}
+      <div style={{ flex: 1, overflowY: "auto", minHeight: 0, padding: "0 1rem 1rem" }}>
+        {lookups && lk && prop ? (
+          <ConfiguratorForm model={previewModel} lookups={lookups} lk={lk} prop={prop} entries={entries} onChange={setEntries}
+            onQueryPick={(k, t, sel) => setPicks((p) => setQueryPick(p, k, t, sel))}
+            querySource={{ kind: "draft" }} />
+        ) : lookupsError ? null : <BusyIndicator active delay={0} />}
+      </div>
+      <Bar design="Footer" startContent={prop ? <ConsistencyStatus prop={prop} /> : undefined} />
+    </div>
+  );
+}
+
+function ParamDialog({ draft, tables, suggestTables, initial, isNew, onOk, onCancel }: {
+  draft: ModelDef; tables: Tables; suggestTables: Tables; initial: Param; isNew: boolean;
   onOk: (p: Param) => void; onCancel: () => void;
 }) {
   const [p, setP] = useState<Param>(initial);
@@ -436,19 +488,19 @@ function ParamDialog({ draft, tables, initial, isNew, onOk, onCancel }: {
         <Title level="H6" style={{ gridColumn: "1 / -1" }}>Behavior</Title>
         <div style={{ gridColumn: "1 / -1" }}>
           <Label>Default (expression)</Label>
-          <ExprInput optional value={p.defaultExpr} model={draft} onChange={(v) => set({ defaultExpr: v })} />
+          <ExprInput optional value={p.defaultExpr} model={modelWithParam(draft, p)} tables={suggestTables} onChange={(v) => set({ defaultExpr: v })} />
         </div>
         <div>
           <Label>Visible when</Label>
-          <ExprInput optional value={p.visibleWhen} model={draft} onChange={(v) => set({ visibleWhen: v })} />
+          <ExprInput optional value={p.visibleWhen} model={modelWithParam(draft, p)} tables={suggestTables} onChange={(v) => set({ visibleWhen: v })} />
         </div>
         <div>
           <Label>Required when</Label>
-          <ExprInput optional value={p.requiredWhen} model={draft} onChange={(v) => set({ requiredWhen: v })} />
+          <ExprInput optional value={p.requiredWhen} model={modelWithParam(draft, p)} tables={suggestTables} onChange={(v) => set({ requiredWhen: v })} />
         </div>
         <div>
           <Label>Price formula</Label>
-          <ExprInput optional value={p.priceExpr} model={draft} onChange={(v) => set({ priceExpr: v })} />
+          <ExprInput optional value={p.priceExpr} model={modelWithParam(draft, p)} tables={suggestTables} onChange={(v) => set({ priceExpr: v })} />
         </div>
         <div style={{ alignSelf: "end" }}>
           <CheckBox text="Read-only" checked={!!p.readonly}
@@ -479,7 +531,7 @@ function DomainEditor({ draft, tables, value, onChange }: {
   const tenantNames = tables.map((t) => t.name);
   const queryNames = draft.queryTables.map((q) => q.name);
   const columnsOf = (name: string) =>
-    tables.find((t) => t.name === name)?.columns.map((c) => c.key) ??
+    tables.find((t) => t.name === name)?.columns ??
     draft.queryTables.find((q) => q.name === name)?.columns ?? [];
 
   const setKind = (k: string) => {
@@ -518,7 +570,7 @@ function DomainEditor({ draft, tables, value, onChange }: {
 
       {value?.kind === "options" ? <PreviewButton ref_={value.ref} queryTables={draft.queryTables} /> : null}
       {value?.kind === "options" && (value.ref.source === "table" || value.ref.source === "query") ? (
-        <Text>Define tables and queries under the Tables tab; extra columns become <code>{"<param>_<column>"}</code> values usable in formulas.</Text>
+        <Text>Define tables and queries under the Tables tab. Extra columns are always available as <code>{"<param>_<column>"}</code> in formulas; this list only chooses which extra columns the picker shows.</Text>
       ) : null}
     </div>
   );
@@ -565,7 +617,7 @@ function SourceRefEditor({ ref_, names, columnsOf, onChange }: {
         )}
       </div>
       <div>
-        <Label>Displayed / derived columns</Label>
+        <Label>Displayed columns</Label>
         <MultiComboBox
           onSelectionChange={(e) => {
             const sel = e.detail.items.map((i) => (i as HTMLElement).getAttribute("text")!);

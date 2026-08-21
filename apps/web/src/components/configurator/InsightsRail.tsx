@@ -1,17 +1,17 @@
 import type { ReactNode } from "react";
 import { Panel, Text, Title } from "@ui5/webcomponents-react";
-import { propagate, type Entries, type ModelDef, type ResolvedLookups, type Val } from "@hera/config-engine";
-import { clientBaseLookups } from "./formHelpers.ts";
+import type { Entries, ModelDef, Propagation, ResolvedLookups, Val } from "@hera/config-engine";
 import { money, paramPrices } from "./costElements.ts";
 import { DocHistory, Similar } from "./HistoryPane.tsx";
 
 // The process page's persistent right-hand rail: cost elements, B1 document history, similar past
 // configurations. Three Panels rather than cards — `collapsed`/`onToggle` are native, and `fixed`
 // on the only open one keeps at least one expanded without an accordion state machine.
-export function InsightsRail({ projectId, model, lookups, entries, onCopy, open, onToggle, slot }: {
+export function InsightsRail({ projectId, model, lk, prop, entries, onCopy, open, onToggle, slot }: {
   projectId: string;
   model: ModelDef;
-  lookups?: ResolvedLookups;
+  lk?: ResolvedLookups;
+  prop?: Propagation | null;
   entries: Entries;
   onCopy: (values: Record<string, Val>) => void;
   open: Set<string>;
@@ -20,7 +20,6 @@ export function InsightsRail({ projectId, model, lookups, entries, onCopy, open,
    *  the outermost DOM element must carry it, or the content lands in the default (main) slot. */
   slot?: string;
 }) {
-  const lk = lookups ?? clientBaseLookups(model);
   const panel = (key: string, title: string, body: ReactNode) => (
     <Panel headerText={title} collapsed={!open.has(key)} fixed={open.has(key) && open.size === 1}
       onToggle={() => onToggle(key)}>
@@ -31,7 +30,9 @@ export function InsightsRail({ projectId, model, lookups, entries, onCopy, open,
   return (
     // no height/overflow here: the side area (.ui5-dsc-side) brings its own scrollbar.
     <div slot={slot} style={{ display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.5rem" }}>
-      {panel("costs", "Cost elements", <Costs model={model} lookups={lk} entries={entries} />)}
+      {panel("costs", "Cost elements", lk && prop
+        ? <Costs model={model} lookups={lk} prop={prop} />
+        : <Text>No priced parameters yet — fill the form, or add price formulas in the model builder.</Text>)}
       {panel("documents", "Documents",
         <DocHistory projectId={projectId} model={model} entries={entries} open={open.has("documents")} />)}
       {panel("similars", "Similar configurations",
@@ -41,8 +42,8 @@ export function InsightsRail({ projectId, model, lookups, entries, onCopy, open,
 }
 
 // Same paramPrices() the per-field badges read, so the card and the badges cannot disagree.
-function Costs({ model, lookups, entries }: { model: ModelDef; lookups: ResolvedLookups; entries: Entries }) {
-  const rows = paramPrices(model, propagate(model, lookups, entries), lookups.tables);
+function Costs({ model, lookups, prop }: { model: ModelDef; lookups: ResolvedLookups; prop: Propagation }) {
+  const rows = paramPrices(model, prop, lookups.tables);
   const cur = model.pricing.currency;
   if (!rows.length)
     return <Text>No priced parameters yet — fill the form, or add price formulas in the model builder.</Text>;

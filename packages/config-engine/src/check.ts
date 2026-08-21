@@ -1,5 +1,5 @@
 import { type Ast, DslError, parse } from "./dsl";
-import { derivedKey, type ModelDef, refColumns, refKeyCols } from "./model";
+import { derivedKey, type ModelDef, derivedColumns, refKeyCols } from "./model";
 
 export type Issue = { path: string; message: string; from?: number; to?: number };
 
@@ -66,7 +66,7 @@ export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Iss
     for (const c of [...(valueCol ? [valueCol] : []), ...(labelCol ? [labelCol] : []), ...(ref.columns ?? [])]) {
       if (!cols.includes(c)) issues.push({ path: `parameters[${i}].domain`, message: `table '${ref.table}' has no column '${c}'` });
     }
-    for (const col of refColumns(ref, cols)) {
+    for (const col of derivedColumns(ref, cols)) {
       const dk = derivedKey(p.key, col);
       if (baseKeys.has(dk)) issues.push({ path: "model", message: `derived value '${dk}' collides with an existing key` });
       baseKeys.add(dk);

@@ -4,7 +4,7 @@ import { ExprInput } from "./ExprInput.tsx";
 import { issueFor } from "./useDraftModel.ts";
 
 type Update = (fn: (d: ModelDef) => ModelDef) => void;
-type Props = { draft: ModelDef; update: Update; issues: Issue[] };
+type Props = { draft: ModelDef; update: Update; issues: Issue[]; tables?: { name: string; columns: string[] }[] };
 
 const newId = (prefix: string, taken: string[]) => {
   let n = taken.length + 1;
@@ -13,11 +13,11 @@ const newId = (prefix: string, taken: string[]) => {
 };
 
 // 150% BOM: every line is an expression over params (+ qty); condition filters per configuration.
-export function BomTab({ draft, update, issues }: Props) {
+export function BomTab({ draft, update, issues, tables }: Props) {
   const set = (i: number, patch: Partial<ModelDef["bom"][number]>) =>
     update((d) => ({ ...d, bom: d.bom.map((l, j) => (j === i ? { ...l, ...patch } : l)) }));
   const cell = (i: number, field: "itemCode" | "desc" | "condition" | "qty" | "price", optional = false, placeholder?: string) => (
-    <ExprInput optional={optional} value={draft.bom[i]![field]} model={draft} extraVars={["qty"]}
+    <ExprInput optional={optional} value={draft.bom[i]![field]} model={draft} extraVars={["qty"]} tables={tables}
       placeholder={placeholder} fieldId={`expr-bom[${i}].${field}`} issue={issueFor(issues, `bom[${i}].${field}`)}
       onChange={(v) => set(i, { [field]: optional ? v : (v ?? "") } as Partial<ModelDef["bom"][number]>)} />
   );
@@ -61,11 +61,11 @@ export function BomTab({ draft, update, issues }: Props) {
   );
 }
 
-export function RoutingTab({ draft, update, issues }: Props) {
+export function RoutingTab({ draft, update, issues, tables }: Props) {
   const set = (i: number, patch: Partial<ModelDef["routing"][number]>) =>
     update((d) => ({ ...d, routing: d.routing.map((o, j) => (j === i ? { ...o, ...patch } : o)) }));
   const cell = (i: number, field: "condition" | "setupMin" | "runMinPerUnit" | "ratePerHour", optional = false, placeholder?: string) => (
-    <ExprInput optional={optional} value={draft.routing[i]![field]} model={draft} extraVars={["qty"]}
+    <ExprInput optional={optional} value={draft.routing[i]![field]} model={draft} extraVars={["qty"]} tables={tables}
       placeholder={placeholder} fieldId={`expr-routing[${i}].${field}`} issue={issueFor(issues, `routing[${i}].${field}`)}
       onChange={(v) => set(i, { [field]: optional ? v : (v ?? "") } as Partial<ModelDef["routing"][number]>)} />
   );

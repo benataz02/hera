@@ -15,15 +15,32 @@ import type { WritePayload } from "./writes.ts";
 export type ConfigProjectRow = typeof configProject.$inferSelect;
 export type ConfigRunRow = typeof configRun.$inferSelect;
 
-/** Deterministic create command id / SAP dedup UDF value for a fenced selection. */
+/** Deterministic create command id / SAP dedup UDF value for a project's current selection.
+ *  Keyed on the selection itself, not a version counter: the same picks retried yield the same id
+ *  (a retry must never create a second SAP document), a changed selection yields a new one. */
 export function configDocumentCommandId(input: {
   tenantId: string;
   projectId: string;
   runId: string;
-  selectionVersion: number;
+  selection: RunSelection[];
 }): string {
-  const raw = `${input.tenantId}|${input.projectId}|${input.runId}|${input.selectionVersion}`;
+  // Sorted so a pure reorder of the same picks keeps the same id.
+  const sel = [...input.selection].sort((a, b) => a.candidateIdx - b.candidateIdx || a.batchQty - b.batchQty);
+  const raw = `${input.tenantId}|${input.projectId}|${input.runId}|${canonicalJson(sel)}`;
   return createHash("sha256").update(raw).digest("hex");
+}
+
+/** JSON with object keys sorted. Plain JSON.stringify will not do: Postgres reorders jsonb object
+ *  keys, so a selection read back from config_run would hash differently from the one written. */
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  if (v && typeof v === "object") {
+    const entries = Object.entries(v as Record<string, unknown>)
+      .filter(([, x]) => x !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : 1));
+    return `{${entries.map(([k, x]) => `${JSON.stringify(k)}:${canonicalJson(x)}`).join(",")}}`;
+  }
+  return JSON.stringify(v ?? null);
 }
 
 /** Canonical Quotations draft from persisted project + run snapshot (server recomputes prices). */
@@ -173,10 +190,9 @@ export async function completeWriteOrigin(
     .where(and(eq(configRun.id, origin.runId), eq(configRun.tenantId, tenantId)))
     .for("update");
 
-  const mismatch =
-    !run ||
-    run.projectId !== origin.projectId ||
-    run.selectionVersion !== origin.selectionVersion;
+  // The run row is replaced wholesale on every recalculate, so a surviving id with a matching
+  // project is proof this is still the selection that was enqueued.
+  const mismatch = !run || run.projectId !== origin.projectId;
 
   if (mismatch) {
     await tx

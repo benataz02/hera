@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar, Button, BusyIndicator, Dialog, DynamicSideContent, Label, MessageStrip, ObjectPage,
   ObjectPageSection, ObjectPageSubSection, ObjectPageTitle, ObjectStatus,
   Text, TextArea, Title, ToggleButton, Toolbar,
 } from "@ui5/webcomponents-react";
-import { propagate, type Entries } from "@hera/config-engine";
-import type { Val } from "@hera/config-engine";
+import { propagate, type Entries, type Val } from "@hera/config-engine";
+import { mergeQueryPicks, setQueryPick, type QueryPicks } from "./formHelpers.ts";
 import { orpc } from "../../orpc.ts";
 import { useSectionParam } from "../../sectionParam.ts";
 import { toast } from "../toast.ts";
@@ -18,7 +18,7 @@ import { StepCreateQuote } from "./StepCreateQuote.tsx";
 import { InsightsRail } from "./InsightsRail.tsx";
 import { AssistantWindow } from "./AssistantWindow.tsx";
 import type { ChatChange } from "./assistantState.ts";
-import { buildCalculationUpdate, needsCalculation } from "./configProcessState.ts";
+import { buildCalculationUpdate, needsCalculation, sameEntries } from "./configProcessState.ts";
 
 // ObjectPage IconTabBar: Configure / Candidates / Create quote. Tabs are always enabled;
 // missing run or selection is an empty state. Local overlays (override ?? server) until persist.
@@ -27,13 +27,18 @@ export function ConfigProcessPage({ id }: { id: string }) {
   const q = useQuery(orpc.configs.get.queryOptions({ input: { id } }));
   const modelId = q.data?.project.modelId;
   const lookups = useQuery({
-    ...orpc.configs.lookups.queryOptions({ input: { modelId: modelId! } }),
+    ...orpc.configs.lookups.queryOptions({ input: { modelId: modelId!, entries: q.data?.project.entries ?? {} } }),
+    // Canonical page is per-model. Entries only enrich that first fetch; putting them in the key
+    // remounts every control after autosave and retriggers UI5 onChange → update/get/run.
+    queryKey: orpc.configs.lookups.queryOptions({ input: { modelId: modelId! } }).queryKey,
     enabled: !!modelId,
     staleTime: 5 * 60_000, // matches the server-side cache window
+    placeholderData: keepPreviousData,
     retry: false, // agent-offline should show its message, not spin
   });
 
   const [section, setSection] = useSectionParam();
+  const [picks, setPicks] = useState<QueryPicks>({});
   const [entriesOverride, setEntries] = useState<Entries | null>(null);
   const [batchesOverride, setBatches] = useState<number[] | null>(null);
   const [selOverride, setSel] = useState<Sel[] | null>(null);
@@ -94,9 +99,10 @@ export function ConfigProcessPage({ id }: { id: string }) {
   const batches = batchesOverride ?? project?.batches ?? [];
   const selection = selOverride ?? latestRun?.selection ?? [];
   const runReady = !!latestRun && project?.status !== "draft";
-  const prop = model && lookups.data ? propagate(model.definition, lookups.data, entries) : null;
+  const lk = lookups.data ? mergeQueryPicks(lookups.data, picks) : undefined;
+  const prop = model && lk ? propagate(model.definition, lk, entries) : null;
   const conflicted = !!prop && prop.conflicts.length > 0;
-  const entriesDirty = !!project && JSON.stringify(entries) !== JSON.stringify(project.entries);
+  const entriesDirty = !!project && !sameEntries(entries, project.entries);
   const batchesDirty = !!project && JSON.stringify(batches) !== JSON.stringify(project.batches);
   const missing = missingGeneral({ name: project?.name ?? "", customer: project?.customer ?? null });
   const calcBusy = update.isPending || run.isPending;
@@ -104,7 +110,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
     conflicted,
     missingCount: missing.length,
     batchCount: batches.length,
-    lookupsReady: !!lookups.data,
+    lookupsReady: !!lk,
     assistantBusy,
     entriesDirty,
     batchesDirty,
@@ -137,13 +143,14 @@ export function ConfigProcessPage({ id }: { id: string }) {
       const cur = next[k];
       if ((cur === undefined || cur === null || cur === "") && v !== null && v !== undefined) next[k] = v;
     }
-    setEntries(next); // fills only empty params; ConfiguratorForm's propagate() takes it from here
+    setEntries(next); // fills only empty params; page-level propagate() takes it from here
   };
 
   // ConfiguratorForm's onChange, wrapped: a manual edit to a key Chati just set means that AI value
   // no longer describes what's on screen, so its "AI" chip must go — keep only the marks whose value
   // survived the edit untouched.
   const changeEntries = (next: Entries) => {
+    if (sameEntries(next, entries)) return;
     setEntries(next);
     const kept = [...aiMarks].filter(([k]) => JSON.stringify(entries[k]) === JSON.stringify(next[k]));
     if (kept.length !== aiMarks.size) setAiMarks(new Map(kept));
@@ -177,7 +184,6 @@ export function ConfigProcessPage({ id }: { id: string }) {
     if (!latestRun || selection.length === 0) return;
     select.mutate({
       runId: latestRun.id,
-      expectedSelectionVersion: latestRun.selectionVersion,
       selection: selection.map((s) => ({
         candidateIdx: s.candidateIdx, batchQty: s.batchQty, overrides: cleanOverrides(s.overrides),
       })),
@@ -195,7 +201,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
     <Bar design="FloatingFooter"
       startContent={
         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          <ConsistencyStatus model={model.definition} lookups={lookups.data} entries={entries} />
+          {prop ? <ConsistencyStatus prop={prop} /> : null}
           {missing.length ? <ObjectStatus state="Critical">{missing.join(" and ")} required</ObjectStatus> : null}
           {shouldCalc || calcBusy ? <BusyIndicator active delay={0} size="S" /> : null}
         </div>
@@ -248,7 +254,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
     <DynamicSideContent
       sideContentVisibility="AlwaysShow" hideSideContent={sectionId === "quote"}
       sideContent={
-        <InsightsRail projectId={id} model={model.definition} lookups={lookups.data} entries={entries}
+        <InsightsRail projectId={id} model={model.definition} lk={lk} prop={prop} entries={entries}
           onCopy={copyValues} open={openPanels} onToggle={togglePanel} />
       }>
     
@@ -297,7 +303,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
             onChange={(patch) => {
               // A model switch wipes entries/batches server-side; drop the local overlays too,
               // or the old model's values would be re-applied on top of the new form.
-              if (patch.modelId) { setEntries(null); setBatches(null); setSel(null); }
+              if (patch.modelId) { setEntries(null); setBatches(null); setSel(null); setPicks({}); }
               update.mutate({ id, ...patch });
             }} />
         </ObjectPageSubSection>
@@ -306,9 +312,13 @@ export function ConfigProcessPage({ id }: { id: string }) {
         </ObjectPageSubSection>
         {model.definition.structure.sections.map((s) => (
           <ObjectPageSubSection key={s.key} id={s.key} titleText={s.title}>
-            <ConfiguratorForm section={s.key} model={model.definition} lookups={lookups.data} entries={entries}
-              onChange={changeEntries} loading={lookups.isFetching}
-              aiMarks={aiMarks} disabled={assistantBusy} />
+            {lookups.data && lk && prop ? (
+              <ConfiguratorForm section={s.key} model={model.definition} lookups={lookups.data} lk={lk} prop={prop} entries={entries}
+                onChange={changeEntries}
+                onQueryPick={(k, t, sel) => setPicks((p) => setQueryPick(p, k, t, sel))}
+                querySource={{ kind: "project", modelId: project.modelId }}
+                aiMarks={aiMarks} disabled={assistantBusy} />
+            ) : lookups.error ? null : <BusyIndicator active delay={0} />}
           </ObjectPageSubSection>
         ))}
       </ObjectPageSection>

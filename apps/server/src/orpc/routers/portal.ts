@@ -10,10 +10,14 @@ import { EntriesZ, type Entries, type ModelDef } from "@hera/config-engine";
 import { adminProcedure, baseDomain, clientProcedure, sessionProcedure } from "../base.ts";
 import { hashToken } from "../../crypto.ts";
 import { tenantSlugFromHost } from "../../tenant.ts";
-import { applySelection, cachedLookups, executeRun, freshLookups, loadModel, needsAgent, pushEvent } from "./configs.ts";
+import {
+  applySelection, cachedLookups, executeRun, loadModel, needsAgent, pushEvent,
+  QueryPageZ, queryTablePage,
+} from "./configs.ts";
 import { assertAgentReady } from "./entities.ts";
 import { agentFetcher } from "./models.ts";
 import { ExtractFileZ, extractSuggestions } from "./extraction.ts";
+import { enrichLookups } from "../../lookups.ts";
 
 // The client portal API. Trust model: every clientProcedure handler is scoped by
 // tenantId + the client's bound CardCode + source='portal'; responses pass through
@@ -205,7 +209,6 @@ export const portalRouter = {
         .select()
         .from(configRun)
         .where(and(eq(configRun.projectId, p.id), eq(configRun.tenantId, context.tenantId)))
-        .orderBy(desc(configRun.createdAt))
         .limit(1);
       return {
         project: {
@@ -301,7 +304,6 @@ export const portalRouter = {
         .select()
         .from(configRun)
         .where(and(eq(configRun.projectId, p.id), eq(configRun.tenantId, context.tenantId)))
-        .orderBy(desc(configRun.createdAt))
         .limit(1);
       if (!run) throw new ORPCError("BAD_REQUEST", { message: "Calculate prices before submitting." });
       for (const s of input.selection) {
@@ -345,21 +347,16 @@ export const portalRouter = {
   }),
 
   // Final line prices for a quoted project. No DocNum, no PDF, no cost breakdown.
-  // Reads the specifically acknowledged run (b1DocEntry / quotedAt), not merely latest with selection.
+  // The project has one run; it must be the acknowledged one (b1DocEntry set).
   quotedResult: clientProcedure.input(z.object({ projectId: z.uuid() })).handler(async ({ input, context }) => {
     const p = await loadOwnProject(input.projectId, context);
     if (p.status !== "quoted") throw new ORPCError("NOT_FOUND");
     const [run] = await db
       .select()
       .from(configRun)
-      .where(and(
-        eq(configRun.projectId, p.id),
-        eq(configRun.tenantId, context.tenantId),
-        sql`${configRun.b1DocEntry} is not null`,
-      ))
-      .orderBy(desc(configRun.quotedAt))
+      .where(and(eq(configRun.projectId, p.id), eq(configRun.tenantId, context.tenantId)))
       .limit(1);
-    if (!run || !run.selection) throw new ORPCError("NOT_FOUND");
+    if (!run || !run.selection || run.b1DocEntry == null) throw new ORPCError("NOT_FOUND");
     const lines = applySelection(run, run.selection).map((r) => ({
       assignment: run.candidates[r.candidateIdx]!.assignment,
       batchQty: r.batchQty, unitPrice: r.outputs.unitPrice, total: r.outputs.batchTotal,
@@ -379,12 +376,25 @@ export const portalRouter = {
   }),
 
   // Resolved lookups for live propagation in the portal wizard (same cache as configs.lookups).
-  // ponytail: lookup tables ship whole for propagate(), same as internal; revisit if a tenant
+  // ponytail: config tables ship whole for propagate(), same as internal; revisit if a tenant
   //           ever puts secrets in a lookup table the model references.
-  lookups: clientProcedure.input(z.object({ modelId: z.uuid() })).handler(async ({ input, context }) => {
+  lookups: clientProcedure
+    .input(z.object({ modelId: z.uuid(), entries: EntriesZ.optional() }))
+    .handler(async ({ input, context }) => {
+      const model = await loadModel(context.tenantId, input.modelId);
+      if (!model.portal) throw new ORPCError("BAD_REQUEST", { message: UNAVAILABLE });
+      return enrichLookups(
+        model.definition, input.entries ?? {}, await cachedLookups(context.tenantId, model),
+        agentFetcher(context.tenantId),
+      );
+    }),
+
+  // Value help paging, model-scoped exactly like the internal one: a portal client names a query
+  // table of a published model, never an OData path.
+  queryPage: clientProcedure.input(QueryPageZ).handler(async ({ input, context }) => {
     const model = await loadModel(context.tenantId, input.modelId);
     if (!model.portal) throw new ORPCError("BAD_REQUEST", { message: UNAVAILABLE });
-    return cachedLookups(context.tenantId, model);
+    return queryTablePage(context.tenantId, model.definition, input);
   }),
 
   // Drawing extraction for published models — one code path with the internal procedure.
@@ -393,8 +403,7 @@ export const portalRouter = {
     .handler(async ({ input, context }) => {
       const model = await loadModel(context.tenantId, input.modelId);
       if (!model.portal) throw new ORPCError("BAD_REQUEST", { message: UNAVAILABLE });
-      if (needsAgent(model.definition)) await assertAgentReady(context.tenantId);
-      const lookups = await freshLookups(context.tenantId, model.definition, agentFetcher(context.tenantId));
+      const lookups = await cachedLookups(context.tenantId, model);
       return extractSuggestions(model, lookups, input.file);
     }),
 };

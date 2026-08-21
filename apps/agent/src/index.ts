@@ -39,6 +39,7 @@ const sl = new ServiceLayerClient({
   pass: env("B1_PASS"),
   insecureTls: process.env.B1_INSECURE_TLS === "true",
   timeoutMs: process.env.B1_TIMEOUT_MS ? Number(process.env.B1_TIMEOUT_MS) : undefined,
+  pageSize: process.env.B1_PAGE_SIZE ? Number(process.env.B1_PAGE_SIZE) : undefined,
 });
 
 // Optional second on-prem source; only tenants whose models use target:"beas" need it.

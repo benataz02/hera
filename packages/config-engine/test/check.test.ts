@@ -147,6 +147,14 @@ describe("lookup ref validation", () => {
       [{ name: "prices", columns: ["code", "price"] }],
     );
     expect(ok).toEqual([]);
+    const hidden = checkModel(
+      withRef(
+        { source: "table", table: "prices", valueCol: "code", columns: [] },
+        { computed: [{ key: "p2", expr: "pick_price * 2" }] },
+      ),
+      [{ name: "prices", columns: ["code", "price"] }],
+    );
+    expect(hidden).toEqual([]);
     const collide = checkModel(
       withRef({ source: "table", table: "prices", valueCol: "code" }, { computed: [{ key: "pick_price", expr: "1" }] }),
       [{ name: "prices", columns: ["code", "price"] }],

@@ -101,21 +101,21 @@ export const TOOLS = {
     description: "Persist the working configuration and compute candidates (or reuse the identical latest run). Freezes setValues for the rest of this turn.",
     input: z.strictObject({}),
     output: toolResult({
-      runId: z.uuid(), projectVersion: version, selectionVersion: z.number().int().min(0),
+      runId: z.uuid(), projectVersion: version,
       reused: z.boolean(), candidateCount: z.number().int().min(0), top: topZ,
     }),
   },
   selectCandidates: {
     name: "selectCandidates", kind: "write" as const,
     label: "Saving selection…",
-    description: "Save candidate picks on the current run. Requires the exact current runId, candidateIds and expectedSelectionVersion from this turn's calculate result.",
+    description: "Save candidate picks on the current run. Requires the exact current runId and candidateIds from this turn's calculate result.",
     input: z.strictObject({
-      runId: z.uuid(), expectedSelectionVersion: z.number().int().min(0),
+      runId: z.uuid(),
       selections: z.array(z.strictObject({ candidateId: z.string().max(100), batchQty: z.number().int().min(1) })).min(1).max(100),
       mode: z.enum(["add", "replace"]),
     }),
     output: toolResult({
-      runId: z.uuid(), selectionVersion: z.number().int().min(0),
+      runId: z.uuid(),
       selections: z.array(z.strictObject({ candidateId: z.string().max(100), batchQty: z.number().int().min(1) })).max(100),
     }),
   },

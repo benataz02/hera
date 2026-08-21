@@ -104,18 +104,14 @@ async function setupCalculated(opts?: { currency?: string; customer?: boolean })
     .where(and(eq(configRun.projectId, id), eq(configRun.tenantId, tenantId)))
     .limit(1);
   const sel = [{ candidateIdx: 0, batchQty: 100 }];
-  const selected = await call(
-    router.configs.select,
-    { runId: run!.id, selection: sel, expectedSelectionVersion: 0 },
-    ictx,
-  );
+  await call(router.configs.select, { runId: run!.id, selection: sel }, ictx);
 
   return {
     tenantId,
     slug,
     id,
     runId: run!.id,
-    selectionVersion: selected.selectionVersion as number,
+    commandId: configDocumentCommandId({ tenantId, projectId: id, runId: run!.id, selection: sel }),
     ictx,
     agentCtx,
     sel,
@@ -123,29 +119,40 @@ async function setupCalculated(opts?: { currency?: string; customer?: boolean })
 }
 
 describe("configDocumentCommandId", () => {
-  test("is stable for the same selection identity", () => {
-    const a = configDocumentCommandId({
-      tenantId: "t1",
-      projectId: "p1",
-      runId: "r1",
-      selectionVersion: 3,
-    });
-    const b = configDocumentCommandId({
-      tenantId: "t1",
-      projectId: "p1",
-      runId: "r1",
-      selectionVersion: 3,
-    });
-    expect(a).toBe(b);
-    expect(a.length).toBeGreaterThan(8);
+  const base = { tenantId: "t1", projectId: "p1", runId: "r1" };
+  const sel = [
+    { candidateIdx: 0, batchQty: 100 },
+    { candidateIdx: 2, batchQty: 50 },
+  ];
+
+  test("is stable for the same selection, and for a reorder of it", () => {
+    const a = configDocumentCommandId({ ...base, selection: sel });
+    expect(configDocumentCommandId({ ...base, selection: sel })).toBe(a);
+    // A retry must not create a second SAP document just because the picks came back reordered.
+    expect(configDocumentCommandId({ ...base, selection: [...sel].reverse() })).toBe(a);
+    expect(a.length).toBe(64);
+  });
+
+  test("ignores object key order, as Postgres jsonb reorders it on the way back out", () => {
+    const a = configDocumentCommandId({ ...base, selection: sel });
+    const reordered = sel.map((x) => ({ batchQty: x.batchQty, candidateIdx: x.candidateIdx }));
+    expect(configDocumentCommandId({ ...base, selection: reordered })).toBe(a);
+    const withOverrides = [{ ...sel[0]!, overrides: { bom: [{ id: "body", unitPrice: 4 }] } }];
     expect(
       configDocumentCommandId({
-        tenantId: "t1",
-        projectId: "p1",
-        runId: "r1",
-        selectionVersion: 4,
+        ...base,
+        selection: [{ overrides: { bom: [{ unitPrice: 4, id: "body" }] }, batchQty: 100, candidateIdx: 0 }],
       }),
+    ).toBe(configDocumentCommandId({ ...base, selection: withOverrides }));
+  });
+
+  test("changes when the selection changes", () => {
+    const a = configDocumentCommandId({ ...base, selection: sel });
+    expect(configDocumentCommandId({ ...base, selection: [sel[0]!] })).not.toBe(a);
+    expect(
+      configDocumentCommandId({ ...base, selection: [{ candidateIdx: 0, batchQty: 200 }, sel[1]!] }),
     ).not.toBe(a);
+    expect(configDocumentCommandId({ ...base, runId: "r2", selection: sel })).not.toBe(a);
   });
 });
 
@@ -176,7 +183,7 @@ describe("buildQuoteSeed", () => {
 });
 
 describe("configs.select fencing", () => {
-  test("rejects unknown and duplicate candidate/batch pairs; requires expectedSelectionVersion", async () => {
+  test("rejects unknown and duplicate candidate/batch pairs, and an unknown runId", async () => {
     const s = await setupCalculated();
     expect(
       await code(
@@ -185,7 +192,6 @@ describe("configs.select fencing", () => {
           {
             runId: s.runId,
             selection: [{ candidateIdx: 0, batchQty: 999 }],
-            expectedSelectionVersion: s.selectionVersion,
           },
           s.ictx,
         ),
@@ -202,37 +208,30 @@ describe("configs.select fencing", () => {
               { candidateIdx: 0, batchQty: 100 },
               { candidateIdx: 0, batchQty: 100 },
             ],
-            expectedSelectionVersion: s.selectionVersion,
           },
           s.ictx,
         ),
       ),
     ).toBe("BAD_REQUEST");
 
+    // A runId from a superseded run no longer resolves: the row is replaced on every calculate.
     expect(
       await code(
         call(
           router.configs.select,
-          {
-            runId: s.runId,
-            selection: [{ candidateIdx: 0, batchQty: 500 }],
-            expectedSelectionVersion: s.selectionVersion - 1,
-          },
+          { runId: crypto.randomUUID(), selection: [{ candidateIdx: 0, batchQty: 500 }] },
           s.ictx,
         ),
       ),
-    ).toBe("CONFLICT");
+    ).toBe("NOT_FOUND");
 
     const ok = await call(
       router.configs.select,
-      {
-        runId: s.runId,
-        selection: [{ candidateIdx: 0, batchQty: 500 }],
-        expectedSelectionVersion: s.selectionVersion,
-      },
+      { runId: s.runId, selection: [{ candidateIdx: 0, batchQty: 500 }] },
       s.ictx,
     );
-    expect(ok.selectionVersion).toBe(s.selectionVersion + 1);
+    expect(ok.selections).toHaveLength(1);
+    expect(ok.selections[0]!.batchQty).toBe(500);
   });
 });
 
@@ -241,7 +240,6 @@ describe("createQuote status + mutation fencing", () => {
     const s = await setupCalculated();
     const draft = await call(router.configs.quoteDraft, { projectId: s.id }, s.ictx);
     expect(draft.runId).toBe(s.runId);
-    expect(draft.selectionVersion).toBe(s.selectionVersion);
     expect(draft.schema?.name).toBe("Quotations");
     expect(draft.profile?.entity).toBe("Quotations");
     expect(draft.commandId).toBe(
@@ -249,7 +247,7 @@ describe("createQuote status + mutation fencing", () => {
         tenantId: s.tenantId,
         projectId: s.id,
         runId: s.runId,
-        selectionVersion: s.selectionVersion,
+        selection: s.sel,
       }),
     );
 
@@ -262,7 +260,7 @@ describe("createQuote status + mutation fencing", () => {
           {
             projectId: s.id,
             runId: s.runId,
-            selectionVersion: s.selectionVersion,
+            commandId: s.commandId,
             data: draft.data,
           },
           s.ictx,
@@ -276,7 +274,7 @@ describe("createQuote status + mutation fencing", () => {
       {
         projectId: s.id,
         runId: s.runId,
-        selectionVersion: s.selectionVersion,
+        commandId: s.commandId,
         data: draft.data,
       },
       s.ictx,
@@ -295,38 +293,18 @@ describe("createQuote status + mutation fencing", () => {
           {
             runId: s.runId,
             selection: [{ candidateIdx: 0, batchQty: 100 }],
-            expectedSelectionVersion: s.selectionVersion,
           },
           s.ictx,
         ),
       ),
     ).toBe("CONFLICT");
 
-    // Second createQuote for same project (even another run) is rejected while write pending
-    const [runRow] = await db.select().from(configRun).where(eq(configRun.id, s.runId));
-    const [otherRun] = await db
-      .insert(configRun)
-      .values({
-        tenantId: s.tenantId,
-        projectId: s.id,
-        modelSnapshot: runRow!.modelSnapshot,
-        lookupSnapshot: runRow!.lookupSnapshot,
-        entries: runRow!.entries,
-        candidates: runRow!.candidates,
-        selection: [{ candidateIdx: 0, batchQty: 100 }],
-        selectionVersion: 1,
-      })
-      .returning({ id: configRun.id });
+    // A second createQuote for the same project is rejected while the write is pending.
     expect(
       await code(
         call(
           router.configs.createQuote,
-          {
-            projectId: s.id,
-            runId: otherRun!.id,
-            selectionVersion: 1,
-            data: draft.data,
-          },
+          { projectId: s.id, runId: s.runId, commandId: s.commandId, data: draft.data },
           s.ictx,
         ),
       ),
@@ -354,7 +332,7 @@ describe("createQuote status + mutation fencing", () => {
           {
             projectId: s.id,
             runId: s.runId,
-            selectionVersion: s.selectionVersion,
+            commandId: s.commandId,
             data: draft.data,
           },
           s.ictx,
@@ -375,7 +353,7 @@ describe("createQuote status + mutation fencing", () => {
       {
         projectId: s2.id,
         runId: s2.runId,
-        selectionVersion: s2.selectionVersion,
+        commandId: s2.commandId,
         data: draft2.data,
       },
       s2.ictx,
@@ -395,7 +373,7 @@ describe("createQuote status + mutation fencing", () => {
           {
             projectId: s3.id,
             runId: s3.runId,
-            selectionVersion: s3.selectionVersion,
+            commandId: s3.commandId,
             data: data3,
           },
           s3.ictx,
@@ -404,40 +382,31 @@ describe("createQuote status + mutation fencing", () => {
     ).toBe("BAD_REQUEST");
   });
 
-  test("createQuote rejects stale selectionVersion under lock", async () => {
+  test("createQuote rejects a commandId that no longer matches the stored selection", async () => {
     const s = await setupCalculated();
     const draft = await call(router.configs.quoteDraft, { projectId: s.id }, s.ictx);
 
+    // A commandId that was never derived from this run's selection.
     expect(
       await code(
         call(
           router.configs.createQuote,
-          {
-            projectId: s.id,
-            runId: s.runId,
-            selectionVersion: s.selectionVersion - 1,
-            data: draft.data,
-          },
+          { projectId: s.id, runId: s.runId, commandId: "0".repeat(64), data: draft.data },
           s.ictx,
         ),
       ),
     ).toBe("CONFLICT");
 
-    // Bump version after draft — caller's version is now stale
+    // The picks change after the draft was taken — the client's id is now stale.
     await db
       .update(configRun)
-      .set({ selectionVersion: s.selectionVersion + 1 })
+      .set({ selection: [{ candidateIdx: 0, batchQty: 500 }] })
       .where(eq(configRun.id, s.runId));
     expect(
       await code(
         call(
           router.configs.createQuote,
-          {
-            projectId: s.id,
-            runId: s.runId,
-            selectionVersion: s.selectionVersion,
-            data: draft.data,
-          },
+          { projectId: s.id, runId: s.runId, commandId: s.commandId, data: draft.data },
           s.ictx,
         ),
       ),
@@ -445,24 +414,10 @@ describe("createQuote status + mutation fencing", () => {
   });
 
   // Project-level single-flight: createQuote FOR UPDATEs config_project before assert/enqueue.
-  // Overlapping tx on a different run blocks on that row lock, then CONFLICT once pending is visible.
-  test("overlapping createQuote on another run waits on config_project lock then CONFLICT", async () => {
+  // An overlapping tx blocks on that row lock, then CONFLICTs once pending is visible.
+  test("overlapping createQuote waits on config_project lock then CONFLICT", async () => {
     const s = await setupCalculated();
     const draft = await call(router.configs.quoteDraft, { projectId: s.id }, s.ictx);
-    const [runRow] = await db.select().from(configRun).where(eq(configRun.id, s.runId));
-    const [otherRun] = await db
-      .insert(configRun)
-      .values({
-        tenantId: s.tenantId,
-        projectId: s.id,
-        modelSnapshot: runRow!.modelSnapshot,
-        lookupSnapshot: runRow!.lookupSnapshot,
-        entries: runRow!.entries,
-        candidates: runRow!.candidates,
-        selection: [{ candidateIdx: 0, batchQty: 100 }],
-        selectionVersion: 1,
-      })
-      .returning({ id: configRun.id });
 
     let release!: () => void;
     const projectLocked = Promise.withResolvers<void>();
@@ -487,12 +442,7 @@ describe("createQuote status + mutation fencing", () => {
         status: "pending",
         dedupKey: `write:Quotations:hold-${s.id}`,
         payload: {
-          origin: {
-            kind: "config-document",
-            projectId: s.id,
-            runId: s.runId,
-            selectionVersion: s.selectionVersion,
-          },
+          origin: { kind: "config-document", projectId: s.id, runId: s.runId },
         },
       });
       projectLocked.resolve();
@@ -504,12 +454,7 @@ describe("createQuote status + mutation fencing", () => {
     let settled = false;
     const second = call(
       router.configs.createQuote,
-      {
-        projectId: s.id,
-        runId: otherRun!.id,
-        selectionVersion: 1,
-        data: draft.data,
-      },
+      { projectId: s.id, runId: s.runId, commandId: s.commandId, data: draft.data },
       s.ictx,
     ).finally(() => {
       settled = true;
@@ -534,7 +479,7 @@ describe("completeWriteOrigin", () => {
       {
         projectId: s.id,
         runId: s.runId,
-        selectionVersion: s.selectionVersion,
+        commandId: s.commandId,
         data: draft.data,
       },
       s.ictx,
@@ -543,15 +488,10 @@ describe("completeWriteOrigin", () => {
     const pull = await call(router.sync.pull, { max: 1 }, s.agentCtx);
     expect(pull.items[0]!.id).toBe(requestId);
     const payload = pull.items[0]!.payload as {
-      origin?: { kind: string; projectId: string; runId: string; selectionVersion: number };
+      origin?: { kind: string; projectId: string; runId: string };
       commandId: string;
     };
-    expect(payload.origin).toEqual({
-      kind: "config-document",
-      projectId: s.id,
-      runId: s.runId,
-      selectionVersion: s.selectionVersion,
-    });
+    expect(payload.origin).toEqual({ kind: "config-document", projectId: s.id, runId: s.runId });
     expect(payload.commandId).toBe(draft.commandId);
 
     await call(
@@ -588,7 +528,7 @@ describe("completeWriteOrigin", () => {
     expect(again!.events.filter((e) => e.kind === "quoted")).toHaveLength(1);
   });
 
-  test("origin-conflict when run version no longer matches: write done, no wrong mutation", async () => {
+  test("origin-conflict when the origin run is gone: write done, no wrong mutation", async () => {
     const s = await setupCalculated();
     const draft = await call(router.configs.quoteDraft, { projectId: s.id }, s.ictx);
     const { requestId } = await call(
@@ -596,18 +536,16 @@ describe("completeWriteOrigin", () => {
       {
         projectId: s.id,
         runId: s.runId,
-        selectionVersion: s.selectionVersion,
+        commandId: s.commandId,
         data: draft.data,
       },
       s.ictx,
     );
 
-    // Simulate impossible-in-normal-use mismatch: bump selectionVersion after enqueue
-    await db
-      .update(configRun)
-      .set({ selectionVersion: s.selectionVersion + 99 })
-      .where(eq(configRun.id, s.runId));
-    // Clear pending fence so we can mutate for the test setup only — bump is enough for conflict
+    // Simulate impossible-in-normal-use mismatch: the origin points at a run that no longer
+    // exists (a recalculate replaces the project's run row).
+    const goneRunId = crypto.randomUUID();
+    // Clear pending fence so we can re-insert the request for the test setup only.
     await db.delete(agentRequest).where(
       and(eq(agentRequest.tenantId, s.tenantId), eq(agentRequest.id, requestId)),
     );
@@ -626,12 +564,7 @@ describe("completeWriteOrigin", () => {
         entity: "Quotations",
         commandId: cmd,
         data: { CardCode: "C0001" },
-        origin: {
-          kind: "config-document",
-          projectId: s.id,
-          runId: s.runId,
-          selectionVersion: s.selectionVersion,
-        },
+        origin: { kind: "config-document", projectId: s.id, runId: goneRunId },
       },
     });
 
@@ -659,7 +592,7 @@ describe("completeWriteOrigin", () => {
 });
 
 describe("portal.quotedResult", () => {
-  test("reads the specifically acknowledged run, not merely the latest with selection", async () => {
+  test("reads the project's acknowledged run", async () => {
     const s = await setupCalculated();
     const client = await makeUser("client", s.tenantId);
     await bindClient(s.tenantId, client.userId, "C0001", "Acme");
@@ -671,33 +604,18 @@ describe("portal.quotedResult", () => {
       .set({ source: "portal", customer: { cardCode: "C0001", cardName: "Acme" } })
       .where(eq(configProject.id, s.id));
 
-    const [acknowledged] = await db.select().from(configRun).where(eq(configRun.id, s.runId));
-    // Newer run with a selection that must NOT be used by quotedResult
-    const [newer] = await db
-      .insert(configRun)
-      .values({
-        tenantId: s.tenantId,
-        projectId: s.id,
-        modelSnapshot: acknowledged!.modelSnapshot,
-        lookupSnapshot: acknowledged!.lookupSnapshot,
-        entries: acknowledged!.entries,
-        candidates: acknowledged!.candidates,
-        selection: [{ candidateIdx: 0, batchQty: 500 }],
-        selectionVersion: 1,
-      })
-      .returning();
-    expect(newer!.id).not.toBe(s.runId);
+    // Not acknowledged yet: nothing to show even once the project says quoted.
+    await db.update(configProject).set({ status: "quoted" }).where(eq(configProject.id, s.id));
+    expect(await code(call(router.portal.quotedResult, { projectId: s.id }, cctx))).toBe("NOT_FOUND");
 
     await db
       .update(configRun)
       .set({ b1DocEntry: 42, quotedAt: new Date() })
-      .where(eq(configRun.id, acknowledged!.id));
-    await db.update(configProject).set({ status: "quoted" }).where(eq(configProject.id, s.id));
+      .where(eq(configRun.id, s.runId));
 
     const res = await call(router.portal.quotedResult, { projectId: s.id }, cctx);
     expect(res.lines).toHaveLength(1);
     expect(Object.keys(res.lines[0]!).sort()).toEqual(["assignment", "batchQty", "total", "unitPrice"]);
-    // Acknowledged run selected batch 100, newer selected 500
     expect(res.lines[0]!.batchQty).toBe(100);
   });
 });
@@ -712,7 +630,7 @@ function makeRun(over: Partial<ConfigRunRow>): ConfigRunRow {
     entries: {},
     candidates: [{ assignment: { material: "steel", coated: false }, perBatch: [{ batchQty: 10, outputs: {} as never }] }],
     selection: [{ candidateIdx: 0, batchQty: 10 }],
-    selectionVersion: 0, b1DocEntry: null, quotedAt: null,
+    b1DocEntry: null, quotedAt: null,
     quotedValue: null, quotedCost: null,
     createdAt: new Date(),
     ...over,

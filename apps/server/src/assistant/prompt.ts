@@ -9,7 +9,7 @@ type Working = { entries: Entries; batches: number[]; projectVersion: string; wo
 type Ctx = {
   customer?: { cardCode: string; cardName: string } | null;
   status: string;
-  candidateCount?: number; selectedCount?: number; selectionVersion?: number;
+  candidateCount?: number; selectedCount?: number;
   attachment?: { name: string; mimeType: string } | null;
 };
 
@@ -33,7 +33,7 @@ export function buildAssistPrompt(model: ModelDef, propagated: Propagated, worki
   s.push("## Current state");
   s.push(`Customer: ${ctx.customer ? `${ctx.customer.cardCode} — ${ctx.customer.cardName}` : "none"}`);
   s.push(`Project status: ${ctx.status}${ctx.candidateCount !== undefined
-    ? `; ${ctx.candidateCount} candidates, ${ctx.selectedCount ?? 0} selected; selection version ${ctx.selectionVersion ?? 0}` : ""}`);
+    ? `; ${ctx.candidateCount} candidates, ${ctx.selectedCount ?? 0} selected` : ""}`);
   s.push(`Project version: ${working.projectVersion}; working revision: ${working.workingRevision}`);
   s.push(`Batches: ${working.batches.length ? working.batches.join(", ") : "none"}`);
   s.push(`Open conflicts: ${propagated.conflicts.length ? propagated.conflicts.map((c) => c.message).join("; ") : "none"}`);
@@ -56,7 +56,7 @@ export function buildAssistPrompt(model: ModelDef, propagated: Propagated, worki
     "  call. In particular, never request setValues and calculate in the same model turn.",
     "- A stale tool result is context only. If it says stale, call that read tool again.",
     "  Never select a positional candidate from memory: use the current runId and the",
-    "  opaque candidateId and selectionVersion returned by calculate/latest selection.",
+    "  opaque candidateId returned by calculate/latest selection.",
     "- Explore what-ifs with previewCandidates; it changes nothing. Run calculate only",
     "  when the user wants results and no conflicts remain. selectCandidates saves the",
     "  user's picks on the current run. Once calculate succeeds, configuration values",

@@ -39,9 +39,9 @@ export function QueryEditor({ target, path, columns, onChange, children }: Query
           onClick={async () => {
             setState({ busy: true });
             try {
-              const r = await client.models.queryPreview({ target, path });
+              const r = await client.models.queryPage({ target, path });
               onChange({ columns: r.columns });
-              setState({ cols: r.columns, rows: r.rows as Cell[][] });
+              setState({ cols: r.columns, rows: r.rows.slice(0, 10) as Cell[][] });
             } catch (e) {
               setState({ error: e instanceof Error ? e.message : String(e) });
             }

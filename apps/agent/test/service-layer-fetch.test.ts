@@ -1,12 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import {
   buildCrossjoinPath,
   buildObjectHeaderPath,
   flattenCrossjoinRows,
   nextLinkPath,
+  ServiceLayerClient,
   projectFullRecord,
   type ObjectFetchRequest,
 } from "../src/service-layer-client.ts";
+import { BeasClient } from "../src/beas-client.ts";
 
 describe("object fetch path builders", () => {
   test("escapes string keys in header path", () => {
@@ -147,5 +149,115 @@ describe("nextLinkPath", () => {
 
   test("keeps the path when an absolute link does not share the service root", () => {
     expect(nextLinkPath("https://other.example.com/Orders?$skip=20", base)).toBe("/Orders?$skip=20");
+  });
+});
+
+describe("queryRaw paging", () => {
+  const base = "https://b1.example.com:50000/b1s/v2";
+  const real = globalThis.fetch;
+  const gets: { url: string; prefer: string | null }[] = [];
+
+  const stub = (body: Record<string, unknown>) => {
+    gets.length = 0;
+    globalThis.fetch = (async (url: string | URL, init: RequestInit) => {
+      if (String(url).endsWith("/Login"))
+        return new Response("{}", { headers: { "set-cookie": "B1SESSION=x; path=/" } });
+      gets.push({ url: String(url), prefer: new Headers(init.headers).get("Prefer") });
+      return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+  };
+  const client = () =>
+    new ServiceLayerClient({ baseUrl: base, companyDb: "DB", user: "u", pass: "p", pageSize: 100 });
+
+  afterAll(() => { globalThis.fetch = real; });
+
+  test("returns one page and hands the nextLink back as a re-requestable path", async () => {
+    stub({ value: [{ ItemCode: "A1" }], "@odata.nextLink": `${base}/Items?$skip=100` });
+    const out = (await client().queryRaw("/Items")) as Record<string, unknown>;
+    expect(out.value).toEqual([{ ItemCode: "A1" }]);
+    expect(out["@odata.nextLink"]).toBe("/Items?$skip=100"); // preserved, not followed
+    expect(gets).toHaveLength(1);
+    expect(gets[0]!.prefer).toBe("odata.maxpagesize=100");
+  });
+
+  test("accepts the v1 odata.nextLink spelling", async () => {
+    stub({ value: [{ ItemCode: "A1" }], "odata.nextLink": `${base}/Items?$skip=100` });
+    const out = (await client().queryRaw("/Items")) as Record<string, unknown>;
+    expect(out["@odata.nextLink"]).toBe("/Items?$skip=100");
+  });
+
+  test("all=true asks B1 to switch server paging off", async () => {
+    stub({ value: [{ ItemCode: "A1" }] });
+    await client().queryRaw("/Items", true);
+    expect(gets).toHaveLength(1);
+    expect(gets[0]!.prefer).toBe("odata.maxpagesize=0");
+  });
+
+  test("rejects invalid configured page sizes", () => {
+    for (const pageSize of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => new ServiceLayerClient({
+        baseUrl: base, companyDb: "DB", user: "u", pass: "p", pageSize,
+      })).toThrow("positive integer");
+    }
+    expect(() => new ServiceLayerClient({
+      baseUrl: base, companyDb: "DB", user: "u", pass: "p", pageSize: 1,
+    })).not.toThrow();
+  });
+
+  test("passes a non-collection response straight through", async () => {
+    stub({ ItemCode: "A1" });
+    expect(await client().queryRaw("/Items('A1')")).toEqual({ ItemCode: "A1" });
+  });
+
+  test("Beas all=false returns only the first page", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string | URL) => {
+      urls.push(String(url));
+      return new Response(JSON.stringify({
+        value: [{ Code: "A" }],
+        "odata.nextLink": "https://beas.example.com/api/rows?$skip=1",
+      }));
+    }) as unknown as typeof fetch;
+
+    const out = (await new BeasClient({ baseUrl: "https://beas.example.com/api" }).get("/rows", false)) as Record<string, unknown>;
+    expect(out.value).toEqual([{ Code: "A" }]);
+    expect(out["@odata.nextLink"]).toBe("/rows?$skip=1");
+    expect(urls).toHaveLength(1);
+  });
+
+  test("Beas all=true follows every page", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string | URL) => {
+      urls.push(String(url));
+      const body = String(url).includes("$skip=1")
+        ? { value: [{ Code: "B" }] }
+        : { value: [{ Code: "A" }], "@odata.nextLink": "/rows?$skip=1" };
+      return new Response(JSON.stringify(body));
+    }) as unknown as typeof fetch;
+
+    const out = (await new BeasClient({ baseUrl: "https://beas.example.com/api" }).get("/rows", true)) as Record<string, unknown>;
+    expect(out.value).toEqual([{ Code: "A" }, { Code: "B" }]);
+    expect(out["@odata.nextLink"]).toBeUndefined();
+    expect(urls).toHaveLength(2);
+  });
+
+  test("Beas all=true rejects a normalized nextLink cycle before refetching", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string | URL) => {
+      urls.push(String(url));
+      if (urls.length > 2) throw new Error("unexpected third request");
+      const body = String(url).includes("$skip=1")
+        ? { value: [{ Code: "B" }], "@odata.nextLink": "/rows?$top=10&$skip=1" }
+        : {
+            value: [{ Code: "A" }],
+            "@odata.nextLink": "https://beas.example.com/api/rows?$skip=1&$top=10",
+          };
+      return new Response(JSON.stringify(body));
+    }) as unknown as typeof fetch;
+
+    await expect(
+      new BeasClient({ baseUrl: "https://beas.example.com/api" }).get("/rows", true),
+    ).rejects.toThrow("repeated");
+    expect(urls).toHaveLength(2);
   });
 });

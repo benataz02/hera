@@ -108,6 +108,36 @@ describe("propagate", () => {
     expect(p.conflicts.some((c) => c.message.includes("no valid values remain"))).toBe(true);
     expect(p.candidateEstimate).toBe(0);
   });
+
+  test("missing option domain is omitted; known-empty stays empty and conflicts", () => {
+    const missing = propagate(model, { domains: {}, tables: {} }, {});
+    expect(missing.domains.material).toBeUndefined();
+    expect(missing.conflicts.some((c) => c.message.includes("no valid values remain for 'material'"))).toBe(false);
+
+    const empty = propagate(model, { domains: { material: [] }, tables: {} }, {});
+    expect(empty.domains.material).toEqual([]);
+    expect(empty.conflicts.some((c) => c.message.includes("no valid values remain for 'material'"))).toBe(true);
+  });
+
+  test("domainless unbound table param is a wildcard, not a violation", () => {
+    const m2 = structuredClone(model);
+    m2.parameters.push({ key: "note", label: "Note", type: "string", ui: "input" });
+    m2.structure.sections[0]!.groups[0]!.params.push("note");
+    m2.constraints = [{
+      kind: "table", mode: "allow", params: ["material", "note"],
+      rows: [["steel", "ok"], ["alu", "ok"]],
+    }];
+    const p = propagate(m2, lookups, { material: "steel" });
+    expect(p.conflicts.filter((c) => c.message.includes("combination table"))).toEqual([]);
+    expect(p.domains.material!.filter((o) => !o.eliminatedBy).map((o) => o.value)).toEqual(["steel", "alu"]);
+  });
+
+  test("table violation only when every referenced param is bound", () => {
+    expect(propagate(model, lookups, { material: "steel" }).conflicts
+      .some((c) => c.message.includes("combination table"))).toBe(false);
+    const p = propagate(model, lookups, { material: "steel", coated: true, color: "blue" });
+    expect(p.conflicts.some((c) => c.message.includes("combination table"))).toBe(true);
+  });
 });
 
 describe("derived lookup columns", () => {
@@ -142,13 +172,33 @@ describe("derived lookup columns", () => {
     expect("mat_density" in bindings(dModel, dLookups, { mat: "NOPE" }).values).toBe(false);
   });
 
-  test("honours an explicit columns subset", () => {
+  test("a query ref feeds another param's defaultExpr once its row is known", () => {
+    const m: ModelDef = {
+      ...dModel,
+      parameters: [
+        { key: "mp", label: "Raw material", type: "string", ui: "select",
+          domain: { kind: "options", ref: { source: "query", table: "raw" } } },
+        { key: "height", label: "Height", type: "number", ui: "input", defaultExpr: "mp_ItemHeight" },
+      ],
+      computed: [],
+      queryTables: [{ name: "raw", target: "b1", path: "Items", columns: ["ItemCode", "ItemName", "ItemHeight"] }],
+    };
+    const lk: ResolvedLookups = {
+      domains: { mp: [{ value: "A1", label: "Bar" }] },
+      tables: { raw: { columns: ["ItemCode", "ItemName", "ItemHeight"], rows: [["A1", "Bar", 120]] } },
+    };
+    expect(bindings(m, lk, { mp: "A1" }).values.height).toBe(120);
+    // no resolved rows (the builder preview before a pick) -> the default stays unbound
+    expect("height" in bindings(m, { domains: {}, tables: {} }, { mp: "A1" }).values).toBe(false);
+  });
+
+  test("still derives every extra column when display columns are a subset", () => {
     const m: ModelDef = structuredClone(dModel);
     (m.parameters[0]!.domain as { kind: "options"; ref: { source: "table"; table: string; valueCol: string; columns?: string[] } }).ref.columns = ["density"];
     m.computed = [];
     const b = bindings(m, dLookups, { mat: "AL" });
     expect(b.values.mat_density).toBe(2.7);
-    expect("mat_name" in b.values).toBe(false);
+    expect(b.values.mat_name).toBe("Alu");
   });
 });
 

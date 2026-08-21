@@ -8,6 +8,16 @@ export type TabKey = "params" | "rules" | "bom" | "routing" | "tables" | "histor
 
 export const issueFor = (issues: Issue[], path: string) => issues.find((i) => i.path === path);
 
+function colKeys(columns: unknown): string[] {
+  if (!Array.isArray(columns)) return [];
+  const keys: string[] = [];
+  for (const c of columns) {
+    if (typeof c === "string") keys.push(c);
+    else if (c && typeof c === "object" && "key" in c && typeof c.key === "string") keys.push(c.key);
+  }
+  return keys;
+}
+
 export function tabOf(path: string): TabKey {
   if (path.startsWith("parameters") || path.startsWith("structure") || path.startsWith("computed") || path === "model")
     return "params";
@@ -39,13 +49,17 @@ export function useDraftModel(id: string) {
   }, [rec.data, portalMeta]);
 
   const tables = tablesQ.data ?? [];
+  const tableCols = useMemo(
+    () => tables.map((t) => ({ name: t.name, columns: colKeys(t.columns) })),
+    [tables],
+  );
   // Commit model: dialogs (ParamDialog, ComboTableDialog) buffer edits and commit on OK; inline
   // editors (RulesTab, SettingsTab, title edits) mutate this draft directly per keystroke. Validation
   // runs against a deferred draft so checkModel lags fast typing instead of blocking every keystroke.
   const deferredDraft = useDeferredValue(draft);
   const issues = useMemo(
-    () => (deferredDraft ? checkModel(deferredDraft, tables.map((t) => ({ name: t.name, columns: (t.columns as { key: string }[]).map((c) => c.key) }))) : []),
-    [deferredDraft, tables],
+    () => (deferredDraft ? checkModel(deferredDraft, tableCols) : []),
+    [deferredDraft, tableCols],
   );
 
   const saveMut = useMutation(
@@ -89,6 +103,7 @@ export function useDraftModel(id: string) {
     saveError: saveMut.error as Error | null,
     loading: rec.isPending,
     loadError: rec.error as Error | null,
-    tables,
+    tableCols,
+    savedQueryTables: rec.data?.definition.queryTables ?? [],
   };
 }

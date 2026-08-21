@@ -4,10 +4,11 @@ import type { Issue, ModelDef } from "@hera/config-engine";
 import { ExprInput } from "./ExprInput.tsx";
 import { issueFor } from "./useDraftModel.ts";
 
-export function SettingsTab({ draft, update, issues, portalMeta, setPortalMeta }: {
+export function SettingsTab({ draft, update, issues, tables, portalMeta, setPortalMeta }: {
   draft: ModelDef;
   update: (fn: (d: ModelDef) => ModelDef) => void;
   issues: Issue[];
+  tables?: { name: string; columns: string[] }[];
   portalMeta: { portal: boolean; portalDescription: string };
   setPortalMeta: (p: { portal: boolean; portalDescription: string }) => void;
 }) {
@@ -40,7 +41,7 @@ export function SettingsTab({ draft, update, issues, portalMeta, setPortalMeta }
         </FormGroup>
         <FormGroup headerText="Pricing">
           <FormItem labelContent={<Label required>Unit price expression</Label>}>
-            <ExprInput value={draft.pricing.priceExpr} model={draft} extraVars={["qty", "unitCost"]}
+            <ExprInput value={draft.pricing.priceExpr} model={draft} extraVars={["qty", "unitCost"]} tables={tables}
               fieldId="expr-pricing.priceExpr" issue={issueFor(issues, "pricing.priceExpr")}
               onChange={(v) => update((d) => ({ ...d, pricing: { ...d.pricing, priceExpr: v ?? "" } }))} />
           </FormItem>

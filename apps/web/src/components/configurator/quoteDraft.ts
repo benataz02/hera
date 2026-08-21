@@ -2,7 +2,6 @@ import type { WriteUiStatus } from "../../objectSpec.ts";
 
 export type QuoteSessionStored = {
   runId: string;
-  selectionVersion: number;
   commandId: string;
   data: Record<string, unknown>;
   requestId: string | null;
@@ -10,25 +9,20 @@ export type QuoteSessionStored = {
   docEntry?: string | null;
 };
 
-export function quoteSessionKey(
-  host: string,
-  projectId: string,
-  runId: string,
-  selectionVersion: number,
-): string {
-  return `hera:quoteDraft:${host}:${projectId}:${runId}:${selectionVersion}`;
+export function quoteSessionKey(host: string, projectId: string, runId: string): string {
+  return `hera:quoteDraft:${host}:${projectId}:${runId}`;
 }
 
-/** Accept stored draft only when run id + selection version match the current seed. */
+/** Accept stored draft only when run id + commandId match the current seed. commandId is a hash of
+ *  the stored selection, so a changed selection invalidates the draft on its own. */
 export function restoreQuoteSession(
   stored: QuoteSessionStored | null | undefined,
-  expected: { runId: string; selectionVersion: number; commandId: string },
+  expected: { runId: string; commandId: string },
 ): QuoteSessionStored | null {
   if (!stored) return null;
   if (stored.runId !== expected.runId) return null;
-  if (stored.selectionVersion !== expected.selectionVersion) return null;
-  // Prefer the server's deterministic commandId for this selection fence.
-  return { ...stored, commandId: expected.commandId };
+  if (stored.commandId !== expected.commandId) return null;
+  return stored;
 }
 
 type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -60,7 +54,6 @@ export function readQuoteSession(key: string): QuoteSessionStored | null {
     const parsed = JSON.parse(raw) as QuoteSessionStored;
     if (
       typeof parsed?.runId !== "string" ||
-      typeof parsed?.selectionVersion !== "number" ||
       typeof parsed?.commandId !== "string" ||
       !parsed.data ||
       typeof parsed.data !== "object"
@@ -69,7 +62,6 @@ export function readQuoteSession(key: string): QuoteSessionStored | null {
     }
     const out: QuoteSessionStored = {
       runId: parsed.runId,
-      selectionVersion: parsed.selectionVersion,
       commandId: parsed.commandId,
       data: parsed.data,
       requestId: typeof parsed.requestId === "string" ? parsed.requestId : null,

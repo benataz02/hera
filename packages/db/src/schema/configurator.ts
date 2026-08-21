@@ -74,7 +74,9 @@ export const configProject = pgTable(
 export type RunCandidate = { assignment: Entries; perBatch: { batchQty: number; outputs: Outputs }[] };
 export type RunSelection = { candidateIdx: number; batchQty: number; overrides?: OutputOverrides };
 
-// Immutable snapshot of one engine run.
+// One configuration = one run: the project's single saved calculation, deleted and re-inserted
+// wholesale by executeRunFromSnapshot. The unique index below is what enforces that. A quoted
+// project is locked by assertConfigMutable, so the run that reached SAP is never replaced.
 // b1DocEntry/quotedAt are written by configs.createQuote origin completion (sync.ack).
 export const configRun = pgTable(
   "config_run",
@@ -87,8 +89,6 @@ export const configRun = pgTable(
     entries: jsonb("entries").$type<Entries>().notNull(),
     candidates: jsonb("candidates").$type<RunCandidate[]>().notNull(),
     selection: jsonb("selection").$type<RunSelection[]>(),
-    // Bumped under FOR UPDATE when configs.select / Chati selectCandidates lands; fences createQuote.
-    selectionVersion: integer("selection_version").notNull().default(0),
     b1DocEntry: integer("b1_doc_entry"),
     quotedAt: timestamp("quoted_at", { withTimezone: true }),
     // Engineered value/cost of the selected candidates, captured once when the quotation is
@@ -100,7 +100,8 @@ export const configRun = pgTable(
     quotedCost: numeric("quoted_cost", { precision: 18, scale: 4 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("config_run_tenant_project_idx").on(t.tenantId, t.projectId)],
+  // Unique, not plain: one configuration = one run. Covers the same lookups as the old index.
+  (t) => [uniqueIndex("config_run_project_uq").on(t.tenantId, t.projectId)],
 );
 
 export type ConfigProject = typeof configProject.$inferSelect;

@@ -5,7 +5,7 @@ import { db, configHistory, configModel, configProject, configTable } from "@her
 import { checkModel, LookupRefZ, ModelDefZ, ValZ } from "@hera/config-engine";
 import { adminProcedure } from "../base.ts";
 import { assertAgentReady, runRequest } from "./entities.ts";
-import { addQueryTables, fetchQueryTable, optionsFromRef, resolveLookups, tablesFromTenant, type QueryFetcher, type TenantTable } from "../../lookups.ts";
+import { addQueryTables, fetchQueryTable, optionsFromRef, resolveLookups, tablesFromTenant, withSearch, type QueryFetcher, type TenantTable } from "../../lookups.ts";
 import { syncModelHistory } from "../../history-sync.ts";
 
 // Admin-only configurator model builder API. save is the gate: a model that passes
@@ -25,9 +25,9 @@ export async function tenantTables(tenantId: string): Promise<TenantTable[]> {
 }
 
 export function agentFetcher(tenantId: string): QueryFetcher {
-  return async (target, path) => {
+  return async (target, path, opts) => {
     await assertAgentReady(tenantId);
-    return runRequest(tenantId, "query", { target, path });
+    return runRequest(tenantId, "query", { target, path, all: opts?.all !== false });
   };
 }
 
@@ -160,18 +160,27 @@ export const modelsRouter = {
       return { options: options.slice(0, input.limit) };
     }),
 
-  // Query editor "Test fetch": run the GET and report the response field names — a queryTable's
-  // columns are whatever the response returns, never hand-typed.
-  queryPreview: adminProcedure
+  // One page of a query: the editor's "Test fetch" (columns come from the response, never
+  // hand-typed) and the lazy value help both live here. `path` is the query's own path on page 1
+  // and the previous page's @odata.nextLink after that — B1 bakes the search into that link, so
+  // `search` only ever applies to the first page.
+  queryPage: adminProcedure
     .input(z.object({
       target: z.enum(["b1", "beas"]),
       path: z.string().min(1),
-      limit: z.number().int().min(1).max(50).default(10),
+      columns: z.array(z.string()).optional(),
+      search: z.string().optional(),
+      searchCols: z.array(z.string()).optional(),
     }))
-    .handler(async ({ input, context }) => {
-      const t = await fetchQueryTable(agentFetcher(context.tenantId), input.target, input.path);
-      return { columns: t.columns, rows: t.rows.slice(0, input.limit) };
-    }),
+    .handler(({ input, context }) =>
+      fetchQueryTable(
+        agentFetcher(context.tenantId),
+        input.target,
+        withSearch(input.path, input.searchCols ?? [], input.search ?? ""),
+        input.columns,
+        false,
+      ),
+    ),
 
   // "Sync now": run the model's history query through the agent and wholesale-replace config_history.
   syncHistory: adminProcedure.input(z.object({ id: z.uuid() })).handler(async ({ input, context }) => {

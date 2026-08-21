@@ -25,7 +25,9 @@ export function DocHistory({ projectId, model, entries, open }: {
 }) {
   const h = model.history;
   const rawItem = h?.itemCodeParam ? entries[h.itemCodeParam] : undefined;
-  const itemCode = typeof rawItem === "string" && rawItem ? rawItem : undefined;
+  // Debounced: this key drives two live B1 GETs (Orders + Quotations), and every distinct value
+  // is a cache miss — undebounced, typing the item code is one agent round trip per keystroke.
+  const itemCode = useDebounced(typeof rawItem === "string" && rawItem ? rawItem : undefined, 500);
   const q = useQuery({
     ...orpc.configs.docHistory.queryOptions({ input: { id: projectId, itemCode } }),
     enabled: open, // the panel stays mounted when collapsed —

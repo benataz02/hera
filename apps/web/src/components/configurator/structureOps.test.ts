@@ -79,4 +79,51 @@ describe("structureOps", () => {
   test("duplicateParam missing key is a no-op", () => {
     expect(duplicateParam(def, "nope")).toBe(def);
   });
+
+  test("group dropped On another section uniquifies a colliding key", () => {
+    const src = {
+      ...def,
+      structure: {
+        sections: [
+          { key: "s1", title: "S1", groups: [{ key: "group", title: "A", params: ["a"] }] },
+          { key: "s2", title: "S2", groups: [{ key: "group", title: "B", params: ["c"] }] },
+        ],
+      },
+    };
+    const out = applyMove(src, "g:0.0", "s:1", "On");
+    expect(out.structure.sections[0]!.groups).toEqual([]);
+    expect(out.structure.sections[1]!.groups.map((g) => g.key)).toEqual(["group", "group2"]);
+    expect(out.structure.sections[1]!.groups[1]!.params).toEqual(["a"]);
+  });
+
+  test("group Before another group only inserts in the destination section", () => {
+    const src = {
+      ...def,
+      structure: {
+        sections: [
+          { key: "s1", title: "S1", groups: [{ key: "group", title: "A", params: ["a"] }, { key: "g1", title: "G1", params: ["b"] }] },
+          { key: "s2", title: "S2", groups: [{ key: "group", title: "B", params: ["c"] }] },
+        ],
+      },
+    };
+    const out = applyMove(src, "g:0.1", "g:1.0", "Before");
+    expect(out.structure.sections[0]!.groups.map((g) => g.key)).toEqual(["group"]);
+    expect(out.structure.sections[1]!.groups.map((g) => g.key)).toEqual(["g1", "group"]);
+  });
+
+  test("group reorder within a section keeps its key", () => {
+    const src = {
+      ...def,
+      structure: {
+        sections: [
+          { key: "s1", title: "S1", groups: [
+            { key: "g1", title: "G1", params: ["a"] },
+            { key: "g2", title: "G2", params: ["b"] },
+          ] },
+        ],
+      },
+    };
+    const out = applyMove(src, "g:0.0", "g:0.1", "After");
+    expect(out.structure.sections[0]!.groups.map((g) => g.key)).toEqual(["g2", "g1"]);
+  });
 });

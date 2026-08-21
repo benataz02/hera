@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Bar,
   Button,
@@ -13,6 +13,7 @@ import {
   TableRow,
   Text,
 } from "@ui5/webcomponents-react";
+import { useRemoteSearch } from "./ValueHelp.tsx";
 
 export type ValueHelpRow = { key: string; label: string; defaults?: Record<string, unknown> };
 
@@ -85,27 +86,9 @@ export function EntityValueHelp({
 }) {
   const [typed, setTyped] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
-  const primed = useRef(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Metadata only names the target entity — pull page 1 on first focus/open so there is
-  // something to pick before the user types.
-  const prime = () => {
-    if (primed.current || !onSearch) return;
-    primed.current = true;
-    onSearch("");
-  };
-
-  // ponytail: 250ms debounce — one agent→SAP round-trip per pause, not per keystroke.
-  const search = (q: string) => {
-    primed.current = true;
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => onSearch?.(q), 250);
-  };
-
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
-  }, []);
+  // Metadata only names the target entity — `prime` pulls page 1 on first focus/open so there is
+  // something to pick before the user types; `search` debounces the rest.
+  const { prime, search } = useRemoteSearch(onSearch);
 
   // `label` is already resolved by the caller (see useLookupLabel).
   const shown = typed ?? (value ? label || value : "");

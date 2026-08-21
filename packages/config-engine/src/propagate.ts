@@ -1,6 +1,6 @@
 import { evaluate, parse } from "./dsl";
 import type { Entries, ModelDef, Option, ResolvedLookups, Val } from "./model";
-import { derivedKey, refColumns, refKeyCols } from "./model";
+import { derivedKey, derivedColumns, refKeyCols } from "./model";
 
 export type Bindings = {
   values: Record<string, Val>;
@@ -61,7 +61,7 @@ export function bindings(model: ModelDef, lookups: ResolvedLookups, entries: Ent
       const vi = t.columns.indexOf(refKeyCols(ref, t.columns).valueCol);
       const row = vi < 0 ? undefined : t.rows.find((r) => r[vi] === values[p.key]);
       if (!row) continue; // unset/stale value: derived keys stay absent (undecidable, like unbound)
-      for (const col of refColumns(ref, t.columns)) {
+      for (const col of derivedColumns(ref, t.columns)) {
         const ci = t.columns.indexOf(col);
         const v = ci < 0 ? null : (row[ci] ?? null);
         const dk = derivedKey(p.key, col);
@@ -104,6 +104,7 @@ export function propagate(model: ModelDef, lookups: ResolvedLookups, entries: En
   for (const p of model.parameters) {
     const d = domainOf(model, lookups, p.key);
     if (d.length) domains[p.key] = d.map((o) => ({ ...o }));
+    else if (p.key in lookups.domains) domains[p.key] = [];
   }
   const isBound = (k: string) => k in b.values;
   /** evaluate expr with a candidate binding merged in; recomputes defaults/computed */
@@ -126,11 +127,14 @@ export function propagate(model: ModelDef, lookups: ResolvedLookups, entries: En
       if (c.kind === "table") {
         const by = `combination table (${c.params.join(", ")})`;
         const unbound = c.params.filter((k) => !isBound(k) && domains[k]);
+        const allBound = c.params.every(isBound);
         if (c.mode === "allow") {
-          // rows compatible with bound values and live domains of other unbound params
+          // rows compatible with bound values and live domains of other unbound params.
+          // Domainless unbound params are wildcards — they do not reject a row.
           const rowOk = (row: Val[]) =>
             c.params.every((k, i) =>
-              isBound(k) ? b.values[k] === row[i] : (live(domains[k] ?? []).some((o) => o.value === row[i]) ?? false),
+              isBound(k) ? b.values[k] === row[i]
+              : !domains[k] || live(domains[k]).some((o) => o.value === row[i]),
             );
           const kept = c.rows.filter(rowOk);
           for (const k of unbound) {
@@ -139,7 +143,7 @@ export function propagate(model: ModelDef, lookups: ResolvedLookups, entries: En
               if (!kept.some((row) => row[i] === o.value)) kill(k, o.value, by);
             }
           }
-          if (unbound.length === 0 && c.rows.length > 0 && !c.rows.some((row) => c.params.every((k, i) => b.values[k] === row[i])))
+          if (allBound && c.rows.length > 0 && !c.rows.some((row) => c.params.every((k, i) => b.values[k] === row[i])))
             conflicts.push({ message: by + " violated", path: `constraints[${ci}]` });
         } else if (unbound.length === 1) {
           const k = unbound[0]!;
@@ -148,7 +152,7 @@ export function propagate(model: ModelDef, lookups: ResolvedLookups, entries: En
             if (c.rows.some((row) => c.params.every((pk, j) => (j === i ? row[j] === o.value : b.values[pk] === row[j]))))
               kill(k, o.value, by);
           }
-        } else if (unbound.length === 0) {
+        } else if (allBound) {
           if (c.rows.some((row) => c.params.every((k, i) => b.values[k] === row[i])))
             conflicts.push({ message: by + " violated", path: `constraints[${ci}]` });
         }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ModelDefZ, LookupRefZ, refColumns, derivedKey } from "../src/model";
+import { ModelDefZ, LookupRefZ, derivedColumns, displayColumns, derivedKey } from "../src/model";
 import { model } from "./fixture";
 
 describe("ModelDefZ", () => {
@@ -36,13 +36,19 @@ describe("LookupRef columns", () => {
     expect(LookupRefZ.safeParse({ source: "table", table: "mats", valueCol: "code", columns: ["density"] }).success).toBe(true);
   });
 
-  test("refColumns defaults to all source columns except valueCol", () => {
+  test("derivedColumns is every extra column; displayColumns honours the subset", () => {
     const ref = { source: "table", table: "mats", valueCol: "code" } as const;
-    expect(refColumns(ref, ["code", "density", "name"])).toEqual(["density", "name"]);
-    expect(refColumns({ ...ref, columns: ["density"] }, ["code", "density", "name"])).toEqual(["density"]);
-    expect(refColumns({ ...ref, columns: ["density"] }, undefined)).toEqual(["density"]);
-    expect(refColumns(ref, undefined)).toEqual([]);
-    expect(refColumns({ source: "manual", options: [] }, ["x"])).toEqual([]);
+    const all = ["code", "density", "name"];
+    expect(derivedColumns(ref, all)).toEqual(["density", "name"]);
+    expect(derivedColumns({ ...ref, columns: ["density"] }, all)).toEqual(["density", "name"]);
+    expect(derivedColumns({ ...ref, columns: ["density"] }, undefined)).toEqual([]);
+    expect(derivedColumns(ref, undefined)).toEqual([]);
+    expect(derivedColumns({ source: "manual", options: [] }, ["x"])).toEqual([]);
+    expect(displayColumns(ref, all)).toEqual(["density", "name"]);
+    expect(displayColumns({ ...ref, columns: ["density"] }, all)).toEqual(["density"]);
+    expect(displayColumns({ ...ref, columns: ["density"] }, undefined)).toEqual(["density"]);
+    expect(displayColumns(ref, undefined)).toEqual([]);
+    expect(displayColumns({ source: "manual", options: [] }, ["x"])).toEqual([]);
   });
 
   test("derivedKey joins with underscore", () => {

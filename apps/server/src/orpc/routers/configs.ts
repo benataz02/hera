@@ -13,7 +13,7 @@ import {
 import { userProcedure } from "../base.ts";
 import { assertAgentReady, runRequest } from "./entities.ts";
 import { agentFetcher, tenantTables } from "./models.ts";
-import { resolveLookups, type QueryFetcher } from "../../lookups.ts";
+import { enrichLookups, fetchQueryTable, queryPagePath, resolveLookups, type QueryFetcher } from "../../lookups.ts";
 import { docHistoryPath, flattenDocs, sortDocRows } from "../../doc-history.ts";
 import { loadHistoryRows } from "../../history-sync.ts";
 import { scoreRows } from "../../similarity.ts";
@@ -46,7 +46,7 @@ export async function loadModel(tenantId: string, modelId: string) {
   return m;
 }
 
-export async function freshLookups(tenantId: string, model: ModelDef, fetchQuery: QueryFetcher): Promise<ResolvedLookups> {
+async function freshLookups(tenantId: string, model: ModelDef, fetchQuery: QueryFetcher): Promise<ResolvedLookups> {
   try {
     return await resolveLookups(model, await tenantTables(tenantId), fetchQuery);
   } catch (e) {
@@ -58,16 +58,50 @@ export async function freshLookups(tenantId: string, model: ModelDef, fetchQuery
 // ponytail: per-process cache keyed by model updatedAt (auto-invalidates on save);
 // Redis/LRU only if the server ever scales past one Bun process.
 const CACHE_TTL_MS = 5 * 60_000;
-const lookupCache = new Map<string, { at: number; lookups: ResolvedLookups }>();
+// The *promise* is cached, not the value: concurrent cold callers then share one agent round trip
+// instead of racing (same trick as resolveLookups' fetchOnce).
+const lookupCache = new Map<string, { at: number; lookups: Promise<ResolvedLookups> }>();
 
-export async function cachedLookups(tenantId: string, model: Awaited<ReturnType<typeof loadModel>>) {
+/** The one way to resolve a model's lookups. Every caller goes through this cache — a run fired by
+ *  the process page's auto-calculate would otherwise re-GET every query table on each keystroke. */
+export function cachedLookups(
+  tenantId: string, model: Awaited<ReturnType<typeof loadModel>>,
+  fetchQuery?: QueryFetcher,
+): Promise<ResolvedLookups> {
   const key = `${tenantId}:${model.id}:${model.updatedAt.getTime()}`;
   const hit = lookupCache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.lookups;
-  if (needsAgent(model.definition)) await assertAgentReady(tenantId);
-  const lookups = await freshLookups(tenantId, model.definition, agentFetcher(tenantId));
-  lookupCache.set(key, { at: Date.now(), lookups });
-  return lookups;
+  // An injected fetcher is the test seam (see configurator.test.ts); the real agentFetcher asserts
+  // readiness per fetch itself; this check fails fast before tenant-table resolution.
+  const ready = fetchQuery || !needsAgent(model.definition) ? Promise.resolve() : assertAgentReady(tenantId);
+  const p = ready.then(() => freshLookups(tenantId, model.definition, fetchQuery ?? agentFetcher(tenantId)));
+  p.catch(() => lookupCache.delete(key)); // an offline agent must not poison the key for 5 minutes
+  lookupCache.set(key, { at: Date.now(), lookups: p });
+  return p;
+}
+
+/** One page of a model's query table, for the value help. The caller names a table; the path is
+ *  resolved from the stored model by queryPagePath (`models.queryPage` is the raw-path variant and
+ *  stays admin-only). */
+export const QueryPageZ = z.object({
+  modelId: z.uuid(),
+  table: z.string().min(1),
+  search: z.string().optional(),
+  searchCols: z.array(z.string()).optional(),
+  cursor: z.string().optional(),
+});
+
+export async function queryTablePage(
+  tenantId: string, definition: ModelDef, input: z.infer<typeof QueryPageZ>,
+) {
+  let q;
+  try {
+    q = queryPagePath(definition, input);
+  } catch (e) {
+    throw new ORPCError("BAD_REQUEST", { message: e instanceof Error ? e.message : String(e) });
+  }
+  await assertAgentReady(tenantId);
+  return fetchQueryTable(agentFetcher(tenantId), q.target, q.path, q.columns, false);
 }
 
 /** Guarded run path shared by configs.run and Chati's calculate tool. expectedVersion=null skips
@@ -85,12 +119,12 @@ export async function executeRunFromSnapshot(
     throw new ORPCError("CONFLICT", { message: "STATE_CHANGED" });
 
   const model = await loadModel(tenantId, project.modelId);
-  const lookups = await freshLookups(tenantId, model.definition, fetchQuery);
 
-  // Reuse check against the latest run (cheap JSON equality; snapshots are canonical already).
+  // Reuse check against the project's run (cheap JSON equality; snapshots are canonical already).
+  // Runs before the lookups resolve: it needs only snapshots/entries/batches, and a no-op
+  // recalculate must not pay for a resolution it is about to throw away.
   const [latest] = await db.select().from(configRun)
-    .where(and(eq(configRun.projectId, projectId), eq(configRun.tenantId, tenantId)))
-    .orderBy(desc(configRun.createdAt)).limit(1);
+    .where(and(eq(configRun.projectId, projectId), eq(configRun.tenantId, tenantId))).limit(1);
   const batchesOf = (r: { candidates: RunCandidate[] }) => r.candidates[0]?.perBatch.map((b) => b.batchQty) ?? [];
   if (
     latest && project.status === "calculated" &&
@@ -99,12 +133,15 @@ export async function executeRunFromSnapshot(
     JSON.stringify(latest.modelSnapshot) === JSON.stringify(model.definition)
   ) {
     return {
-      runId: latest.id, projectVersion: project.updatedAt.toISOString(),
-      selectionVersion: latest.selectionVersion, reused: true,
+      runId: latest.id, projectVersion: project.updatedAt.toISOString(), reused: true,
       candidateCount: latest.candidates.length, capped: latest.candidates.length >= 200,
       widest: undefined, candidates: latest.candidates,
     };
   }
+
+  const lookups = await enrichLookups(
+    model.definition, entries, await cachedLookups(tenantId, model, fetchQuery), fetchQuery,
+  );
 
   try {
     const pre = propagate(model.definition, lookups, entries);
@@ -136,13 +173,17 @@ export async function executeRunFromSnapshot(
         ))
         .returning({ id: configProject.id });
       if (!updated.length) throw new ORPCError("CONFLICT", { message: "STATE_CHANGED" });
+      // One configuration = one run. A quoted project is locked by assertConfigMutable, so this can
+      // never delete a run that reached SAP. Delete+insert (not upsert) so the id changes and any
+      // stale runId a client still holds fails loudly instead of binding to fresh candidates.
+      await tx.delete(configRun).where(and(eq(configRun.projectId, projectId), eq(configRun.tenantId, tenantId)));
       const [run] = await tx.insert(configRun).values({
         tenantId, projectId, modelSnapshot: model.definition, lookupSnapshot: lookups, entries, candidates,
       }).returning({ id: configRun.id });
       return run!.id;
     });
     return {
-      runId, projectVersion: now.toISOString(), selectionVersion: 0, reused: false,
+      runId, projectVersion: now.toISOString(), reused: false,
       candidateCount: candidates.length, capped: en.capped, widest: en.widest, candidates,
     };
   } catch (e) {
@@ -280,7 +321,6 @@ export const configsRouter = {
       .select()
       .from(configRun)
       .where(and(eq(configRun.projectId, project.id), eq(configRun.tenantId, context.tenantId)))
-      .orderBy(desc(configRun.createdAt))
       .limit(1);
     const [creator] = await db.select({ email: user.email }).from(user).where(eq(user.id, project.createdBy)).limit(1);
     return { project, model, latestRun: latestRun ?? null, createdByEmail: creator?.email ?? null };
@@ -355,10 +395,22 @@ export const configsRouter = {
     return { ok: true };
   }),
 
-  // Resolved lookups for client-side live propagation (wizard step 1). Cached ~5 min;
-  // key includes the model's updatedAt so a model save is picked up immediately.
-  lookups: userProcedure.input(z.object({ modelId: z.uuid() })).handler(async ({ input, context }) =>
-    cachedLookups(context.tenantId, await loadModel(context.tenantId, input.modelId))),
+  // Resolved lookups for client-side live propagation (wizard step 1). Cached ~5 min; key includes
+  // the model's updatedAt so a model save is picked up immediately. Query tables contain the same
+  // canonical first page used by runs, extraction, the assistant, and portal imports.
+  lookups: userProcedure
+    .input(z.object({ modelId: z.uuid(), entries: EntriesZ.optional() }))
+    .handler(async ({ input, context }) => {
+      const model = await loadModel(context.tenantId, input.modelId);
+      return enrichLookups(
+        model.definition, input.entries ?? {}, await cachedLookups(context.tenantId, model),
+        agentFetcher(context.tenantId),
+      );
+    }),
+
+  // Value help paging for a query-backed parameter (see queryTablePage).
+  queryPage: userProcedure.input(QueryPageZ).handler(async ({ input, context }) =>
+    queryTablePage(context.tenantId, (await loadModel(context.tenantId, input.modelId)).definition, input)),
 
   // Exact help: live B1 Orders + Quotations for the project customer and/or the item-code param.
   // itemCode comes from the client (current unsaved entry); it is only ever a quoted filter value.
@@ -386,12 +438,11 @@ export const configsRouter = {
   }),
 
   // Store the user's candidate/batch/override picks; totals are recomputed HERE from the
-  // run snapshot — client-sent numbers are never persisted. Fenced by expectedSelectionVersion.
+  // run snapshot — client-sent numbers are never persisted. The FOR UPDATE below is the fence.
   select: userProcedure
     .input(z.object({
       runId: z.uuid(),
       selection: z.array(SelectionZ).min(1),
-      expectedSelectionVersion: z.number().int().min(0),
     }))
     .handler(async ({ input, context }) => {
       return db.transaction(async (tx) => {
@@ -402,19 +453,13 @@ export const configsRouter = {
           .for("update");
         if (!run) throw new ORPCError("NOT_FOUND");
         await assertConfigMutable(context.tenantId, run.projectId, tx);
-        if (run.selectionVersion !== input.expectedSelectionVersion) {
-          throw new ORPCError("CONFLICT", {
-            message: "Selection changed since expectedSelectionVersion; reload and retry",
-          });
-        }
         validateSelectionPairs(run, input.selection);
         const selections = applySelection(run, input.selection);
-        const selectionVersion = input.expectedSelectionVersion + 1;
         await tx
           .update(configRun)
-          .set({ selection: input.selection, selectionVersion })
+          .set({ selection: input.selection })
           .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, context.tenantId)));
-        return { selections, selectionVersion };
+        return { selections };
       });
     }),
 
@@ -431,12 +476,7 @@ export const configsRouter = {
       const [run] = await db
         .select()
         .from(configRun)
-        .where(and(
-          eq(configRun.projectId, project.id),
-          eq(configRun.tenantId, context.tenantId),
-          sql`${configRun.selection} is not null`,
-        ))
-        .orderBy(desc(configRun.createdAt))
+        .where(and(eq(configRun.projectId, project.id), eq(configRun.tenantId, context.tenantId)))
         .limit(1);
       if (!run?.selection?.length) {
         throw new ORPCError("BAD_REQUEST", { message: "Select candidates before creating a quote draft" });
@@ -445,7 +485,7 @@ export const configsRouter = {
         tenantId: context.tenantId,
         projectId: project.id,
         runId: run.id,
-        selectionVersion: run.selectionVersion,
+        selection: run.selection,
       });
       const entity = "Quotations";
       const profile = getEntityProfile(entity);
@@ -458,7 +498,6 @@ export const configsRouter = {
       return {
         projectId: project.id,
         runId: run.id,
-        selectionVersion: run.selectionVersion,
         commandId,
         data: buildQuoteSeed(project, run),
         schema,
@@ -467,13 +506,13 @@ export const configsRouter = {
     }),
 
   // Enqueue a Quotations create with server-derived command id + config-document origin.
-  // Fenced: FOR UPDATE project (single-flight across runs) → FOR UPDATE run →
-  // status / assertConfigMutable / selectionVersion → enqueue on the same tx.
+  // Fenced: FOR UPDATE project (single-flight) → FOR UPDATE run →
+  // status / assertConfigMutable / commandId match → enqueue on the same tx.
   createQuote: userProcedure
     .input(z.object({
       projectId: z.uuid(),
       runId: z.uuid(),
-      selectionVersion: z.number().int().min(0),
+      commandId: z.string().length(64),
       data: z.record(z.string(), z.unknown()),
     }))
     .handler(async ({ input, context }) => {
@@ -529,16 +568,20 @@ export const configsRouter = {
         // Same connection as the locked project/run: pending/in_flight config-document write blocks create.
         await assertConfigMutable(context.tenantId, run.projectId, tx);
 
-        if (run.selectionVersion !== input.selectionVersion || !run.selection?.length) {
+        // Re-derive the id from the locked selection: if it no longer matches the one the client
+        // took from quoteDraft, the picks changed underneath it.
+        if (!run.selection?.length) {
           throw new ORPCError("CONFLICT", { message: "Selection changed; reload the quote draft" });
         }
-
         const commandId = configDocumentCommandId({
           tenantId: context.tenantId,
           projectId: project.id,
           runId: run.id,
-          selectionVersion: run.selectionVersion,
+          selection: run.selection,
         });
+        if (commandId !== input.commandId) {
+          throw new ORPCError("CONFLICT", { message: "Selection changed; reload the quote draft" });
+        }
         const payload = normalizeWriteInput({
           operation: "create",
           entity,
@@ -548,7 +591,6 @@ export const configsRouter = {
             kind: "config-document",
             projectId: project.id,
             runId: run.id,
-            selectionVersion: run.selectionVersion,
           },
           schema,
           profile,

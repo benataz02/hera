@@ -34,7 +34,7 @@ export async function syncModelHistory(
 ): Promise<{ count: number }> {
   const q = def.history?.query;
   if (!q?.path) throw new Error("Model has no history query");
-  const t = await fetchQueryTable(fetchQuery, q.target, q.path, q.columns);
+  const t = await fetchQueryTable(fetchQuery, q.target, q.path, q.columns, true);
   const rows = t.rows.map((r) => Object.fromEntries(t.columns.map((c, i) => [c, r[i] ?? null])));
   await db.transaction(async (tx) => {
     await tx.delete(configHistory).where(and(eq(configHistory.tenantId, tenantId), eq(configHistory.modelId, modelId)));
@@ -60,8 +60,8 @@ export function startHistorySync(): void {
       for (const m of models) {
         try {
           await assertAgentReady(m.tenantId);
-          const { count } = await syncModelHistory(m.tenantId, m.id, m.definition, (target, path) =>
-            runRequest(m.tenantId, "query", { target, path }));
+          const { count } = await syncModelHistory(m.tenantId, m.id, m.definition, (target, path, opts) =>
+            runRequest(m.tenantId, "query", { target, path, all: opts?.all !== false }));
           console.log(`[history-sync] ${m.tenantId}/${m.id}: ${count} rows`);
         } catch (e) {
           console.error(`[history-sync] ${m.tenantId}/${m.id} failed: ${e instanceof Error ? e.message : e}`);

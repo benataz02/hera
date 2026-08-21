@@ -19,7 +19,6 @@ export type WritePayload = {
     kind: "config-document";
     projectId: string;
     runId: string;
-    selectionVersion: number;
   };
 };
 

@@ -1,15 +1,15 @@
 import { useMemo, useState } from "react";
 import {
-  Bar, BusyIndicator, Button, CheckBox, Form, FormGroup, FormItem, Icon, Input, Label, MessageStrip,
+  Bar, Button, CheckBox, Form, FormGroup, FormItem, Icon, Input, Label, MessageStrip,
   MultiComboBox, MultiComboBoxItem, ObjectStatus, Option, RadioButton, Select, StepInput,
   Text, Title, Token, Tokenizer,
 } from "@ui5/webcomponents-react";
 import {
-  propagate, refColumns, refKeyCols,
-  type DomainOption, type Entries, type LookupRef, type ModelDef, type ResolvedLookups, type ResolvedTable, type Val,
+  displayColumns, refKeyCols,
+  type DomainOption, type Entries, type LookupRef, type ModelDef, type Propagation, type ResolvedLookups, type ResolvedTable, type Val,
 } from "@hera/config-engine";
-import { ValueHelp } from "../ValueHelp.tsx";
-import { clientBaseLookups } from "./formHelpers.ts";
+import { QueryValueHelp, type QuerySource } from "../ValueHelp.tsx";
+import { setEntry } from "./formHelpers.ts";
 import { money, paramPrices } from "./costElements.ts";
 
 /** The ref's display columns for one option value, joined — shown next to the option. */
@@ -18,7 +18,7 @@ function extraOf(ref: LookupRef, t: ResolvedTable | undefined, val: Val): string
   const vi = t.columns.indexOf(refKeyCols(ref, t.columns).valueCol);
   const row = vi < 0 ? undefined : t.rows.find((r) => r[vi] === val);
   if (!row) return undefined;
-  const s = refColumns(ref, t.columns).map((c) => String(row[t.columns.indexOf(c)] ?? "")).filter(Boolean).join(" · ");
+  const s = displayColumns(ref, t.columns).map((c) => String(row[t.columns.indexOf(c)] ?? "")).filter(Boolean).join(" · ");
   return s || undefined;
 }
 
@@ -27,15 +27,8 @@ function extraOf(ref: LookupRef, t: ResolvedTable | undefined, val: Val): string
 // keep the internal Configure step together; scrolling, footers and consistency stay with the caller.
 
 /** The signature answer to "is this consistent and how big is it?" — one component so the
- *  string stays identical in the wizard bar, the preview footer and the portal step.
- *  ponytail: recomputes propagate() alongside the form's own call; memoized, fine at this scale. */
-export function ConsistencyStatus({ model, lookups, entries }: {
-  model: ModelDef;
-  lookups?: ResolvedLookups;
-  entries: Entries;
-}) {
-  const lk = useMemo(() => lookups ?? clientBaseLookups(model), [lookups, model]);
-  const prop = useMemo(() => propagate(model, lk, entries), [model, lk, entries]);
+ *  string stays identical in the wizard bar, the preview footer and the portal step. */
+export function ConsistencyStatus({ prop }: { prop: Propagation }) {
   const conflict = prop.conflicts.length ? prop.conflicts.map((c) => c.message).join(" · ") : null;
   return (
     <ObjectStatus state={conflict ? "Negative" : "Positive"}>
@@ -47,22 +40,25 @@ export function ConsistencyStatus({ model, lookups, entries }: {
 // labelSpan 12 everywhere = labels on top of their fields (natively left-aligned), field takes the full column.
 const FORM_PROPS = { labelSpan: "S12 M12 L12 XL12", layout: "S1 M2 L2 XL2", headerLevel: "H5" } as const;
 
-export function ConfiguratorForm({ model, lookups, entries, onChange, loading, section, aiMarks, disabled }: {
+export function ConfiguratorForm({ model, lookups, lk, prop, entries, onChange, onQueryPick, section, aiMarks, disabled, querySource }: {
   model: ModelDef;
-  lookups?: ResolvedLookups;
+  /** Canonical first-page snapshot — seeds query value help. */
+  lookups: ResolvedLookups;
+  /** Canonical tables plus the current off-page row per query param. */
+  lk: ResolvedLookups;
+  prop: Propagation;
   entries: Entries;
   onChange: (next: Entries) => void;
-  /** the single lookups fetch is still in flight — table/query fields show a spinner until it lands */
-  loading?: boolean;
+  onQueryPick: (paramKey: string, table: string, selected: ResolvedTable | undefined) => void;
   /** render only this section, without its own Form header — the caller shows the title (e.g. an ObjectPageSection) */
   section?: string;
   /** paramKey → evidence tooltip, for values Chati just set — renders an "AI" chip next to the field */
   aiMarks?: Map<string, string>;
   /** disables every control while Chati is running a turn; manual edits stay blocked until it settles */
   disabled?: boolean;
+  /** where a query field fetches its pages — nothing is fetched until the user opens or types */
+  querySource: QuerySource;
 }) {
-  const lk = useMemo(() => lookups ?? clientBaseLookups(model), [lookups, model]);
-  const prop = useMemo(() => propagate(model, lk, entries), [model, lk, entries]);
   // Same source the rail's Costs card reads, so a badge and the card can never disagree.
   const priceOf = useMemo(
     () => new Map(paramPrices(model, prop, lk.tables).map((c) => [c.key, c.amount])),
@@ -70,9 +66,12 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, s
   );
 
   const set = (key: string, v: Val | undefined) => {
-    const next = { ...entries };
-    if (v === undefined) delete next[key];
-    else next[key] = v;
+    if (v === undefined) {
+      const ref = model.parameters.find((x) => x.key === key)?.domain;
+      if (ref?.kind === "options" && ref.ref.source === "query") onQueryPick(key, ref.ref.table, undefined);
+    }
+    const next = setEntry(entries, key, v);
+    if (next === entries) return;
     onChange(next);
   };
 
@@ -84,11 +83,7 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, s
     // announced — and these fields exist precisely to be read.
     const ro = !!p.readonly;
 
-    // Server-backed options (config table / query) arrive with the single lookups fetch; spin
-    // just this field until it lands. Manual/range/plain fields resolve client-side and stay usable.
     const ref = p.domain?.kind === "options" ? p.domain.ref : undefined;
-    if (loading && (ref?.source === "table" || ref?.source === "query") && dom.length === 0)
-      return <BusyIndicator active delay={0} />;
 
     if (p.ui === "radio")
       return (
@@ -138,14 +133,13 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, s
     }
 
     if (p.domain?.kind === "options" && p.domain.ref.source === "query") {
-      // ponytail: every option is rendered as a suggestion child and filtered locally;
-      // cap or virtualize if a query ever returns thousands of rows.
       const ref: LookupRef = p.domain.ref;
-      const tbl = lk.tables[ref.table];
       return (
-        <ValueHelp options={dom} value={v} onChange={(nv) => set(key, nv)} headerText={p.label} disabled={disabled} readonly={ro}
-          table={tbl} valueCol={tbl && refKeyCols(ref, tbl.columns).valueCol}
-          columns={tbl && refColumns(ref, tbl.columns)} />
+        <QueryValueHelp source={querySource} queryTable={model.queryTables.find((q) => q.name === ref.table)}
+          canonicalTable={lookups.tables[ref.table]} lookupRef={ref}
+          value={v} onChange={(nv) => set(key, nv)} headerText={p.label}
+          disabled={disabled} readonly={ro}
+          onPick={(t) => onQueryPick(key, ref.table, t)} />
       );
     }
 
@@ -190,10 +184,10 @@ export function ConfiguratorForm({ model, lookups, entries, onChange, loading, s
   const shown = model.structure.sections.filter((s) => !section || s.key === section);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-      {shown.map((s) => (
-        <Form key={s.key} headerText={section ? undefined : s.title} {...FORM_PROPS}>
-          {s.groups.map((g) => (
-            <FormGroup key={g.key} headerText={g.title}>
+      {shown.map((s, si) => (
+        <Form key={`${s.key}:${si}`} headerText={section ? undefined : s.title} {...FORM_PROPS}>
+          {s.groups.map((g, gi) => (
+            <FormGroup key={`${g.key}:${gi}`} headerText={g.title}>
               {g.params.filter((k) => prop.visible[k]).map((k) => {
                 const p = model.parameters.find((x) => x.key === k);
                 if (!p) return null;

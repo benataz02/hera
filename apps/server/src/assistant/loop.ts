@@ -28,6 +28,8 @@ import {
   renewLease, runToolOperation, updateWorking,
   LEASE_RENEW_MS, type TurnRow,
 } from "./turns.ts";
+import { enrichLookups } from "../lookups.ts";
+import { agentFetcher } from "../orpc/routers/models.ts";
 
 // The turn engine. Everything it needs is imported directly — `db`, the project/model loaders,
 // the executors, the provider adapter, policy and audit. There is no injected `AssistantDeps`
@@ -221,7 +223,8 @@ function validateEntries(model: ModelDef, lookups: ResolvedLookups, entries: Ent
       throw new ORPCError("BAD_REQUEST", { message: `${key} has the wrong type` });
     if (v !== null && v !== undefined) {
       const domain = domainOf(model, lookups, key);
-      if (domain.length && !domain.some((o) => o.value === v))
+      const queryBacked = p.domain?.kind === "options" && p.domain.ref.source === "query";
+      if (!queryBacked && domain.length && !domain.some((o) => o.value === v))
         throw new ORPCError("BAD_REQUEST", { message: `${key} is not one of the allowed values` });
     }
   }
@@ -254,9 +257,9 @@ function domainEventFor(name: ToolName, turnId: string, seq: number, out: Record
     case "searchSimilar": case "getDocHistory": case "previewCandidates":
       return { type: "result", turnId, seq, tool: name, resultId: out.resultId as string, observedProjectVersion: out.observedProjectVersion as string, data: out };
     case "calculate":
-      return { type: "candidates", turnId, seq, runId: out.runId as string, projectVersion: out.projectVersion as string, selectionVersion: out.selectionVersion as number, candidateCount: out.candidateCount as number, top: out.top as { candidateId: string; label: string; keyFigure?: string }[] };
+      return { type: "candidates", turnId, seq, runId: out.runId as string, projectVersion: out.projectVersion as string, candidateCount: out.candidateCount as number, top: out.top as { candidateId: string; label: string; keyFigure?: string }[] };
     case "selectCandidates":
-      return { type: "selection", turnId, seq, runId: out.runId as string, selectionVersion: out.selectionVersion as number, selections: out.selections as { candidateId: string; batchQty: number }[] };
+      return { type: "selection", turnId, seq, runId: out.runId as string, selections: out.selections as { candidateId: string; batchQty: number }[] };
     default:
       return null; // extractFromDrawing (fed back to the model only) / suggestFollowUps (stashed for `done`)
   }
@@ -338,7 +341,9 @@ export async function* runTurn(
   }
 
   const model = await loadModel(tenantId, project.modelId);
-  const lookups = await cachedLookups(tenantId, model);
+  const lookups = await enrichLookups(
+    model.definition, input.entries as Entries, await cachedLookups(tenantId, model), agentFetcher(tenantId),
+  );
   validateEntries(model.definition, lookups, input.entries as Entries);
   mark("prep"); // project + conversation + turn peek + model + lookups (agent/B1 hop on a cache miss)
 

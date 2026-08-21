@@ -1,7 +1,7 @@
 import { useMemo, type CSSProperties } from "react";
 import { Input, SuggestionItemCustom } from "@ui5/webcomponents-react";
 import { DslError, parse, type Issue, type ModelDef } from "@hera/config-engine";
-import { complete, matches, scopeSuggestions } from "./exprHelpers.ts";
+import { complete, matches, scopeSuggestions, type TableCols } from "./exprHelpers.ts";
 
 // The one expression editor used everywhere in the builder: monospace, parse-on-change with
 // span-accurate messages, trailing-token suggestions in the Input's native popup. Each
@@ -20,6 +20,7 @@ export function ExprInput({
   onChange,
   model,
   extraVars,
+  tables,
   placeholder,
   optional = false,
   issue,
@@ -30,6 +31,7 @@ export function ExprInput({
   onChange: (v: string | undefined) => void;
   model: ModelDef;
   extraVars?: string[];
+  tables?: TableCols[];
   placeholder?: string;
   /** empty input -> undefined (for condition/when/default fields) */
   optional?: boolean;
@@ -40,7 +42,7 @@ export function ExprInput({
   style?: CSSProperties;
 }) {
   const text = value ?? "";
-  const all = useMemo(() => scopeSuggestions(model, extraVars), [model, extraVars]);
+  const all = useMemo(() => scopeSuggestions(model, extraVars, tables), [model, extraVars, tables]);
 
   const parseError = useMemo(() => {
     if (text.trim() === "") return null; // emptiness is the caller's concern (optional/required)
@@ -57,6 +59,7 @@ export function ExprInput({
     : "";
 
   const sugg = matches(all, text).slice(0, 8);
+  const emit = (v: string | undefined) => onChange(!v && optional ? undefined : (v ?? ""));
 
   return (
     <Input
@@ -68,11 +71,12 @@ export function ExprInput({
       valueState={error ? "Negative" : "None"}
       valueStateMessage={<div>{errorText}</div>}
       showSuggestions
+      filter="None"
       noTypeahead // items carry the whole completed expression; autocompleting it while typing fights the caret
-      onInput={(e) => {
-        const v = e.target.value ?? "";
-        onChange(v === "" && optional ? undefined : v);
-      }}
+      onInput={(e) => emit(e.target.value)}
+      // UI5 fires `change` (not `input`) when a suggestion is accepted — without this the
+      // picked completion lands in the DOM only and state keeps the typed fragment.
+      onChange={(e) => emit(e.target.value)}
       data-expr-input
     >
       {sugg.map((s) => (
