@@ -50,3 +50,39 @@ describe("spec test 5 — CardCode scoping", () => {
     expect(await code(call(router.portal.projects.create, { modelId: hidden, name: "x" }, s.ctxA))).toBe("NOT_FOUND");
   });
 });
+
+// `me` is what the browser's _authed guard leans on now that setActive is gone: it must resolve
+// the tenant from the host and refuse anyone who isn't a member of it.
+describe("me — subdomain membership boundary", () => {
+  test("returns the org id, role and user for a member; works for portal (client) accounts", async () => {
+    const { tenantId, slug } = await makeTenant();
+    const admin = await makeUser("admin", tenantId);
+    const client = await makeUser("client", tenantId);
+
+    const asAdmin = await call(router.me, undefined, { context: { headers: tenantHeaders(slug, admin.cookie) } });
+    expect(asAdmin).toMatchObject({ tenantId, role: "admin" });
+    // The web app reads identity off this too, so `user` has to come back with it.
+    expect(asAdmin.user.id).toBe(admin.userId);
+    expect(asAdmin.user.email).toBe(admin.email);
+    // userProcedure fences clients out; me must not, or the portal never learns its role.
+    expect(await call(router.me, undefined, { context: { headers: tenantHeaders(slug, client.cookie) } }))
+      .toMatchObject({ tenantId, role: "client" });
+  });
+
+  test("FORBIDDEN on another tenant's host, BAD_REQUEST on the apex", async () => {
+    const a = await makeTenant();
+    const b = await makeTenant();
+    const outsider = await makeUser("admin", a.tenantId); // member of a, not b
+
+    expect(await code(call(router.me, undefined, { context: { headers: tenantHeaders(b.slug, outsider.cookie) } })))
+      .toBe("FORBIDDEN");
+    expect(await code(call(router.me, undefined, { context: { headers: new Headers({ cookie: outsider.cookie }) } })))
+      .toBe("BAD_REQUEST");
+  });
+
+  test("UNAUTHORIZED without a session", async () => {
+    const { slug } = await makeTenant();
+    expect(await code(call(router.me, undefined, { context: { headers: tenantHeaders(slug) } })))
+      .toBe("UNAUTHORIZED");
+  });
+});

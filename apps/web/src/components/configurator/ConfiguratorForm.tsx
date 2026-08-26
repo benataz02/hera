@@ -5,7 +5,7 @@ import {
   Text, Title, Token, Tokenizer,
 } from "@ui5/webcomponents-react";
 import {
-  displayColumns, refKeyCols,
+  displayColumns, domainOf, refKeyCols,
   type DomainOption, type Entries, type LookupRef, type ModelDef, type Propagation, type ResolvedLookups, type ResolvedTable, type Val,
 } from "@hera/config-engine";
 import { QueryValueHelp, type QuerySource } from "../ValueHelp.tsx";
@@ -77,7 +77,7 @@ export function ConfiguratorForm({ model, lookups, lk, prop, entries, onChange, 
 
   const control = (key: string) => {
     const p = model.parameters.find((x) => x.key === key)!;
-    const dom: DomainOption[] = prop.domains[key] ?? [];
+    const dom: DomainOption[] = prop.domains[key] ?? domainOf(model, lookups, key);
     const v = prop.values[key];
     // readonly, not disabled: a read-only field stays focusable, copyable and screen-reader
     // announced — and these fields exist precisely to be read.
@@ -191,7 +191,7 @@ export function ConfiguratorForm({ model, lookups, lk, prop, entries, onChange, 
               {g.params.filter((k) => prop.visible[k]).map((k) => {
                 const p = model.parameters.find((x) => x.key === k);
                 if (!p) return null;
-                const dom: DomainOption[] = prop.domains[k] ?? [];
+                const dom: DomainOption[] = prop.domains[k] ?? domainOf(model, lookups, k);
                 const eliminated = dom.filter((o) => o.eliminatedBy).length;
                 // MultiComboBox filters eliminated options out (no per-item disabled in UI5 v2), so
                 // unlike Select/Radio it can't show them greyed — explain the gap with a count instead.

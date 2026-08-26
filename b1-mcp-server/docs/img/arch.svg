@@ -1,0 +1,585 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns:pencil="http://www.evolus.vn/Namespace/Pencil" xmlns:html="http://www.w3.org/1999/xhtml" xmlns:xhtml="http://www.w3.org/1999/xhtml" xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:chart="urn:oasis:names:tc:opendocument:xmlns:chart:1.0" xmlns:dr3d="urn:oasis:names:tc:opendocument:xmlns:dr3d:1.0" xmlns:math="http://www.w3.org/1998/Math/MathML" xmlns:form="urn:oasis:names:tc:opendocument:xmlns:form:1.0" xmlns:script="urn:oasis:names:tc:opendocument:xmlns:script:1.0" xmlns:ooo="http://openoffice.org/2004/office" xmlns:ooow="http://openoffice.org/2004/writer" xmlns:oooc="http://openoffice.org/2004/calc" xmlns:dom="http://www.w3.org/2001/xml-events" xmlns:xforms="http://www.w3.org/2002/xforms" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:rpt="http://openoffice.org/2005/report" xmlns:of="urn:oasis:names:tc:opendocument:xmlns:of:1.2" xmlns:rdfa="http://docs.oasis-open.org/opendocument/meta/rdfa#" xmlns:field="urn:openoffice:names:experimental:ooo-ms-interop:xmlns:field:1.0" xmlns:regexp="http://exslt.org/regular-expressions" xmlns:em="http://exslt.org/math" xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="900" height="409" id="exportedSVG" version="1.1" pencil:version="1.2.2" sodipodi:docname="b1-mcp-server"><g inkscape:label="arch-sample" inkscape:groupmode="layer" id="layer_archsample"><g><rect x="0" y="0" width="900" height="409" fill="none"/><g p:type="Shape" p:def="tamBD:BDAgent_V003" p:sc="Human Agent" id="56fc77093a30440093d245bfa239f844" transform="matrix(1,0,0,1,22,154)"><p:metadata><p:property name="box">70,104</p:property><p:property name="BOOLallowMultiple">true</p:property><p:property name="BOOLisMultiple">false</p:property><p:property name="BOOLallowHuman">true</p:property><p:property name="BOOLshowHuman">true</p:property><p:property name="HNDLhumanPos">35,52</p:property><p:property name="ENUMhumanSize">1.5</p:property><p:property name="ENUMmood">happy</p:property><p:property name="fillColor">#FFFFFFFF</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">2|</p:property><p:property name="TTXTlabel"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,2</p:property></p:metadata>
+        <rect x="0" y="0" p:name="rectMultiple" id="facc3591cd404dc1850c1b81c5510012" transform="translate(8,-8)" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: hidden; display: none;" height="104" width="70"/>
+        <rect x="0" y="0" p:name="rect" id="f7923119d31141a89d9733dcbe022e3a" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2;" height="104" width="70"/>
+        <text text-anchor="start" xml:space="preserve" p:name="text" id="2cb1892754db4778956d2d23ab5a950a" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;" transform="translate(35,99)"/>
+
+            <g p:name="stickman" id="7042e13c9a964080856ff6757bcb6e91" transform="translate(35,52) scale(1.5,1.5)" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: visible;">
+            <ellipse style="opacity:1;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1" cx="0" cy="-7.5" rx="3" ry="3" p:name="head" id="c8f441dda8094deabb0b830978ff024a"/>
+            <path d="m 0,-4.5 0,7.5" style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" p:name="body" id="d66278c372b447578cf04a5adf47cba0"/>
+            <path style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" d="m 0,3 -5,7" p:name="leftLeg" id="4a9dfd3cb50b41cb834982ff941deb8d"/>
+            <path style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" d="m 0,3 5,7" p:name="rightLeg" id="dbe39b916f964570a24a8821c8789ab1"/>
+            <path style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" sodipodi:nodetypes="cc" p:name="leftArm" id="68413a3bf4554c6f836636119e47a65a" d="m 0,-1 -5,-3"/>
+            <path sodipodi:nodetypes="cc" style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" p:name="rightArm" id="53e6bfee9b8c4f2da24a13dd9bbdbc32" d="m 0,-1 5,-3"/>
+           </g>
+
+
+    </g><g p:type="Shape" p:def="tamAnnot:AllDRoundedRectangle_V002" p:sc="Rectangle" id="7e4599f6383f46648cd9ca5a0b4ea088" transform="matrix(1,0,0,1,171,133)"><p:metadata><p:property name="box">165,136</p:property><p:property name="BOOLallowRoundedCorners">true</p:property><p:property name="BOOLhasRoundedCorners">false</p:property><p:property name="BOOLallowMultiple">true</p:property><p:property name="BOOLisMultiple">false</p:property><p:property name="HNDLcornerRadius">20,0</p:property><p:property name="fillColor">#FFFFFFFF</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">2|</p:property><p:property name="TTXTlabel"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+        <rect x="0" y="0" p:name="rectMultiple" id="f7663e5f3e57429fb87e1a49b72e76d8" rx="0" ry="0" transform="translate(8,-8)" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: hidden; display: none;" height="136" width="165"/>
+        <rect x="0" y="0" p:name="rect" id="f218dd62c28d4c27a8724ebf977e89d8" rx="0" ry="0" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2;" height="136" width="165"/>
+        <text text-anchor="start" xml:space="preserve" p:name="text" id="01ca359b2411464291af9cb9975480d7" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;" transform="translate(83,68)"/>
+    </g><g p:type="Shape" p:def="tamAnnot:AllDRoundedRectangle_V002" p:sc="Rectangle" id="4c44d77c9ba54f6e82390ebf19346c73" transform="matrix(1,0,0,1,171,13)"><p:metadata><p:property name="box">724,54</p:property><p:property name="BOOLallowRoundedCorners">true</p:property><p:property name="BOOLhasRoundedCorners">false</p:property><p:property name="BOOLallowMultiple">true</p:property><p:property name="BOOLisMultiple">false</p:property><p:property name="HNDLcornerRadius">20,0</p:property><p:property name="fillColor">#FFFFFFFF</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">2|</p:property><p:property name="TTXTlabel">B1 IAM Server(KeyCloak)</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+        <rect x="0" y="0" p:name="rectMultiple" id="259d07b427dd44cc9a5f1695cbfc0444" rx="0" ry="0" transform="translate(8,-8)" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: hidden; display: none;" height="54" width="724"/>
+        <rect x="0" y="0" p:name="rect" id="c5f9fdd99a8948e9b3a11a49d18046dc" rx="0" ry="0" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2;" height="54" width="724"/>
+        <text text-anchor="start" xml:space="preserve" p:name="text" id="2d8f2204ff6d479dab738c48af87d12d" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;" transform="translate(7,32)"><tspan x="281.0859375" y="0">B1 IAM Server(KeyCloak)</tspan></text>
+    </g><g p:type="Shape" p:def="tamAnnot:AllDRoundedRectangle_V002" p:sc="Rectangle" id="58cedf948403477c8d45956fd44359db" transform="matrix(1,0,0,1,171,345)"><p:metadata><p:property name="box">724,56</p:property><p:property name="BOOLallowRoundedCorners">true</p:property><p:property name="BOOLhasRoundedCorners">false</p:property><p:property name="BOOLallowMultiple">true</p:property><p:property name="BOOLisMultiple">false</p:property><p:property name="HNDLcornerRadius">20,0</p:property><p:property name="fillColor">#FFFFFFFF</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">2|</p:property><p:property name="TTXTlabel">SLD</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+        <rect x="0" y="0" p:name="rectMultiple" id="5680d3128fae4c07a170a697bda915d5" rx="0" ry="0" transform="translate(8,-8)" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: hidden; display: none;" height="56" width="724"/>
+        <rect x="0" y="0" p:name="rect" id="31405ab2a5724f5089cd601eebc96621" rx="0" ry="0" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2;" height="56" width="724"/>
+        <text text-anchor="start" xml:space="preserve" p:name="text" id="305596bb1f9547c4a079ed16e6e68437" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;" transform="translate(7,33)"><tspan x="342.85546875" y="0">SLD</tspan></text>
+    </g><g p:type="Shape" p:def="tamAnnot:AllDRoundedRectangle_V002" p:sc="Rectangle" id="b7027a54368943958524ffc5832c54fa" transform="matrix(1,0,0,1,788,132)"><p:metadata><p:property name="box">107,137</p:property><p:property name="BOOLallowRoundedCorners">true</p:property><p:property name="BOOLhasRoundedCorners">false</p:property><p:property name="BOOLallowMultiple">true</p:property><p:property name="BOOLisMultiple">false</p:property><p:property name="HNDLcornerRadius">20,0</p:property><p:property name="fillColor">#FFFFFFFF</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">2|</p:property><p:property name="TTXTlabel">ServiceLayer</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+        <rect x="0" y="0" p:name="rectMultiple" id="cee179c9d53a4bc99e073fdeb2a9da4c" rx="0" ry="0" transform="translate(8,-8)" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: hidden; display: none;" height="137" width="107"/>
+        <rect x="0" y="0" p:name="rect" id="21c5106a51ed4d9098d5d28ff96899eb" rx="0" ry="0" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2;" height="137" width="107"/>
+        <text text-anchor="start" xml:space="preserve" p:name="text" id="919ea6401dfd4400a1151586f49916e1" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;" transform="translate(7,73)"><tspan x="9.06640625" y="0">ServiceLayer</tspan></text>
+    </g><g p:type="Shape" p:def="tamBD:BDChannelHorVert_V002" p:sc="vert. Channel" id="71005d51d03b4b75beb7c20356782b1c" transform="matrix(1,0,0,1,264,79)"><p:metadata><p:property name="BOOLhasExtensionA">false</p:property><p:property name="BOOLhasExtensionB">false</p:property><p:property name="BOOLisHorizontal">false</p:property><p:property name="ENUMalignType">center</p:property><p:property name="HNDLp1">-10,-11</p:property><p:property name="HNDLp2" p:connectedShapeId="fcbd5bf622924658980632f1fdd02931" p:connectedOutletId="top-center" p:viax="-10" p:viay="84">-10,94</p:property><p:property name="HNDLc3">0,25</p:property><p:property name="BOOLlockArrowStyle">false</p:property><p:property name="ENUMarrowStyleStart">none</p:property><p:property name="ENUMarrowStyleEnd">none</p:property><p:property name="ENUMdirectionType">other</p:property><p:property name="ENUMcircleRadius">8</p:property><p:property name="ENUMrOffset">20</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|</p:property><p:property name="COLRnodeFillColor">#FFFFFFFF</p:property><p:property name="STYLnodeStrokeStyle">2|</p:property><p:property name="HNDLtextPos">40,25</p:property><p:property name="TTXTtextContent"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">0,0</p:property></p:metadata>
+        <defs>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowEnd" id="8f90cec62e58451aa84aaac0718431aa">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowEndPath" id="e60d00347c0643d78370ec714ffc5944" d="" transform="rotate(180) translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowStart" id="6f37f2e1c6cc4b638ff6a7af2664118d">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowStartPath" id="4ca168f7524b4a598104d7faf829675b" d="" transform="translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="RArrow" id="ffb85e59993a48d28b7eeca13f5bf2a9">
+
+               <path transform="rotate(180) translate(1,0)" style="fill-rule:evenodd;stroke-width:0.625;stroke-linejoin:round;stroke:#000000;stroke-opacity:1;fill:#000000;fill-opacity:1" p:name="RArrowPath" id="c7cec659ca0447e6a9745c7369a22fb9" d="M 9 5 L -1 0 L 9 -5 C 7 -2 7 2 9 5 z"/>
+            </marker>
+         </defs>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1;" fill="none" marker-start="url(#6f37f2e1c6cc4b638ff6a7af2664118d)" marker-end="url(#8f90cec62e58451aa84aaac0718431aa)" p:name="line" id="be84836521aa4a3e90dd0bd28946cb90" d="M -10 -11 L -10 94"/>
+
+        <path fill="none" style="stroke: rgba(0, 0, 0, 0); stroke-width: 10px;" p:name="lineGrip" id="3c22e78240d94565859af36028711b44" d="M -10 -11 L -10 94"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#8f90cec62e58451aa84aaac0718431aa)" p:name="line1" id="359584cc95144770a965870ffbab4b23" d="M -10 18 L -10 19"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#6f37f2e1c6cc4b638ff6a7af2664118d)" p:name="line2" id="28fd2fc1fb4442c88396bba20e3ff0f6" d="M -10 31 L -10 32"/>
+
+        <ellipse p:name="circle" id="876c03f6e1fb4128a4a917faabf9241e" rx="8" ry="8" cx="-10" cy="25" style="stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; fill: rgb(255, 255, 255); fill-opacity: 1;"/>
+
+      <g p:name="ChannelAnnotation" id="361de7d3f8b44556a380e2ecfaa35b81">
+        <text style="font-style: normal; font-variant: normal; font-stretch: normal; font-size: 13px; line-height: 125%; font-family: Arial; letter-spacing: 0px; word-spacing: 0px; fill: rgb(0, 0, 0); fill-opacity: 1; stroke: none; stroke-width: 0.264583px; stroke-linecap: butt; stroke-linejoin: miter; stroke-opacity: 1; visibility: visible;" p:name="R" id="831fa52e00bc4c4f917b3ba964c8055c" x="5.5" y="34">
+          <tspan p:name="Rspan" id="665024dc229145d6bcbfb0eebccdada1">R</tspan>
+        </text>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: visible;" fill="none" marker-end="url(#ffb85e59993a48d28b7eeca13f5bf2a9)" p:name="Rline1" id="cc94a3e7255940b99f7bff69d4f20268" d="M 10 17 L 10 11"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#ffb85e59993a48d28b7eeca13f5bf2a9)" p:name="Rline2" id="7625523677b547eb9d2734ee08a16d76" d="M 10 41 L 10 47"/>
+      </g>
+
+        <text xml:space="preserve" p:name="text" id="5bbe839c70444b32ac206e6f1adc6c20" transform="translate(40,25)" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;"/>        
+
+    </g><g p:type="Shape" p:def="tamBD:BDChannelHorVert_V002" p:sc="vert. Channel" id="206b6a6a3506495a9336c363d458623e" transform="matrix(1,0,0,1,639,284)"><p:metadata><p:property name="BOOLhasExtensionA">false</p:property><p:property name="BOOLhasExtensionB">false</p:property><p:property name="BOOLisHorizontal">false</p:property><p:property name="ENUMalignType">center</p:property><p:property name="HNDLp1" p:connectedShapeId="17103a794886422989f31fe8f73286f8" p:connectedOutletId="bottom-center" p:viax="-91.5" p:viay="-2">-91.5,-12</p:property><p:property name="HNDLp2">-91,62</p:property><p:property name="HNDLc3">0,25</p:property><p:property name="BOOLlockArrowStyle">false</p:property><p:property name="ENUMarrowStyleStart">none</p:property><p:property name="ENUMarrowStyleEnd">none</p:property><p:property name="ENUMdirectionType">single</p:property><p:property name="ENUMcircleRadius">8</p:property><p:property name="ENUMrOffset">20</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|</p:property><p:property name="COLRnodeFillColor">#FFFFFFFF</p:property><p:property name="STYLnodeStrokeStyle">2|</p:property><p:property name="HNDLtextPos">40,25</p:property><p:property name="TTXTtextContent"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">0,0</p:property></p:metadata>
+        <defs>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowEnd" id="5213797a3ad64445b4e17eaa130d8d27">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowEndPath" id="4a6de87e2ed14c91a2ca92ce531fd484" d="" transform="rotate(180) translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowStart" id="9f5e0e956e6248e097d924013cb29313">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowStartPath" id="2be5cb36c33544eb90b6cdb81367361a" d="" transform="translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="RArrow" id="bf7542f005b9476fa49856765723ffb2">
+
+               <path transform="rotate(180) translate(1,0)" style="fill-rule:evenodd;stroke-width:0.625;stroke-linejoin:round;stroke:#000000;stroke-opacity:1;fill:#000000;fill-opacity:1" p:name="RArrowPath" id="6b73f676529a474f9cfc4e674b64e4eb" d="M 9 5 L -1 0 L 9 -5 C 7 -2 7 2 9 5 z"/>
+            </marker>
+         </defs>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1;" fill="none" marker-start="url(#9f5e0e956e6248e097d924013cb29313)" marker-end="url(#5213797a3ad64445b4e17eaa130d8d27)" p:name="line" id="122e0fdfa2664eb6a809633abe90916f" d="M -91.25 -12 L -91.25 62"/>
+
+        <path fill="none" style="stroke: rgba(0, 0, 0, 0); stroke-width: 10px;" p:name="lineGrip" id="aaebee03adc04f4daec44e918a2377fb" d="M -91.25 -12 L -91.25 62"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#5213797a3ad64445b4e17eaa130d8d27)" p:name="line1" id="6ee5ceb377d7457d8ef6c6f076fe1d6f" d="M -91.25 18 L -91.25 19"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#9f5e0e956e6248e097d924013cb29313)" p:name="line2" id="4624c3f4ead64205a709697a753b4776" d="M -91.25 31 L -91.25 32"/>
+
+        <ellipse p:name="circle" id="bd667540172c4528969b5ab58342ebd0" rx="8" ry="8" cx="-91.25" cy="25" style="stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; fill: rgb(255, 255, 255); fill-opacity: 1;"/>
+
+      <g p:name="ChannelAnnotation" id="4616ca735d5441b780c7802a7b23fc7a">
+        <text style="font-style: normal; font-variant: normal; font-stretch: normal; font-size: 13px; line-height: 125%; font-family: Arial; letter-spacing: 0px; word-spacing: 0px; fill: rgb(0, 0, 0); fill-opacity: 1; stroke: none; stroke-width: 0.264583px; stroke-linecap: butt; stroke-linejoin: miter; stroke-opacity: 1; visibility: visible;" p:name="R" id="7716ef26330149dea0ec8d3ac9a8c6b4" x="-75.75" y="24">
+          <tspan p:name="Rspan" id="c853ad5ca45d4ef8b28d9246228c3041">R</tspan>
+        </text>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#bf7542f005b9476fa49856765723ffb2)" p:name="Rline1" id="281d4fab7a2649db8a960c638c64cb68" d="M -71.25 13 L -71.25 7"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: visible;" fill="none" marker-end="url(#bf7542f005b9476fa49856765723ffb2)" p:name="Rline2" id="15d7d67ac23749f0afc01bcc42f552ee" d="M -71.25 33 L -71.25 39"/>
+      </g>
+
+        <text xml:space="preserve" p:name="text" id="f0ac4e1981834acdac452d12fa9fb98f" transform="translate(40,25)" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;"/>        
+
+    </g><g p:type="Shape" p:def="tamBD:BDChannelHorVert_V002" p:sc="vert. Channel" id="ea12ba9879a74c48983c3f22e092e3d1" transform="matrix(1,0,0,1,879,266)"><p:metadata><p:property name="BOOLhasExtensionA">false</p:property><p:property name="BOOLhasExtensionB">false</p:property><p:property name="BOOLisHorizontal">false</p:property><p:property name="ENUMalignType">center</p:property><p:property name="HNDLp1" p:viay="13" p:viax="-37.5" p:connectedOutletId="bottom-center" p:connectedShapeId="b7027a54368943958524ffc5832c54fa">-37.5,3</p:property><p:property name="HNDLp2">-37,78</p:property><p:property name="HNDLc3">-67,32</p:property><p:property name="BOOLlockArrowStyle">false</p:property><p:property name="ENUMarrowStyleStart">none</p:property><p:property name="ENUMarrowStyleEnd">none</p:property><p:property name="ENUMdirectionType">single</p:property><p:property name="ENUMcircleRadius">8</p:property><p:property name="ENUMrOffset">20</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|</p:property><p:property name="COLRnodeFillColor">#FFFFFFFF</p:property><p:property name="STYLnodeStrokeStyle">2|</p:property><p:property name="HNDLtextPos">40,25</p:property><p:property name="TTXTtextContent"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">0,0</p:property></p:metadata>
+        <defs>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowEnd" id="751d47eba4c14ce4ab52145dc2811f9e">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowEndPath" id="7da3b8d304354beabf77e5cbbf9c9d1b" d="" transform="rotate(180) translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowStart" id="dedff760b17944398e6793bd2d4155af">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowStartPath" id="04091d18aa3f4b6c93ee8e05cfcd39a4" d="" transform="translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="RArrow" id="18a35ef42e664afb8288a198fba155e8">
+
+               <path transform="rotate(180) translate(1,0)" style="fill-rule:evenodd;stroke-width:0.625;stroke-linejoin:round;stroke:#000000;stroke-opacity:1;fill:#000000;fill-opacity:1" p:name="RArrowPath" id="de5fb81458464ba5b7a9ab7b15aac8c7" d="M 9 5 L -1 0 L 9 -5 C 7 -2 7 2 9 5 z"/>
+            </marker>
+         </defs>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1;" fill="none" marker-start="url(#dedff760b17944398e6793bd2d4155af)" marker-end="url(#751d47eba4c14ce4ab52145dc2811f9e)" p:name="line" id="e877e7ea5b3143d9be1b86c4ec08a7b5" d="M -37.25 3 L -37.25 78"/>
+
+        <path fill="none" style="stroke: rgba(0, 0, 0, 0); stroke-width: 10px;" p:name="lineGrip" id="65265b69fa434093af66ac93b7de6586" d="M -37.25 3 L -37.25 78"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#751d47eba4c14ce4ab52145dc2811f9e)" p:name="line1" id="16cb83105b034a98a02386e5a3d6c5c4" d="M -37.25 25 L -37.25 26"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#dedff760b17944398e6793bd2d4155af)" p:name="line2" id="ca14e8229f114d20ba9252a1842e3a1c" d="M -37.25 38 L -37.25 39"/>
+
+        <ellipse p:name="circle" id="558f7d2ee6ee49c295777066efdb4dcf" rx="8" ry="8" cx="-37.25" cy="32" style="stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; fill: rgb(255, 255, 255); fill-opacity: 1;"/>
+
+      <g p:name="ChannelAnnotation" id="a53e4ec3da7b4c67b2d1c9e28d26abb5">
+        <text style="font-style: normal; font-variant: normal; font-stretch: normal; font-size: 13px; line-height: 125%; font-family: Arial; letter-spacing: 0px; word-spacing: 0px; fill: rgb(0, 0, 0); fill-opacity: 1; stroke: none; stroke-width: 0.264583px; stroke-linecap: butt; stroke-linejoin: miter; stroke-opacity: 1; visibility: visible;" p:name="R" id="3c1807ea7c6444ea883552d4b710ba2c" x="-21.75" y="31">
+          <tspan p:name="Rspan" id="b9bf9c7d478d490991bc08c8f2943d7b">R</tspan>
+        </text>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#18a35ef42e664afb8288a198fba155e8)" p:name="Rline1" id="e4f974fe76ec4858a606ecacbc061cef" d="M -17.25 20 L -17.25 14"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: visible;" fill="none" marker-end="url(#18a35ef42e664afb8288a198fba155e8)" p:name="Rline2" id="2810761a3b18423ba83562863f2a808d" d="M -17.25 40 L -17.25 46"/>
+      </g>
+
+        <text xml:space="preserve" p:name="text" id="26d6335fd7ff4d64aca73cc47f62ecc5" transform="translate(40,25)" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;"/>        
+
+    </g><g p:type="Shape" p:def="tamBD:BDChannelHorVert_V002" p:sc="vert. Channel" id="34c3b49816794dbab9afb050ca3a9061" transform="matrix(1,0,0,1,909,76)"><p:metadata><p:property name="BOOLhasExtensionA">false</p:property><p:property name="BOOLhasExtensionB">false</p:property><p:property name="BOOLisHorizontal">false</p:property><p:property name="ENUMalignType">center</p:property><p:property name="HNDLp1">-64,-7</p:property><p:property name="HNDLp2" p:connectedShapeId="b7027a54368943958524ffc5832c54fa" p:connectedOutletId="top-center" p:viax="-67.5" p:viay="46">-67.5,56</p:property><p:property name="HNDLc3">-9,27</p:property><p:property name="BOOLlockArrowStyle">false</p:property><p:property name="ENUMarrowStyleStart">none</p:property><p:property name="ENUMarrowStyleEnd">none</p:property><p:property name="ENUMdirectionType">other</p:property><p:property name="ENUMcircleRadius">8</p:property><p:property name="ENUMrOffset">20</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|</p:property><p:property name="COLRnodeFillColor">#FFFFFFFF</p:property><p:property name="STYLnodeStrokeStyle">2|</p:property><p:property name="HNDLtextPos">40,25</p:property><p:property name="TTXTtextContent"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">0,0</p:property></p:metadata>
+        <defs>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowEnd" id="811d4e4337e346209365a91af38e32bb">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowEndPath" id="0a0906e0338c4dbdb8b651f53eef7f97" d="" transform="rotate(180) translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowStart" id="d54529b4496549449c1568137218df0b">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowStartPath" id="f116b0d4cfef473f8d947955f73ab46c" d="" transform="translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="RArrow" id="a26a3bedf30c45bd99b6441f3f2e24bb">
+
+               <path transform="rotate(180) translate(1,0)" style="fill-rule:evenodd;stroke-width:0.625;stroke-linejoin:round;stroke:#000000;stroke-opacity:1;fill:#000000;fill-opacity:1" p:name="RArrowPath" id="ad063774c22c459b8e738d0e7bfc0921" d="M 9 5 L -1 0 L 9 -5 C 7 -2 7 2 9 5 z"/>
+            </marker>
+         </defs>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1;" fill="none" marker-start="url(#d54529b4496549449c1568137218df0b)" marker-end="url(#811d4e4337e346209365a91af38e32bb)" p:name="line" id="d84f013ef5d4453eb4bb8e00ffccc6ab" d="M -65.75 -7 L -65.75 56"/>
+
+        <path fill="none" style="stroke: rgba(0, 0, 0, 0); stroke-width: 10px;" p:name="lineGrip" id="9460bfe7e066496e83e7df6ea77e07ef" d="M -65.75 -7 L -65.75 56"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#811d4e4337e346209365a91af38e32bb)" p:name="line1" id="cc891f2f5b2c4ab2ab2339de77b1d3ed" d="M -65.75 20 L -65.75 21"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#d54529b4496549449c1568137218df0b)" p:name="line2" id="643e9e36f772440598b3db74d5e6cd60" d="M -65.75 33 L -65.75 34"/>
+
+        <ellipse p:name="circle" id="18cfba511aa34218be197e386020aa9a" rx="8" ry="8" cx="-65.75" cy="27" style="stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; fill: rgb(255, 255, 255); fill-opacity: 1;"/>
+
+      <g p:name="ChannelAnnotation" id="af72c4cba3aa4a0b87532127350ba92a">
+        <text style="font-style: normal; font-variant: normal; font-stretch: normal; font-size: 13px; line-height: 125%; font-family: Arial; letter-spacing: 0px; word-spacing: 0px; fill: rgb(0, 0, 0); fill-opacity: 1; stroke: none; stroke-width: 0.264583px; stroke-linecap: butt; stroke-linejoin: miter; stroke-opacity: 1; visibility: visible;" p:name="R" id="1d4536473d7b43a48e3f3fe1bd069ca3" x="-50.25" y="36">
+          <tspan p:name="Rspan" id="6d56a4ffc26d4acdbfbb091117846ad9">R</tspan>
+        </text>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: visible;" fill="none" marker-end="url(#a26a3bedf30c45bd99b6441f3f2e24bb)" p:name="Rline1" id="0f20cc8edb8849358f2c0d11fd32b342" d="M -45.75 19 L -45.75 13"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#a26a3bedf30c45bd99b6441f3f2e24bb)" p:name="Rline2" id="0c1b2bf001e0432ba1ef446af2a15a31" d="M -45.75 43 L -45.75 49"/>
+      </g>
+
+        <text xml:space="preserve" p:name="text" id="b149222a73c74ed899d6a28b5f4a88b6" transform="translate(40,25)" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;"/>        
+
+    </g><g p:type="Shape" p:def="tamAnnot:AnnNote_V002" id="f340ed6de102495bba1fbd424de170d2" transform="matrix(1,0,0,1,117,279)"><p:metadata><p:property name="box">121,50</p:property><p:property name="ENUMdogEarSize">12</p:property><p:property name="fillColor">#CCFFFF38</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|</p:property><p:property name="TTXTtextContent">Register as OAuth Client by admin</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">0,1</p:property></p:metadata>
+
+        <path x="0" y="0" p:name="note" id="953aabaacba841f1858a7dd83281dbba" d="M 0 0 L 109 0 L 121 12 L 121 50 L 0 50 z" style="fill: rgb(204, 255, 255); fill-opacity: 0.219608; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1;"/>
+        <path style="fill-rule: evenodd; fill: none; stroke-width: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1;" p:name="dogEar" id="2211598c75f2418c87ddc03a19df2c6b" d="M 109 0 L 109 12 L 121 12"/>
+
+        <text text-anchor="start" xml:space="preserve" p:name="text" id="6b55e1ece1964a099c6b510bbd4fcc66" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;" transform="translate(5,22)"><tspan x="0" y="0">Register as OAuth</tspan><tspan x="0" y="15">Client by admin</tspan></text>
+    </g><g p:type="Shape" p:def="tamAnnot:AllDDirectLine_V002" p:sc="direct Arrow dashed" id="35e46c608042436b942b1b2cd822043e" transform="matrix(1,0,0,1,157,104)"><p:metadata><p:property name="ENUMarrowStyleStart">none</p:property><p:property name="ENUMarrowStyleEnd">open</p:property><p:property name="HNDLp1">15,165</p:property><p:property name="HNDLp2" p:connectedShapeId="39dca63a6fba4fb7bce0c3075b3fd4d9" p:connectedOutletId="bottom-left" p:viax="-54.39707592195461" p:viay="243.72928434566703">-47,237</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|8,4,1,4</p:property><p:property name="HNDLtextPos">25,5</p:property><p:property name="TTXTtextContent"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+          <defs>
+              <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowEnd" id="1b5deae41a6e40168ac86a68d2af0fb9">
+
+                 <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: visible;" p:name="ArrowEndPath" id="aa6c19e8a72043419b88d34ca03a9d4c" d="M 10 4.5 L -1 0 L 10 -4.5" transform="rotate(180) translate(1,0) scale(0.75,0.75)"/>
+              </marker>
+              <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowStart" id="c2f682fb05994d62be25853e95689320">
+
+                 <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowStartPath" id="17e50ab809c0409b81c64cb2fca7a8c4" d="" transform="translate(1,0) scale(0.75,0.75)"/>
+              </marker>
+
+           </defs>
+
+          <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; stroke-dasharray: 8, 4, 1, 4;" fill="none" marker-start="url(#c2f682fb05994d62be25853e95689320)" marker-end="url(#1b5deae41a6e40168ac86a68d2af0fb9)" p:name="line" id="e083a452dd79495da7803ca9f26322f5" d="M 15 165 L -47 237"/>
+
+          <path fill="none" style="stroke: rgba(0, 0, 0, 0); stroke-width: 10px;" p:name="lineGrip" id="b804e7a389bd4825b7b6abdb059f8bab" d="M 15 165 L -47 237"/>
+
+          <text xml:space="preserve" p:name="text" id="4b66860283664b22809689871ec93d0a" transform="translate(-125,5)" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;"/>
+
+      </g><g p:type="Shape" p:def="tamBD:BDChannelHorVert_V002" p:sc="vert. Channel" id="6a3e90b138fb4f7cbe8c18490782c439" transform="matrix(1,0,0,1,292,276)"><p:metadata><p:property name="BOOLhasExtensionA">false</p:property><p:property name="BOOLhasExtensionB">false</p:property><p:property name="BOOLisHorizontal">false</p:property><p:property name="ENUMalignType">center</p:property><p:property name="HNDLp1" p:connectedShapeId="fcbd5bf622924658980632f1fdd02931" p:connectedOutletId="bottom-center" p:viax="-38" p:viay="-32">-38,-42</p:property><p:property name="HNDLp2">-38,67</p:property><p:property name="HNDLc3">0,25</p:property><p:property name="BOOLlockArrowStyle">false</p:property><p:property name="ENUMarrowStyleStart">none</p:property><p:property name="ENUMarrowStyleEnd">none</p:property><p:property name="ENUMdirectionType">single</p:property><p:property name="ENUMcircleRadius">8</p:property><p:property name="ENUMrOffset">20</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|</p:property><p:property name="COLRnodeFillColor">#FFFFFFFF</p:property><p:property name="STYLnodeStrokeStyle">2|</p:property><p:property name="HNDLtextPos">40,25</p:property><p:property name="TTXTtextContent"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">0,0</p:property></p:metadata>
+        <defs>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowEnd" id="f8879e81ef544f52a54059f7dfa3f19b">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowEndPath" id="8ead31dff87b407b8130e69eb46924a7" d="" transform="rotate(180) translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowStart" id="7308c768975240258b79e98b61d025b3">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowStartPath" id="cda9fdfa6c1948a78cd1f2ff18ef6644" d="" transform="translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="RArrow" id="10ac2e8b8c19454d9d6d464819f3c3c8">
+
+               <path transform="rotate(180) translate(1,0)" style="fill-rule:evenodd;stroke-width:0.625;stroke-linejoin:round;stroke:#000000;stroke-opacity:1;fill:#000000;fill-opacity:1" p:name="RArrowPath" id="80f296c4c66a4caa9902a57323ccd2f8" d="M 9 5 L -1 0 L 9 -5 C 7 -2 7 2 9 5 z"/>
+            </marker>
+         </defs>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1;" fill="none" marker-start="url(#7308c768975240258b79e98b61d025b3)" marker-end="url(#f8879e81ef544f52a54059f7dfa3f19b)" p:name="line" id="5d32f1971aee44e29179dc231df87b66" d="M -38 -42 L -38 67"/>
+
+        <path fill="none" style="stroke: rgba(0, 0, 0, 0); stroke-width: 10px;" p:name="lineGrip" id="af5ac6a23a8a4dba8c02d63c7ab23626" d="M -38 -42 L -38 67"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#f8879e81ef544f52a54059f7dfa3f19b)" p:name="line1" id="5f1052ccb6c045f5b430dc62c4cf8fb7" d="M -38 18 L -38 19"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#7308c768975240258b79e98b61d025b3)" p:name="line2" id="4e488d6f61d5457a8bb1e2243ee4d3bf" d="M -38 31 L -38 32"/>
+
+        <ellipse p:name="circle" id="3f983a63451d40c9a4fc84f23ce3cee9" rx="8" ry="8" cx="-38" cy="25" style="stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; fill: rgb(255, 255, 255); fill-opacity: 1;"/>
+
+      <g p:name="ChannelAnnotation" id="f8b8cb6fbd304cc483a6120e1cb13539">
+        <text style="font-style: normal; font-variant: normal; font-stretch: normal; font-size: 13px; line-height: 125%; font-family: Arial; letter-spacing: 0px; word-spacing: 0px; fill: rgb(0, 0, 0); fill-opacity: 1; stroke: none; stroke-width: 0.264583px; stroke-linecap: butt; stroke-linejoin: miter; stroke-opacity: 1; visibility: visible;" p:name="R" id="0f77bf87c5ef4dd7b56b9735b85c5729" x="-22.5" y="24">
+          <tspan p:name="Rspan" id="98d06a41e06c4f05904f57305bfa6480">R</tspan>
+        </text>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#10ac2e8b8c19454d9d6d464819f3c3c8)" p:name="Rline1" id="28a250ad0cff49a0b3ff97056c5ba0c0" d="M -18 13 L -18 7"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: visible;" fill="none" marker-end="url(#10ac2e8b8c19454d9d6d464819f3c3c8)" p:name="Rline2" id="9265601cca6d47f6aca5510a17378662" d="M -18 33 L -18 39"/>
+      </g>
+
+        <text xml:space="preserve" p:name="text" id="b6b1942470044148abdfd1eceb022c8d" transform="translate(40,25)" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;"/>        
+
+    </g><g p:type="Shape" p:def="Evolus.Common:PlainTextV2" id="5983eab2a71e45bc924d4ff62fb9a721" transform="matrix(1,0,0,1,671,231)"><p:metadata><p:property name="disabled">false</p:property><p:property name="width">100,0</p:property><p:property name="fixedWidth">false</p:property><p:property name="label">Token&amp;CompanyID</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">"Liberation Sans",Arial,sans-serif|normal|normal|13px|none|0</p:property><p:property name="textAlign">0,0</p:property></p:metadata>
+            <rect x="0" y="0" style="fill: none; stroke: none; visibility: hidden; display: none;" p:name="bgRect" id="0ae30b4de87b4f33bb87344bc5420fab" width="112" height="15"/>
+            <text xml:space="preserve" p:name="text" id="f905d21ed77943f39c7f1f8964189fbd" style="fill: rgb(0, 0, 0); fill-opacity: 1; font-family: &quot;Liberation Sans&quot;, Arial, sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none;"><tspan x="0" y="0">Token&amp;CompanyID</tspan></text>
+        </g><g p:type="Shape" p:def="Evolus.Common:PlainTextV2" id="9fd1fe6987e74953bbe5aa9f558ffa44" transform="matrix(1,0,0,1,476,109)"><p:metadata><p:property name="disabled">false</p:property><p:property name="width">100,0</p:property><p:property name="fixedWidth">false</p:property><p:property name="label">Introspect</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">"Liberation Sans",Arial,sans-serif|normal|normal|13px|none|0</p:property><p:property name="textAlign">0,0</p:property></p:metadata>
+            <rect x="0" y="0" style="fill: none; stroke: none; visibility: hidden; display: none;" p:name="bgRect" id="88f55ff12cae440ab860e1f2fe37b2c2" width="57.0859375" height="15"/>
+            <text xml:space="preserve" p:name="text" id="333160e05ae34135b2991670137e494f" style="fill: rgb(0, 0, 0); fill-opacity: 1; font-family: &quot;Liberation Sans&quot;, Arial, sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none;"><tspan x="0" y="0">Introspect</tspan></text>
+        </g><g p:type="Shape" p:def="tamBD:BDAgent_V003" id="a0c510b6a78e4675b679cf2ef2fcccf9" transform="matrix(1,0,0,1,7,343)"><p:metadata><p:property name="box">103,58</p:property><p:property name="BOOLallowMultiple">true</p:property><p:property name="BOOLisMultiple">false</p:property><p:property name="BOOLallowHuman">true</p:property><p:property name="BOOLshowHuman">false</p:property><p:property name="HNDLhumanPos">51.5,28.999999999999996</p:property><p:property name="ENUMhumanSize">1.5</p:property><p:property name="ENUMmood">happy</p:property><p:property name="fillColor">#FFFFFFFF</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">2|</p:property><p:property name="TTXTlabel">Extension SSO Manager </p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+        <rect x="0" y="0" p:name="rectMultiple" id="09b33bacd95c47e0a07ef15531a184af" transform="translate(8,-8)" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: hidden; display: none;" height="58" width="103"/>
+        <rect x="0" y="0" p:name="rect" id="2a6695560812491fb299224af474c98c" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2;" height="58" width="103"/>
+        <text text-anchor="start" xml:space="preserve" p:name="text" id="a4e09062afbb4304923445045c6b603d" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;" transform="translate(7,26)"><tspan x="0.921875" y="0">Extension SSO</tspan><tspan x="17.5390625" y="15">Manager </tspan></text>
+
+            <g p:name="stickman" id="5ada7fcc40374ec08127ea48aa88ba64" transform="translate(51.5,28.999999999999996) scale(1.5,1.5)" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: hidden; display: none;">
+            <ellipse style="opacity:1;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1" cx="0" cy="-7.5" rx="3" ry="3" p:name="head" id="a1fac4b7a90649c78f3773b873503f3d"/>
+            <path d="m 0,-4.5 0,7.5" style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" p:name="body" id="d7a1c00db4504b649d5b9a35329b8136"/>
+            <path style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" d="m 0,3 -5,7" p:name="leftLeg" id="e65b14bf3848421e8dffb6f788c035df"/>
+            <path style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" d="m 0,3 5,7" p:name="rightLeg" id="eda58ef5cf6447659cc7a4f9ab00da24"/>
+            <path style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" sodipodi:nodetypes="cc" p:name="leftArm" id="8685e244c95147abbf4d99de527745e0" d="m 0,-1 -5,-3"/>
+            <path sodipodi:nodetypes="cc" style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" p:name="rightArm" id="22f803c7b37343c3978af52666d60e41" d="m 0,-1 5,-3"/>
+           </g>
+
+
+    </g><g p:type="Shape" p:def="Evolus.Common:PlainTextV2" id="e196c4da1d194060b4d5c3602d648df2" transform="matrix(1,0,0,1,211,109)"><p:metadata><p:property name="disabled">false</p:property><p:property name="width">100,0</p:property><p:property name="fixedWidth">false</p:property><p:property name="label">Auth</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">"Liberation Sans",Arial,sans-serif|normal|normal|13px|none|0</p:property><p:property name="textAlign">0,0</p:property></p:metadata>
+            <rect x="0" y="0" style="fill: none; stroke: none; visibility: hidden; display: none;" p:name="bgRect" id="cf4176a2bcad499e8522c42d409fffdc" width="26.76904296875" height="15"/>
+            <text xml:space="preserve" p:name="text" id="d60f3691be4648b19c713cb85b79769d" style="fill: rgb(0, 0, 0); fill-opacity: 1; font-family: &quot;Liberation Sans&quot;, Arial, sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none;"><tspan x="0" y="0">Auth</tspan></text>
+        </g><g p:type="Shape" p:def="tamAnnot:AllDRoundedRectangle_V002" p:sc="Rectangle" id="fcbd5bf622924658980632f1fdd02931" transform="matrix(1,0,0,1,192,173)"><p:metadata><p:property name="box">124,61</p:property><p:property name="BOOLallowRoundedCorners">true</p:property><p:property name="BOOLhasRoundedCorners">false</p:property><p:property name="BOOLallowMultiple">true</p:property><p:property name="BOOLisMultiple">false</p:property><p:property name="HNDLcornerRadius">20,0</p:property><p:property name="fillColor">#CCCCCCFF</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">2|</p:property><p:property name="TTXTlabel">MCP Client</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+        <rect x="0" y="0" p:name="rectMultiple" id="4339d42566de44308d9fe8a7b5dd269b" rx="0" ry="0" transform="translate(8,-8)" style="fill: rgb(204, 204, 204); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: hidden; display: none;" height="61" width="124"/>
+        <rect x="0" y="0" p:name="rect" id="d1dd0dfdc0fe406b8bf2e8bf41a325d7" rx="0" ry="0" style="fill: rgb(204, 204, 204); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2;" height="61" width="124"/>
+        <text text-anchor="start" xml:space="preserve" p:name="text" id="2717ff607bc047cca1c3023d9fc40399" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;" transform="translate(7,35)"><tspan x="22.74609375" y="0">MCP Client</tspan></text>
+    </g><g p:type="Shape" p:def="Evolus.Common:PlainTextV2" id="7ebd6a8b1d18451ca2dddf29ab382a03" transform="matrix(1,0,0,1,182,158)"><p:metadata><p:property name="disabled">false</p:property><p:property name="width">100,0</p:property><p:property name="fixedWidth">false</p:property><p:property name="label">AI Agent</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">"Liberation Sans",Arial,sans-serif|normal|normal|13px|none|0</p:property><p:property name="textAlign">0,0</p:property></p:metadata>
+            <rect x="0" y="0" style="fill: none; stroke: none; visibility: hidden; display: none;" p:name="bgRect" id="a14f961e6d3d4b22bfdd9befde2dd8c3" width="49.17529296875" height="15"/>
+            <text xml:space="preserve" p:name="text" id="e383702da11546ad88a268ad0ca7e411" style="fill: rgb(0, 0, 0); fill-opacity: 1; font-family: &quot;Liberation Sans&quot;, Arial, sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none;"><tspan x="0" y="0">AI Agent</tspan></text>
+        </g><g p:type="Shape" p:def="tamBD:BDAgent_V003" id="9c84799009374d638282ca97f1bd0f2a" transform="matrix(1,0,0,1,7,13)"><p:metadata><p:property name="box">103,86</p:property><p:property name="BOOLallowMultiple">true</p:property><p:property name="BOOLisMultiple">false</p:property><p:property name="BOOLallowHuman">true</p:property><p:property name="BOOLshowHuman">false</p:property><p:property name="HNDLhumanPos">51.5,42.99999999999999</p:property><p:property name="ENUMhumanSize">1.5</p:property><p:property name="ENUMmood">happy</p:property><p:property name="fillColor">#FFFFFFFF</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">2|</p:property><p:property name="TTXTlabel">LLM</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+        <rect x="0" y="0" p:name="rectMultiple" id="4f2f5853095f4e3c82fa4d468f8beb7f" transform="translate(8,-8)" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: hidden; display: none;" height="86" width="103"/>
+        <rect x="0" y="0" p:name="rect" id="3f1ecb10361a4ec294587df1d5dc3c82" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2;" height="86" width="103"/>
+        <text text-anchor="start" xml:space="preserve" p:name="text" id="e64f200719634608aaaa136cf930c0de" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;" transform="translate(7,48)"><tspan x="32.35546875" y="0">LLM</tspan></text>
+
+            <g p:name="stickman" id="ccd171caa5404a7087d3deea9b5e3fec" transform="translate(51.5,42.99999999999999) scale(1.5,1.5)" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: hidden; display: none;">
+            <ellipse style="opacity:1;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1" cx="0" cy="-7.5" rx="3" ry="3" p:name="head" id="661332315585474f8056a54d339c95ec"/>
+            <path d="m 0,-4.5 0,7.5" style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" p:name="body" id="1b3c856ab8464c7b846886cb36c465d4"/>
+            <path style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" d="m 0,3 -5,7" p:name="leftLeg" id="679456bc290a4b19a53ac36906ba8dec"/>
+            <path style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" d="m 0,3 5,7" p:name="rightLeg" id="0f747585a3a94c11ba64be5a572ff0a6"/>
+            <path style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" sodipodi:nodetypes="cc" p:name="leftArm" id="657bfaa926174cc5b556f20d3a9d8f41" d="m 0,-1 -5,-3"/>
+            <path sodipodi:nodetypes="cc" style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" p:name="rightArm" id="d9428d808c7f4f498e3d8664bc2658a1" d="m 0,-1 5,-3"/>
+           </g>
+
+
+    </g><g p:type="Shape" p:def="tamBD:BDChannelHorVert_V002" p:sc="hor. Channel" id="f2977dd10c3646a7bdbbf11f14545574" transform="matrix(1,0,0,1,183,386)"><p:metadata><p:property name="BOOLhasExtensionA">false</p:property><p:property name="BOOLhasExtensionB">false</p:property><p:property name="BOOLisHorizontal">true</p:property><p:property name="ENUMalignType">center</p:property><p:property name="HNDLp1" p:connectedShapeId="a0c510b6a78e4675b679cf2ef2fcccf9" p:connectedOutletId="right-center" p:viax="-63" p:viay="-14">-73,-14</p:property><p:property name="HNDLp2" p:connectedShapeId="58cedf948403477c8d45956fd44359db" p:connectedOutletId="left-center" p:viax="-22" p:viay="-13">-12,-13</p:property><p:property name="HNDLc3">-51,0</p:property><p:property name="BOOLlockArrowStyle">false</p:property><p:property name="ENUMarrowStyleStart">none</p:property><p:property name="ENUMarrowStyleEnd">none</p:property><p:property name="ENUMdirectionType">single</p:property><p:property name="ENUMcircleRadius">8</p:property><p:property name="ENUMrOffset">20</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|</p:property><p:property name="COLRnodeFillColor">#FFFFFFFF</p:property><p:property name="STYLnodeStrokeStyle">2|</p:property><p:property name="HNDLtextPos">25,25</p:property><p:property name="TTXTtextContent"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+        <defs>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowEnd" id="ce93661cb2d54e9db764e75f273a525b">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowEndPath" id="0f6fe98f81f0423f824b5562cd43d119" d="" transform="rotate(180) translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowStart" id="9322ca83389644f8bad3cc4f4c1c09c3">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowStartPath" id="496ddb0feaaa46bda078257cabd4e676" d="" transform="translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="RArrow" id="ba90e2d6575f43d9aeabef9e343ce580">
+
+               <path transform="rotate(180) translate(1,0)" style="fill-rule:evenodd;stroke-width:0.625;stroke-linejoin:round;stroke:#000000;stroke-opacity:1;fill:#000000;fill-opacity:1" p:name="RArrowPath" id="733a5c3148c0434d95c47e646f530261" d="M 9 5 L -1 0 L 9 -5 C 7 -2 7 2 9 5 z"/>
+            </marker>
+         </defs>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1;" fill="none" marker-start="url(#9322ca83389644f8bad3cc4f4c1c09c3)" marker-end="url(#ce93661cb2d54e9db764e75f273a525b)" p:name="line" id="fa5ae8cc4c79425da1285dc11e51dc34" d="M -73 -13.5 L -12 -13.5"/>
+
+        <path fill="none" style="stroke: rgba(0, 0, 0, 0); stroke-width: 10px;" p:name="lineGrip" id="0198f66573304167b9792a2b38c320ef" d="M -73 -13.5 L -12 -13.5"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#ce93661cb2d54e9db764e75f273a525b)" p:name="line1" id="af23caad4c674d589931e96165f87d7d" d="M -58 -13.5 L -57 -13.5"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#9322ca83389644f8bad3cc4f4c1c09c3)" p:name="line2" id="ee298ac388244ff7bf2285af93ed7867" d="M -45 -13.5 L -44 -13.5"/>
+
+        <ellipse p:name="circle" id="dde729d82682470f8bf3a576c4764f51" rx="8" ry="8" cx="-51" cy="-13.5" style="stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; fill: rgb(255, 255, 255); fill-opacity: 1;"/>
+
+      <g p:name="ChannelAnnotation" id="78315785548d47ce90c1272dca075e7b">
+        <text style="font-style: normal; font-variant: normal; font-stretch: normal; font-size: 13px; line-height: 125%; font-family: Arial; letter-spacing: 0px; word-spacing: 0px; fill: rgb(0, 0, 0); fill-opacity: 1; stroke: none; stroke-width: 0.264583px; stroke-linecap: butt; stroke-linejoin: miter; stroke-opacity: 1; visibility: visible;" p:name="R" id="d6eeab94916c483e8f0c90a1fab5c903" x="-60.5" y="-29.5">
+          <tspan p:name="Rspan" id="22774ac68051485da9379981cbd6be20">R</tspan>
+        </text>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#ba90e2d6575f43d9aeabef9e343ce580)" p:name="Rline1" id="39171e62c67f46959cf14ca1be73ddbf" d="M -62 -33.5 L -68 -33.5"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: visible;" fill="none" marker-end="url(#ba90e2d6575f43d9aeabef9e343ce580)" p:name="Rline2" id="8f1a593621ac4d2ea61bf122da60ae3d" d="M -44 -33.5 L -38 -33.5"/>
+      </g>
+
+        <text xml:space="preserve" p:name="text" id="ce5f4f38aff543309eb6ba1b65860ddb" transform="translate(-125,25)" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;"/>        
+
+    </g><g p:type="Shape" p:def="tamBD:BDChannelHorVert_V002" p:sc="vert. Channel" id="c44377d7b52f439cb4307b03390738d8" transform="matrix(1,0,0,1,618,73)"><p:metadata><p:property name="BOOLhasExtensionA">false</p:property><p:property name="BOOLhasExtensionB">false</p:property><p:property name="BOOLisHorizontal">false</p:property><p:property name="ENUMalignType">center</p:property><p:property name="HNDLp1">-67,-8</p:property><p:property name="HNDLp2" p:viay="52" p:viax="-70.5" p:connectedOutletId="top-center" p:connectedShapeId="17103a794886422989f31fe8f73286f8">-70.5,62</p:property><p:property name="HNDLc3">0,25</p:property><p:property name="BOOLlockArrowStyle">false</p:property><p:property name="ENUMarrowStyleStart">none</p:property><p:property name="ENUMarrowStyleEnd">none</p:property><p:property name="ENUMdirectionType">other</p:property><p:property name="ENUMcircleRadius">8</p:property><p:property name="ENUMrOffset">20</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|</p:property><p:property name="COLRnodeFillColor">#FFFFFFFF</p:property><p:property name="STYLnodeStrokeStyle">2|</p:property><p:property name="HNDLtextPos">40,25</p:property><p:property name="TTXTtextContent"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">0,0</p:property></p:metadata>
+        <defs>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowEnd" id="57080f83246146c2a89931cecb823a5e">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowEndPath" id="e05d9d4308bd41feb598bb5bc3c0ac9b" d="" transform="rotate(180) translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowStart" id="fb8d7959d69a4484a7914c78ffb9607d">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowStartPath" id="2ee49bc13f034f9ca1471dae097935c2" d="" transform="translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="RArrow" id="67f8303b0e214a85a3ae70693ce74e2e">
+
+               <path transform="rotate(180) translate(1,0)" style="fill-rule:evenodd;stroke-width:0.625;stroke-linejoin:round;stroke:#000000;stroke-opacity:1;fill:#000000;fill-opacity:1" p:name="RArrowPath" id="c5d40881c8fa4e93a8bcddda00cee268" d="M 9 5 L -1 0 L 9 -5 C 7 -2 7 2 9 5 z"/>
+            </marker>
+         </defs>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1;" fill="none" marker-start="url(#fb8d7959d69a4484a7914c78ffb9607d)" marker-end="url(#57080f83246146c2a89931cecb823a5e)" p:name="line" id="8e79673d1ba948b7b137838336e13496" d="M -68.75 -8 L -68.75 62"/>
+
+        <path fill="none" style="stroke: rgba(0, 0, 0, 0); stroke-width: 10px;" p:name="lineGrip" id="fa329a2dcef44887813bc3715cd16dce" d="M -68.75 -8 L -68.75 62"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#57080f83246146c2a89931cecb823a5e)" p:name="line1" id="7391d661c5d34cfbac4d334719972b67" d="M -68.75 18 L -68.75 19"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#fb8d7959d69a4484a7914c78ffb9607d)" p:name="line2" id="92a4827813b94966b563fbe69170012d" d="M -68.75 31 L -68.75 32"/>
+
+        <ellipse p:name="circle" id="30b62aaefc854c64bc22fa92d8cb71e4" rx="8" ry="8" cx="-68.75" cy="25" style="stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; fill: rgb(255, 255, 255); fill-opacity: 1;"/>
+
+      <g p:name="ChannelAnnotation" id="723d6e7202eb43c1809adb9f1f82efba">
+        <text style="font-style: normal; font-variant: normal; font-stretch: normal; font-size: 13px; line-height: 125%; font-family: Arial; letter-spacing: 0px; word-spacing: 0px; fill: rgb(0, 0, 0); fill-opacity: 1; stroke: none; stroke-width: 0.264583px; stroke-linecap: butt; stroke-linejoin: miter; stroke-opacity: 1; visibility: visible;" p:name="R" id="07e52855cc43427d9a5ad8b9e80efd04" x="-53.25" y="34">
+          <tspan p:name="Rspan" id="fb7c5934fbf7462682ae3aa01f5888bf">R</tspan>
+        </text>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: visible;" fill="none" marker-end="url(#67f8303b0e214a85a3ae70693ce74e2e)" p:name="Rline1" id="1bd730131b2f4e238fb66b7212ee4761" d="M -48.75 17 L -48.75 11"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#67f8303b0e214a85a3ae70693ce74e2e)" p:name="Rline2" id="4bcb4d77e5bd4586ac70a95d86142ceb" d="M -48.75 41 L -48.75 47"/>
+      </g>
+
+        <text xml:space="preserve" p:name="text" id="b2c29c7031ef45b78fd6e5f1af3fc564" transform="translate(40,25)" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;"/>        
+
+    </g><g p:type="Shape" p:def="tamBD:BDChannelHorVert_V002" p:sc="Z vert. Channel" id="c15e0b2df6eb48a699151a4ef601cf7e" transform="matrix(1,0,0,1,110,156)"><p:metadata><p:property name="BOOLhasExtensionA">true</p:property><p:property name="BOOLhasExtensionB">true</p:property><p:property name="BOOLisHorizontal">false</p:property><p:property name="ENUMalignType">center</p:property><p:property name="HNDLp1" p:viay="-100" p:viax="10" p:connectedOutletId="right-center" p:connectedShapeId="9c84799009374d638282ca97f1bd0f2a">0,-100</p:property><p:property name="HNDLp2" p:viay="7.1896838431227295" p:viax="51.75437991345956" p:connectedOutletId="left-top" p:connectedShapeId="7e4599f6383f46648cd9ca5a0b4ea088">61,11</p:property><p:property name="HNDLc3">15,-41</p:property><p:property name="BOOLlockArrowStyle">false</p:property><p:property name="ENUMarrowStyleStart">none</p:property><p:property name="ENUMarrowStyleEnd">none</p:property><p:property name="ENUMdirectionType">other</p:property><p:property name="ENUMcircleRadius">8</p:property><p:property name="ENUMrOffset">20</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|</p:property><p:property name="COLRnodeFillColor">#FFFFFFFF</p:property><p:property name="STYLnodeStrokeStyle">2|</p:property><p:property name="HNDLtextPos">40,25</p:property><p:property name="TTXTtextContent"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">0,0</p:property></p:metadata>
+        <defs>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowEnd" id="4f36093efeb443d2bdadf63bcf0ff0ec">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowEndPath" id="e91c186070174b6ba6e6812d6b85a069" d="" transform="rotate(180) translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowStart" id="bf1d6cfa82144fbfbbe4011280f41996">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowStartPath" id="fc64e0b296594634bb796eca4651e02b" d="" transform="translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="RArrow" id="b32133333f6e42d6993777b6db6702cb">
+
+               <path transform="rotate(180) translate(1,0)" style="fill-rule:evenodd;stroke-width:0.625;stroke-linejoin:round;stroke:#000000;stroke-opacity:1;fill:#000000;fill-opacity:1" p:name="RArrowPath" id="549fbfd46d844ac4885bf65d0bc47880" d="M 9 5 L -1 0 L 9 -5 C 7 -2 7 2 9 5 z"/>
+            </marker>
+         </defs>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1;" fill="none" marker-start="url(#bf1d6cfa82144fbfbbe4011280f41996)" marker-end="url(#4f36093efeb443d2bdadf63bcf0ff0ec)" p:name="line" id="64f340a077014370bc287eb26665851b" d="M 0 -100 L 7.5 -100 Q 15 -100 15 -90 L 15 1 Q 15 11 25 11 L 61 11"/>
+
+        <path fill="none" style="stroke: rgba(0, 0, 0, 0); stroke-width: 10px;" p:name="lineGrip" id="cf750bbc020d4ccf939f0bc351768635" d="M 0 -100 L 7.5 -100 Q 15 -100 15 -90 L 15 1 Q 15 11 25 11 L 61 11"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#4f36093efeb443d2bdadf63bcf0ff0ec)" p:name="line1" id="497cd59b5bc44735bd5e6177b85733b9" d="M 15 -48 L 15 -47"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#bf1d6cfa82144fbfbbe4011280f41996)" p:name="line2" id="1a950a4ed28f4a468e224441062b554a" d="M 15 -35 L 15 -34"/>
+
+        <ellipse p:name="circle" id="43f77c15f2c443e9b3c80ba4e0eed64d" rx="8" ry="8" cx="15" cy="-41" style="stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; fill: rgb(255, 255, 255); fill-opacity: 1;"/>
+
+      <g p:name="ChannelAnnotation" id="5906425494e64320a038ac099087661b">
+        <text style="font-style: normal; font-variant: normal; font-stretch: normal; font-size: 13px; line-height: 125%; font-family: Arial; letter-spacing: 0px; word-spacing: 0px; fill: rgb(0, 0, 0); fill-opacity: 1; stroke: none; stroke-width: 0.264583px; stroke-linecap: butt; stroke-linejoin: miter; stroke-opacity: 1; visibility: visible;" p:name="R" id="eea23cfe87884069abc454400871ddc8" x="30.5" y="-32">
+          <tspan p:name="Rspan" id="e0d27785e9a74af29831bda74d3d7ad4">R</tspan>
+        </text>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: visible;" fill="none" marker-end="url(#b32133333f6e42d6993777b6db6702cb)" p:name="Rline1" id="946143e9221c4eaea6d74d1e6f1008aa" d="M 35 -49 L 35 -55"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#b32133333f6e42d6993777b6db6702cb)" p:name="Rline2" id="c1a4b83faa5f40529651d3efef4bfa11" d="M 35 -25 L 35 -19"/>
+      </g>
+
+        <text xml:space="preserve" p:name="text" id="f0dff154223c4cd4a2961a58d07eba3a" transform="translate(40,25)" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;"/>        
+
+    </g><g p:type="Shape" p:def="tamAnnot:AllDDirectLine_V002" p:sc="direct Arrow dashed" id="39dca63a6fba4fb7bce0c3075b3fd4d9" transform="matrix(1,0,0,1,162,109)"><p:metadata><p:property name="ENUMarrowStyleStart">none</p:property><p:property name="ENUMarrowStyleEnd">open</p:property><p:property name="HNDLp1">276,161</p:property><p:property name="HNDLp2">-52,232</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|8,4,1,4</p:property><p:property name="HNDLtextPos">25,5</p:property><p:property name="TTXTtextContent"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+          <defs>
+              <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowEnd" id="4828e626d08347baa9d27ba7dd5fd2e6">
+
+                 <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: visible;" p:name="ArrowEndPath" id="ef99d92573b84c66a08fd50687fc25ec" d="M 10 4.5 L -1 0 L 10 -4.5" transform="rotate(180) translate(1,0) scale(0.75,0.75)"/>
+              </marker>
+              <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowStart" id="3f759b034db04fa984cdd46125114bc8">
+
+                 <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowStartPath" id="a894e7fd7c92481fbbf3e76486203021" d="" transform="translate(1,0) scale(0.75,0.75)"/>
+              </marker>
+
+           </defs>
+
+          <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; stroke-dasharray: 8, 4, 1, 4;" fill="none" marker-start="url(#3f759b034db04fa984cdd46125114bc8)" marker-end="url(#4828e626d08347baa9d27ba7dd5fd2e6)" p:name="line" id="5f3876579a1d45dab6d88dd35126383a" d="M 276 161 L -52 232"/>
+
+          <path fill="none" style="stroke: rgba(0, 0, 0, 0); stroke-width: 10px;" p:name="lineGrip" id="3db24653fc6e49d7adb044a1efec5197" d="M 276 161 L -52 232"/>
+
+          <text xml:space="preserve" p:name="text" id="900abaa319874312bd7de0697b67dc5a" transform="translate(-125,5)" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;"/>
+
+      </g><g p:type="Shape" p:def="tamAnnot:AllDRoundedRectangle_V002" p:sc="Rectangle" id="17103a794886422989f31fe8f73286f8" transform="matrix(1,0,0,1,435,135)" p:sizing-ox="0" p:sizing-oy="0" p:sizing-ow="520" p:sizing-oh="137"><p:metadata><p:property name="box">225,137</p:property><p:property name="BOOLallowRoundedCorners">true</p:property><p:property name="BOOLhasRoundedCorners">false</p:property><p:property name="BOOLallowMultiple">true</p:property><p:property name="BOOLisMultiple">false</p:property><p:property name="HNDLcornerRadius">20,0</p:property><p:property name="fillColor">#CCFFFFFF</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">2|</p:property><p:property name="TTXTlabel">B1 MCP Server</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+        <rect x="0" y="0" p:name="rectMultiple" id="cadfe035f14543a1a1b148086c6693bf" rx="0" ry="0" transform="translate(8,-8)" style="fill: rgb(204, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: hidden; display: none;" height="137" width="225"/>
+        <rect x="0" y="0" p:name="rect" id="691c7f2b461b4c6fa1cd4797cc415952" rx="0" ry="0" style="fill: rgb(204, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2;" height="137" width="225"/>
+        <text text-anchor="start" xml:space="preserve" p:name="text" id="dbcbc2463b40405e9ffdc9df60f79a52" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;" transform="translate(7,73)"><tspan x="60.9609375" y="0">B1 MCP Server</tspan></text>
+    </g><g p:type="Shape" p:def="Evolus.Common:PlainTextV2" id="aa1cfaff17204e62b99b7cef1e824041" transform="matrix(1,0,0,1,444,194)" p:sizing-ox="29" p:sizing-oy="61" p:sizing-ow="0" p:sizing-oh="0"><p:metadata><p:property name="disabled">false</p:property><p:property name="width">100,0</p:property><p:property name="fixedWidth">false</p:property><p:property name="label"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">"Liberation Sans",Arial,sans-serif|normal|normal|13px|none|0</p:property><p:property name="textAlign">0,0</p:property><p:property name="fillColor">#FFFF99FF</p:property></p:metadata>
+            <rect x="0" y="0" style="fill: none; stroke: none; visibility: hidden; display: none;" p:name="bgRect" id="9163899f68d346a5b1ad2750de358de7" width="0" height="0"/>
+            <text xml:space="preserve" p:name="text" id="fc420c5daafa4a7198e47f49d8b0d1ca" style="fill: rgb(0, 0, 0); fill-opacity: 1; font-family: &quot;Liberation Sans&quot;, Arial, sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none;"/>
+        </g><g p:type="Shape" p:def="Evolus.Common:PlainTextV2" id="7fb5fde3f02c4141a172be627206fd03" transform="matrix(1,0,0,1,871,226)" p:sizing-ox="456" p:sizing-oy="93" p:sizing-ow="0" p:sizing-oh="0"><p:metadata><p:property name="disabled">false</p:property><p:property name="width">100,0</p:property><p:property name="fixedWidth">false</p:property><p:property name="label"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">"Liberation Sans",Arial,sans-serif|normal|normal|13px|none|0</p:property><p:property name="textAlign">0,0</p:property></p:metadata>
+            <rect x="0" y="0" style="fill: none; stroke: none; visibility: hidden; display: none;" p:name="bgRect" id="d23090692dbc458596382d88566667cb" width="0" height="0"/>
+            <text xml:space="preserve" p:name="text" id="f005cf7400fa44b0879c7816a1168a19" style="fill: rgb(0, 0, 0); fill-opacity: 1; font-family: &quot;Liberation Sans&quot;, Arial, sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none;"/>
+        </g><g p:type="Shape" p:def="tamBD:BDChannelHorVert_V002" p:sc="hor. Channel" id="54702b39ae5747fe8518c1f869ad2140" transform="matrix(1,0,0,1,348,189)"><p:metadata><p:property name="BOOLhasExtensionA">false</p:property><p:property name="BOOLhasExtensionB">false</p:property><p:property name="BOOLisHorizontal">true</p:property><p:property name="ENUMalignType">center</p:property><p:property name="HNDLp1" p:viay="14.5" p:viax="-22" p:connectedOutletId="right-center" p:connectedShapeId="fcbd5bf622924658980632f1fdd02931">-32,14.5</p:property><p:property name="HNDLp2" p:connectedShapeId="17103a794886422989f31fe8f73286f8" p:connectedOutletId="left-center" p:viax="77.00000000000001" p:viay="14.5">87,14.5</p:property><p:property name="HNDLc3">25,0</p:property><p:property name="BOOLlockArrowStyle">false</p:property><p:property name="ENUMarrowStyleStart">none</p:property><p:property name="ENUMarrowStyleEnd">none</p:property><p:property name="ENUMdirectionType">single</p:property><p:property name="ENUMcircleRadius">8</p:property><p:property name="ENUMrOffset">20</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|</p:property><p:property name="COLRnodeFillColor">#FFFFFFFF</p:property><p:property name="STYLnodeStrokeStyle">2|</p:property><p:property name="HNDLtextPos">25,25</p:property><p:property name="TTXTtextContent"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+        <defs>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowEnd" id="aaf554e7ce9644fab42a5f321e1649fa">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowEndPath" id="8545d97bdd6442fc9ae9a765665e5274" d="" transform="rotate(180) translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowStart" id="4fb3ae79c3e9453aadfdb2098d4dc6ea">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowStartPath" id="1a32bb3c13a24ba9b74acd46082a42a7" d="" transform="translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="RArrow" id="ba9c2713bc5a4c0bb1c57935682b50a1">
+
+               <path transform="rotate(180) translate(1,0)" style="fill-rule:evenodd;stroke-width:0.625;stroke-linejoin:round;stroke:#000000;stroke-opacity:1;fill:#000000;fill-opacity:1" p:name="RArrowPath" id="2779753c4c434df7bbfebca8d448c754" d="M 9 5 L -1 0 L 9 -5 C 7 -2 7 2 9 5 z"/>
+            </marker>
+         </defs>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1;" fill="none" marker-start="url(#4fb3ae79c3e9453aadfdb2098d4dc6ea)" marker-end="url(#aaf554e7ce9644fab42a5f321e1649fa)" p:name="line" id="13398c735ecf41ccbc919e408930b075" d="M -32 14.5 L 87 14.5"/>
+
+        <path fill="none" style="stroke: rgba(0, 0, 0, 0); stroke-width: 10px;" p:name="lineGrip" id="993c57afe90b49e7ba069611c92829a0" d="M -32 14.5 L 87 14.5"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#aaf554e7ce9644fab42a5f321e1649fa)" p:name="line1" id="5dabfb47a92846f7aefdf93819771f6a" d="M 18 14.5 L 19 14.5"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#4fb3ae79c3e9453aadfdb2098d4dc6ea)" p:name="line2" id="fb985e78c9b44c74a98c7c07abbd2d3c" d="M 31 14.5 L 32 14.5"/>
+
+        <ellipse p:name="circle" id="ff092a93a7e24b64ad5632cde79fe731" rx="8" ry="8" cx="25" cy="14.5" style="stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; fill: rgb(255, 255, 255); fill-opacity: 1;"/>
+
+      <g p:name="ChannelAnnotation" id="7b90f00c26214465b7b1cbf095b784eb">
+        <text style="font-style: normal; font-variant: normal; font-stretch: normal; font-size: 13px; line-height: 125%; font-family: Arial; letter-spacing: 0px; word-spacing: 0px; fill: rgb(0, 0, 0); fill-opacity: 1; stroke: none; stroke-width: 0.264583px; stroke-linecap: butt; stroke-linejoin: miter; stroke-opacity: 1; visibility: visible;" p:name="R" id="20b49c771adc469ca72b678e8f565fb9" x="15.5" y="-1.5">
+          <tspan p:name="Rspan" id="8cb48a065d444f50ba52cb9d2992936f">R</tspan>
+        </text>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#ba9c2713bc5a4c0bb1c57935682b50a1)" p:name="Rline1" id="91ba9b26d06f44459df37f103a1a3142" d="M 14 -5.5 L 8 -5.5"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: visible;" fill="none" marker-end="url(#ba9c2713bc5a4c0bb1c57935682b50a1)" p:name="Rline2" id="60fa22d84d0b4dc58bf02cfa97422043" d="M 32 -5.5 L 38 -5.5"/>
+      </g>
+
+        <text xml:space="preserve" p:name="text" id="1528375c7a2c4ca0b2955b508df78e1c" transform="translate(-125,25)" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;"/>        
+
+    </g><g p:type="Shape" p:def="tamBD:BDChannelHorVert_V002" p:sc="hor. Channel" id="b0b6da20b1e447c29b438812f994b90c" transform="matrix(1,0,0,1,933,199)"><p:metadata><p:property name="BOOLhasExtensionA">false</p:property><p:property name="BOOLhasExtensionB">false</p:property><p:property name="BOOLisHorizontal">true</p:property><p:property name="ENUMalignType">center</p:property><p:property name="HNDLp1" p:viay="4.5" p:viax="-263" p:connectedOutletId="right-center" p:connectedShapeId="17103a794886422989f31fe8f73286f8">-273,4.5</p:property><p:property name="HNDLp2" p:viay="1.5" p:viax="-155" p:connectedOutletId="left-center" p:connectedShapeId="b7027a54368943958524ffc5832c54fa">-145,1.5</p:property><p:property name="HNDLc3">-220,3</p:property><p:property name="BOOLlockArrowStyle">false</p:property><p:property name="ENUMarrowStyleStart">none</p:property><p:property name="ENUMarrowStyleEnd">none</p:property><p:property name="ENUMdirectionType">single</p:property><p:property name="ENUMcircleRadius">8</p:property><p:property name="ENUMrOffset">20</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|</p:property><p:property name="COLRnodeFillColor">#FFFFFFFF</p:property><p:property name="STYLnodeStrokeStyle">2|</p:property><p:property name="HNDLtextPos">25,25</p:property><p:property name="TTXTtextContent"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+        <defs>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowEnd" id="4449b6eefa964238b6433a96b4760825">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowEndPath" id="dd65ce17e9d44dc6a64fc36a2df8d37a" d="" transform="rotate(180) translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowStart" id="165d5d1aa27248618efb70daf753207a">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowStartPath" id="cd982e3775d4497bb8a8839f97219f4b" d="" transform="translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="RArrow" id="08ba4999d45746fda55153a98171d6ba">
+
+               <path transform="rotate(180) translate(1,0)" style="fill-rule:evenodd;stroke-width:0.625;stroke-linejoin:round;stroke:#000000;stroke-opacity:1;fill:#000000;fill-opacity:1" p:name="RArrowPath" id="e1d8cd6f789e4ff4afc73815ba223fcc" d="M 9 5 L -1 0 L 9 -5 C 7 -2 7 2 9 5 z"/>
+            </marker>
+         </defs>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1;" fill="none" marker-start="url(#165d5d1aa27248618efb70daf753207a)" marker-end="url(#4449b6eefa964238b6433a96b4760825)" p:name="line" id="6b5636bfb94c4e51969f504c8288a360" d="M -273 3 L -145 3"/>
+
+        <path fill="none" style="stroke: rgba(0, 0, 0, 0); stroke-width: 10px;" p:name="lineGrip" id="3d95041977eb4988ba25e65799b1f352" d="M -273 3 L -145 3"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#4449b6eefa964238b6433a96b4760825)" p:name="line1" id="251068a51c744e81a33029e0af8bc68e" d="M -227 3 L -226 3"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#165d5d1aa27248618efb70daf753207a)" p:name="line2" id="993420ff6e1d46e786d2b00550e97acf" d="M -214 3 L -213 3"/>
+
+        <ellipse p:name="circle" id="caa02b0ac7f2455baf02b9dfb548fd67" rx="8" ry="8" cx="-220" cy="3" style="stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; fill: rgb(255, 255, 255); fill-opacity: 1;"/>
+
+      <g p:name="ChannelAnnotation" id="8e16cf45227d4ea2974900aaf6937b87">
+        <text style="font-style: normal; font-variant: normal; font-stretch: normal; font-size: 13px; line-height: 125%; font-family: Arial; letter-spacing: 0px; word-spacing: 0px; fill: rgb(0, 0, 0); fill-opacity: 1; stroke: none; stroke-width: 0.264583px; stroke-linecap: butt; stroke-linejoin: miter; stroke-opacity: 1; visibility: visible;" p:name="R" id="e4c2f7a4ccac475bad4216ba5f13ee63" x="-229.5" y="-13">
+          <tspan p:name="Rspan" id="5d4c231ffb1843c3abf53fe0f50ff26a">R</tspan>
+        </text>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#08ba4999d45746fda55153a98171d6ba)" p:name="Rline1" id="b9c21d65ea924b5dabc100353fc6f620" d="M -231 -17 L -237 -17"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: visible;" fill="none" marker-end="url(#08ba4999d45746fda55153a98171d6ba)" p:name="Rline2" id="b4e01e3bfb1e464eb85d824427abb89e" d="M -213 -17 L -207 -17"/>
+      </g>
+
+        <text xml:space="preserve" p:name="text" id="1d6889e1cb3c4c7a835e7ba3e2d03349" transform="translate(-125,25)" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;"/>        
+
+    </g><g p:type="Shape" p:def="tamBD:BDAgent_V003" p:sc="Human Agent" id="5a2730e45a4c44969ddd9b648bb5f7ba" transform="matrix(1,0,0,1,13,161)"><p:metadata><p:property name="box">72,104</p:property><p:property name="BOOLallowMultiple">true</p:property><p:property name="BOOLisMultiple">false</p:property><p:property name="BOOLallowHuman">true</p:property><p:property name="BOOLshowHuman">true</p:property><p:property name="HNDLhumanPos">36,52</p:property><p:property name="ENUMhumanSize">1.5</p:property><p:property name="ENUMmood">happy</p:property><p:property name="fillColor">#FFFFFFFF</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">2|</p:property><p:property name="TTXTlabel"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,2</p:property></p:metadata>
+        <rect x="0" y="0" p:name="rectMultiple" id="4c3e50f4d7134c3982a11a01daca5c09" transform="translate(8,-8)" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: hidden; display: none;" height="104" width="72"/>
+        <rect x="0" y="0" p:name="rect" id="033442fb056545128e33b716e1ede5fe" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2;" height="104" width="72"/>
+        <text text-anchor="start" xml:space="preserve" p:name="text" id="c7f095b49a014d9c881e638abe1f8889" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;" transform="translate(36,99)"/>
+
+            <g p:name="stickman" id="b288ebbf9be245a0949712c7bcaed87b" transform="translate(36,52) scale(1.5,1.5)" style="fill: rgb(255, 255, 255); fill-opacity: 1; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; visibility: visible;">
+            <ellipse style="opacity:1;stroke-width:1;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1" cx="0" cy="-7.5" rx="3" ry="3" p:name="head" id="5305a6671f934e398ac53fb929797152"/>
+            <path d="m 0,-4.5 0,7.5" style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" p:name="body" id="37ffeca61bdd448dbb6e1ceddd177212"/>
+            <path style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" d="m 0,3 -5,7" p:name="leftLeg" id="35b4048cf4314da8a4b3855e4e1067bb"/>
+            <path style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" d="m 0,3 5,7" p:name="rightLeg" id="fd57d038eaed4db6ab9dc3d8e70e6bbe"/>
+            <path style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" sodipodi:nodetypes="cc" p:name="leftArm" id="a00593b1e3e44bafa6ce0d7c60e0d9a9" d="m 0,-1 -5,-3"/>
+            <path sodipodi:nodetypes="cc" style="fill:none;fill-rule:evenodd;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1" p:name="rightArm" id="e30e31b9d268475181b5ce9ed562207a" d="m 0,-1 5,-3"/>
+           </g>
+
+
+    </g><g p:type="Shape" p:def="tamBD:BDChannelHorVert_V002" p:sc="hor. Channel" id="592434927c6748678b5eb636c26dce89" transform="matrix(1,0,0,1,100,213)"><p:metadata><p:property name="BOOLhasExtensionA">false</p:property><p:property name="BOOLhasExtensionB">false</p:property><p:property name="BOOLisHorizontal">true</p:property><p:property name="ENUMalignType">center</p:property><p:property name="HNDLp1" p:viay="0" p:viax="-5" p:connectedOutletId="right-center" p:connectedShapeId="5a2730e45a4c44969ddd9b648bb5f7ba">-15,0</p:property><p:property name="HNDLp2" p:viay="-12" p:viax="61.000000000000014" p:connectedOutletId="left-center" p:connectedShapeId="7e4599f6383f46648cd9ca5a0b4ea088">71,-12</p:property><p:property name="HNDLc3">25,0</p:property><p:property name="BOOLlockArrowStyle">false</p:property><p:property name="ENUMarrowStyleStart">none</p:property><p:property name="ENUMarrowStyleEnd">none</p:property><p:property name="ENUMdirectionType">single</p:property><p:property name="ENUMcircleRadius">8</p:property><p:property name="ENUMrOffset">20</p:property><p:property name="strokeColor">#000000FF</p:property><p:property name="strokeStyle">1|</p:property><p:property name="COLRnodeFillColor">#FFFFFFFF</p:property><p:property name="STYLnodeStrokeStyle">2|</p:property><p:property name="HNDLtextPos">25,25</p:property><p:property name="TTXTtextContent"/><p:property name="textColor">#000000FF</p:property><p:property name="textFont">sans-serif|normal|normal|13px|none|0</p:property><p:property name="ALGNtextAlignment">1,1</p:property></p:metadata>
+        <defs>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowEnd" id="7b97eb6f94e24b7ab728714f7c4c4bf1">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowEndPath" id="aa41173eab754c1e9d5242ac5fbcaab7" d="" transform="rotate(180) translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="ArrowStart" id="00b837efb76f4947a8297872c78f5b01">
+
+               <path style="fill-rule: evenodd; stroke-width: 0.9; stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; fill: rgb(0, 0, 0); fill-opacity: 0; visibility: hidden; display: none;" p:name="ArrowStartPath" id="0ee6c30f86e14f158cccbfbaecee138b" d="" transform="translate(1,0) scale(0.75,0.75)"/>
+            </marker>
+
+            <marker orient="auto" refY="0.0" refX="0.0" style="overflow:visible;" markerUnits="userSpaceOnUse" p:name="RArrow" id="a6b7cb1e104f4a2d9dc224c8bf8aa5c9">
+
+               <path transform="rotate(180) translate(1,0)" style="fill-rule:evenodd;stroke-width:0.625;stroke-linejoin:round;stroke:#000000;stroke-opacity:1;fill:#000000;fill-opacity:1" p:name="RArrowPath" id="584ef9e1336f49ba8c053537af0a846e" d="M 9 5 L -1 0 L 9 -5 C 7 -2 7 2 9 5 z"/>
+            </marker>
+         </defs>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1;" fill="none" marker-start="url(#00b837efb76f4947a8297872c78f5b01)" marker-end="url(#7b97eb6f94e24b7ab728714f7c4c4bf1)" p:name="line" id="cdd0b979647545e4b2c17c9800bd069a" d="M -15 -6 L 71 -6"/>
+
+        <path fill="none" style="stroke: rgba(0, 0, 0, 0); stroke-width: 10px;" p:name="lineGrip" id="2cdf0433473f462cb722e86f8930e76c" d="M -15 -6 L 71 -6"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#7b97eb6f94e24b7ab728714f7c4c4bf1)" p:name="line1" id="4dedff8889e04a109167f9d9d8da7fba" d="M 18 -6 L 19 -6"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#00b837efb76f4947a8297872c78f5b01)" p:name="line2" id="4b40e13c97e74bbc83d8a09671d48f9a" d="M 31 -6 L 32 -6"/>
+
+        <ellipse p:name="circle" id="c45e5d5b42cd4c3987b51cc5c5c0ce93" rx="8" ry="8" cx="25" cy="-6" style="stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 2; fill: rgb(255, 255, 255); fill-opacity: 1;"/>
+
+      <g p:name="ChannelAnnotation" id="f4b905c4d690488f874a66e1517fa7ac">
+        <text style="font-style: normal; font-variant: normal; font-stretch: normal; font-size: 13px; line-height: 125%; font-family: Arial; letter-spacing: 0px; word-spacing: 0px; fill: rgb(0, 0, 0); fill-opacity: 1; stroke: none; stroke-width: 0.264583px; stroke-linecap: butt; stroke-linejoin: miter; stroke-opacity: 1; visibility: visible;" p:name="R" id="57229378dbc34bec8e43cd4e11d3ff43" x="15.5" y="-22">
+          <tspan p:name="Rspan" id="51150f5a0d3a4301aeaf83c0af72521a">R</tspan>
+        </text>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: hidden; display: none;" fill="none" marker-end="url(#a6b7cb1e104f4a2d9dc224c8bf8aa5c9)" p:name="Rline1" id="dbd40623655c42b5a15f5e285917da6d" d="M 14 -26 L 8 -26"/>
+
+        <path style="stroke-linejoin: round; stroke: rgb(0, 0, 0); stroke-opacity: 1; stroke-width: 1; visibility: visible;" fill="none" marker-end="url(#a6b7cb1e104f4a2d9dc224c8bf8aa5c9)" p:name="Rline2" id="4957b61e1c0e45d2b55d3488605df1c7" d="M 32 -26 L 38 -26"/>
+      </g>
+
+        <text xml:space="preserve" p:name="text" id="0dd8eabd2f9842a0bbd56d1e17ff0ae7" transform="translate(-125,25)" style="font-family: sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none; fill: rgb(0, 0, 0); fill-opacity: 1;"/>        
+
+    </g><g p:type="Shape" p:def="Evolus.Common:PlainTextV2" id="1b7dc8d88f6646b681e02978b8a2590b" transform="matrix(1,0,0,1,12,286)"><p:metadata><p:property name="disabled">false</p:property><p:property name="width">100,0</p:property><p:property name="fixedWidth">false</p:property><p:property name="label">BusinessUsers</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">"Liberation Sans",Arial,sans-serif|normal|normal|13px|none|0</p:property><p:property name="textAlign">0,0</p:property></p:metadata>
+            <rect x="0" y="0" style="fill: none; stroke: none; visibility: hidden; display: none;" p:name="bgRect" id="3fb2b7c4f9a74f6e9b2ccecf2f689535" width="86.703125" height="15"/>
+            <text xml:space="preserve" p:name="text" id="26a90c8eba5b441ca7f65bffbe65a867" style="fill: rgb(0, 0, 0); fill-opacity: 1; font-family: &quot;Liberation Sans&quot;, Arial, sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none;"><tspan x="0" y="0">BusinessUsers</tspan></text>
+        </g><g p:type="Shape" p:def="Evolus.Common:PlainTextV2" id="f7181d8730d94daa99e7bafc7f6b4cf1" transform="matrix(1,0,0,1,438,310)"><p:metadata><p:property name="disabled">false</p:property><p:property name="width">100,0</p:property><p:property name="fixedWidth">false</p:property><p:property name="label">Select Company</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">"Liberation Sans",Arial,sans-serif|normal|normal|13px|none|0</p:property><p:property name="textAlign">0,0</p:property></p:metadata>
+            <rect x="0" y="0" style="fill: none; stroke: none; visibility: hidden; display: none;" p:name="bgRect" id="3c401418292c490bbf75169efe6760ed" width="95.3828125" height="15"/>
+            <text xml:space="preserve" p:name="text" id="934563ef9740438b8a7b7b47c4d10c84" style="fill: rgb(0, 0, 0); fill-opacity: 1; font-family: &quot;Liberation Sans&quot;, Arial, sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none;"><tspan x="0" y="0">Select Company</tspan></text>
+        </g><g p:type="Shape" p:def="Evolus.Common:PlainTextV2" id="57edeeb95929465b9e94fc2c8c00ff32" transform="matrix(1,0,0,1,344,224)"><p:metadata><p:property name="disabled">false</p:property><p:property name="width">100,0</p:property><p:property name="fixedWidth">false</p:property><p:property name="label">MCP Session</p:property><p:property name="textColor">#000000FF</p:property><p:property name="textFont">"Liberation Sans",Arial,sans-serif|normal|normal|13px|none|0</p:property><p:property name="textAlign">0,0</p:property></p:metadata>
+            <rect x="0" y="0" style="fill: none; stroke: none; visibility: hidden; display: none;" p:name="bgRect" id="aff67633669449febce15cc4627780a1" width="78.515625" height="15"/>
+            <text xml:space="preserve" p:name="text" id="74ba8c1ea7984a43a1e0aac9d8da7165" style="fill: rgb(0, 0, 0); fill-opacity: 1; font-family: &quot;Liberation Sans&quot;, Arial, sans-serif; font-size: 13px; font-weight: normal; font-style: normal; text-decoration: none;"><tspan x="0" y="0">MCP Session</tspan></text>
+        </g></g></g></svg>

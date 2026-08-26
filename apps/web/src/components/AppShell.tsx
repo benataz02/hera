@@ -12,7 +12,7 @@ import {
 } from "@ui5/webcomponents-react";
 import type { SideNavigationPropTypes, NavigationLayoutDomRef, NavigationLayoutPropTypes } from "@ui5/webcomponents-react";
 import { authClient } from "../auth-client.ts";
-import { orpc, client } from "../orpc.ts";
+import { orpc, client, meQuery } from "../orpc.ts";
 import { GlobalSearch, type SearchEntry } from "./GlobalSearch.tsx";
 import { useRef, useState, useEffect, useMemo } from "react";
 import { getTheme, setTheme } from '@ui5/webcomponents-base/dist/config/Theme.js';
@@ -23,7 +23,6 @@ import { getTheme, setTheme } from '@ui5/webcomponents-base/dist/config/Theme.js
 export function AppShell() {
   const navigate = useNavigate();
   const router = useRouter();
-  const { data: session } = useQuery<Awaited<ReturnType<typeof authClient.getSession>>["data"]>({ queryKey: ["session"] });
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const navLayoutRef = useRef<NavigationLayoutDomRef>(null);
@@ -34,25 +33,22 @@ export function AppShell() {
   const [density, setDensity] = useState<Density>(() => (localStorage.getItem("density") as Density) ?? getDensity());
   const [theme, setThemeState] = useState<string>(() => localStorage.getItem("theme") ?? getTheme());
 
-  // Org role decides whether the Settings (entity config) item shows. The server gates it too.
-  // Roles are plain text (Better Auth's org plugin only types its own built-in "member"/"admin"/
-  // "owner" — "client" is this app's addition), so the query result is widened to `string`.
-  const role = useQuery({
-    queryKey: ["active-member-role"],
-    queryFn: async (): Promise<string> => (await authClient.organization.getActiveMember()).data?.role ?? "member",
-  });
-  const isAdmin = role.data === "admin" || role.data === "owner";
-  const isClient = role.data === "client";
+  // Identity + org role in one query, already primed by _authed's beforeLoad — a cache read.
+  // Role decides whether the Settings (entity config) item shows; the server gates it too.
+  const me = useQuery(meQuery);
+  const user = me.data?.user;
+  const isAdmin = me.data?.role === "admin" || me.data?.role === "owner";
+  const isClient = me.data?.role === "client";
 
-  const entities = useQuery({ ...orpc.entities.getEnabled.queryOptions(), enabled: !!role.data && !isClient });
+  const entities = useQuery({ ...orpc.entities.getEnabled.queryOptions(), enabled: !!me.data && !isClient });
   const enabled = entities.data ?? [];
 
   // Open the agent's B1 Service Layer session once per app load so the first query/value-help
   // doesn't wait out the /Login round-trip. Best-effort: ignore failures (e.g. agent offline).
   // Skipped for client (portal) sessions — they never touch entity data.
   useEffect(() => {
-    if (role.data && !isClient) void client.entities.login().catch(() => {});
-  }, [role.data, isClient]);
+    if (me.data && !isClient) void client.entities.login().catch(() => {});
+  }, [me.data, isClient]);
 
   const onSelect: SideNavigationPropTypes["onSelectionChange"] = (e) => {
     const el = e.detail.item as HTMLElement;
@@ -121,7 +117,7 @@ export function AppShell() {
 
   const signOut = async () => {
     await authClient.signOut();
-    queryClient.setQueryData(["session"], null);
+    queryClient.clear(); // drop session + role + entity caches, not just the session
     navigate({ to: "/login" });
   };
 
@@ -163,9 +159,9 @@ export function AppShell() {
             onSignOutClick={signOut}
             accounts={
               <UserMenuAccount
-                avatarInitials={session?.user?.name?.substring(0, 2).toUpperCase() ?? 'U'}
-                titleText={session?.user?.name}
-                description={session?.user?.email}
+                avatarInitials={user?.name?.substring(0, 2).toUpperCase() ?? 'U'}
+                titleText={user?.name}
+                description={user?.email}
               />
             }
             showEditAccounts

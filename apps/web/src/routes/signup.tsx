@@ -2,7 +2,7 @@ import { createFileRoute, redirect, useNavigate, Link } from "@tanstack/react-ro
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Input, Button, MessageStrip } from "@ui5/webcomponents-react";
-import { authClient } from "../auth-client.ts";
+import { authClient, sessionQuery } from "../auth-client.ts";
 import { AuthLayout } from "../components/AuthLayout.tsx";
 import { SocialButtons } from "../components/SocialButtons.tsx";
 import { apexUrl, hardRedirect, isApex, safeRedirect } from "../lib/tenant.ts";
@@ -16,10 +16,7 @@ export const Route = createFileRoute("/signup")({
       return hardRedirect(
         apexUrl(`/signup${search.redirect ? `?redirect=${encodeURIComponent(search.redirect)}` : ""}`),
       );
-    const data = await context.queryClient.ensureQueryData({
-      queryKey: ["session"],
-      queryFn: async () => (await authClient.getSession()).data ?? null,
-    });
+    const data = await context.queryClient.ensureQueryData(sessionQuery);
     if (data?.session) {
       const to = safeRedirect(search.redirect);
       if (to) return hardRedirect(to);
@@ -49,11 +46,9 @@ function Signup() {
       return res.data;
     },
     onSuccess: async () => {
-      await queryClient.fetchQuery({
-        queryKey: ["session"],
-        queryFn: async () => (await authClient.getSession()).data ?? null,
-        staleTime: 0,
-      });
+      // staleTime:0 is load-bearing: a cached `null` counts as a cache hit, so ensureQueryData
+      // would never refetch after sign-up.
+      await queryClient.fetchQuery({ ...sessionQuery, staleTime: 0 });
       const to = safeRedirect(redirectTo);
       if (to) return void hardRedirect(to);
       navigate({ to: "/onboarding" }); // brand-new user has no org yet

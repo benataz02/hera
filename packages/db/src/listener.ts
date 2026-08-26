@@ -15,6 +15,15 @@ function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
+// ponytail: one promise chain serializes queries onto the single client. pg@9 removes the
+//           client's internal query queue, so overlapping client.query() calls become an error.
+let chain: Promise<unknown> = Promise.resolve();
+function listen(c: Client, channel: string): Promise<unknown> {
+  const next = chain.then(() => c.query(`LISTEN ${quoteIdent(channel)}`));
+  chain = next.catch(() => {});
+  return next;
+}
+
 async function ensureClient(): Promise<Client> {
   if (client) return client;
   if (!connecting) {
@@ -32,7 +41,7 @@ async function ensureClient(): Promise<Client> {
       });
       client = c;
       // Re-arm LISTEN for any channels that already have subscribers (post-reconnect).
-      for (const ch of subs.keys()) await c.query(`LISTEN ${quoteIdent(ch)}`);
+      for (const ch of subs.keys()) await listen(c, ch);
     })();
   }
   await connecting;
@@ -47,7 +56,7 @@ export async function waitForNotify(channel: string, timeoutMs: number): Promise
   const c = await ensureClient();
   if (!subs.has(channel)) {
     subs.set(channel, new Set());
-    await c.query(`LISTEN ${quoteIdent(channel)}`);
+    await listen(c, channel);
   }
   const set = subs.get(channel)!;
   return new Promise<boolean>((resolve) => {

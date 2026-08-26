@@ -95,7 +95,7 @@ export function ModelBuilderPage({ id }: { id: string }) {
             subHeader={m.dirty ? <ObjectStatus state="Critical">Unsaved changes</ObjectStatus> : undefined}
             actionsBar={
               <Toolbar design="Transparent">
-                <Button design="Emphasized" disabled={m.issues.length > 0 || !m.dirty || m.saving} onClick={m.save}>
+                <Button design="Emphasized" disabled={m.issues.length > 0 || !m.dirty || m.saving} onClick={() => void m.save()}>
                   {m.saving ? "Saving…" : "Save"}
                 </Button>
               </Toolbar>
@@ -116,7 +116,9 @@ export function ModelBuilderPage({ id }: { id: string }) {
         <ObjectPageSection id="routing" titleText={secTitle("Routing", "routing")}>
           <RoutingTab draft={draft} update={m.update} issues={allIssues} tables={suggestTables} />
         </ObjectPageSection>
-        <ObjectPageSection id="tables" titleText="Tables"><TablesTab draft={draft} update={m.update} /></ObjectPageSection>
+        <ObjectPageSection id="tables" titleText={secTitle("Tables", "tables")}>
+          <TablesTab draft={draft} update={m.update} tableEdits={m.tableEdits} editTable={m.editTable} />
+        </ObjectPageSection>
         <ObjectPageSection id="history" titleText={secTitle("History", "history")}>
           <HistoryTab draft={draft} update={m.update} issues={allIssues} modelId={id} dirty={m.dirty} />
         </ObjectPageSection>

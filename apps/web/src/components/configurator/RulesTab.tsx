@@ -119,7 +119,7 @@ function ComboTableDialog({ draft, lookups, value, onOk, onCancel }: {
 }) {
   const [c, setCLocal] = useState<TableConstraint>(structuredClone(value));
   // Only finite params can appear in a combination table (checkModel enforces the same).
-  const eligible = draft.parameters.filter((p) => p.domain?.kind === "options" || p.type === "boolean");
+  const eligible = draft.parameters.filter((p) => !p.excludeFromDomains && (p.domain?.kind === "options" || p.type === "boolean"));
   const optionsFor = (key: string): Cell[] | null => {
     const p = draft.parameters.find((x) => x.key === key);
     if (p?.type === "boolean") return [true, false];

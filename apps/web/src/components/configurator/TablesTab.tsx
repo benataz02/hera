@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Button, BusyIndicator, Card, CardHeader, Form, FormItem, Icon, IllustratedMessage, Input, Label,
-  List, ListItemCustom, ListItemGroup, ListItemStandard, Menu, MenuItem, MessageStrip, ObjectStatus,
+  Button, BusyIndicator, Card, CardHeader, CheckBox, Form, FormItem, Icon, IllustratedMessage, Input, Label,
+  List, ListItemCustom, ListItemGroup, ListItemStandard, MessageStrip, ObjectStatus,
   Option, Select, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, TableRowAction,
   TableVirtualizer, Text, Title,
 } from "@ui5/webcomponents-react";
@@ -11,17 +11,26 @@ import type { ModelDef, Val } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
 import { QueryCard } from "./QueryEditor.tsx";
 import { colMinWidth } from "./tableWidths.ts";
+import { NEW_TABLE_KEY, type TableCell as Cell, type TableCol as Col, type TableDraft as Draft } from "./useDraftModel.ts";
 import { confirm } from "../confirm.ts";
 import { toast } from "../toast.ts";
-
-type Col = { key: string; label: string; type: "string" | "number" | "boolean" };
-// config_table cells are scalar (ValZ), unlike the full Val union which includes string[].
-type Cell = Exclude<Val, string[]>;
-type Draft = { id?: string; name: string; columns: Col[]; rows: Cell[][] };
 
 type Update = (fn: (d: ModelDef) => ModelDef) => void;
 
 const empty = (): Draft => ({ name: "", columns: [{ key: "key", label: "Key", type: "string" }], rows: [] });
+
+type QueryTable = ModelDef["queryTables"][number];
+
+// Drop labels/hidden for keys Test fetch no longer returns; omit empty bags so the model stays sparse.
+function pruneColUi(columns: string[], labels?: Record<string, string>, hidden?: string[]): Pick<QueryTable, "labels" | "hidden"> {
+  const keys = new Set(columns);
+  const nextLabels = Object.fromEntries(Object.entries(labels ?? {}).filter(([k, v]) => keys.has(k) && v.trim() !== ""));
+  const nextHidden = (hidden ?? []).filter((k) => keys.has(k));
+  return {
+    labels: Object.keys(nextLabels).length ? nextLabels : undefined,
+    hidden: nextHidden.length ? nextHidden : undefined,
+  };
+}
 
 const EDITOR = { flex: 1, maxWidth: "64rem", display: "flex", flexDirection: "column", gap: "1rem" } as const;
 // Same geometry as SettingsTab/HistoryTab so the builder's tabs line up.
@@ -34,33 +43,33 @@ const CARD_BODY = { padding: "0 1rem 1rem" } as const;
 const ROW_HEIGHT = 44;
 const ROWS_VIEWPORT = { maxHeight: "32rem", overflow: "auto" } as const;
 
-export function TablesTab({ draft: model, update }: { draft: ModelDef; update: Update }) {
+export function TablesTab({ draft: model, update, tableEdits, editTable }: {
+  draft: ModelDef;
+  update: Update;
+  // Lookup-table edits live in useDraftModel so the model's Save button commits them; this tab
+  // only picks what's open and edits through `editTable`.
+  tableEdits: Record<string, Draft>;
+  editTable: (key: string, d: Draft | null) => void;
+}) {
   const qc = useQueryClient();
   const listQ = useQuery(orpc.models.tables.list.queryOptions());
-  const invalidate = () => qc.invalidateQueries({ queryKey: orpc.models.tables.list.queryOptions().queryKey });
-  const [draft, setDraft] = useState<Draft | null>(null); // tenant-table editor
+  const [selKey, setSelKey] = useState<string | null>(null); // open lookup table (server id, or NEW_TABLE_KEY)
   const [qIdx, setQIdx] = useState<number | null>(null); // queryTables editor
-  // Lookup tables save on their own button, so ModelBuilderPage's useBlocker doesn't cover them.
-  // Track edits here so the status shows and a selection change can't silently discard them.
-  const [dirty, setDirty] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
 
-  const save = useMutation(orpc.models.tables.save.mutationOptions({
-    onSuccess: () => { invalidate(); setDirty(false); toast("Table saved"); },
-  }));
   const remove = useMutation(
     orpc.models.tables.remove.mutationOptions({
-      onSuccess: () => {
-        invalidate();
-        setDraft(null);
-        setDirty(false);
+      onSuccess: (_res, vars) => {
+        qc.invalidateQueries({ queryKey: orpc.models.tables.list.queryOptions().queryKey });
+        editTable(vars.id, null);
+        setSelKey(null);
         toast("Table deleted");
       },
     }),
   );
   const confirmRemoveTable = async (id: string, name: string) => {
-    // Lookup tables are their own server rows shared across models — deletion is immediate and irreversible.
-    if (await confirm({ title: "Delete lookup table", message: `Delete table "${name}"? Models that reference it by name will fail their lookups. This can't be undone.`, actionText: "Delete", destructive: true }))
+    // Lookup tables are their own server rows shared across models — unlike edits, deletion is
+    // immediate and irreversible, so it doesn't wait for the model's Save button.
+    if (await confirm({ title: "Delete lookup table", message: `Delete table "${name}"? Models that reference it by name will fail their lookups. This happens immediately and can't be undone.`, actionText: "Delete", destructive: true }))
       remove.mutate({ id });
   };
   const confirmRemoveQuery = async (name: string, run: () => void) => {
@@ -68,52 +77,31 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
       run();
   };
 
+  if (listQ.isPending) return <BusyIndicator active delay={0} style={{ width: "100%", marginTop: "2rem" }} />;
+
   const tables = listQ.data ?? [];
 
-  // Every editor mutation goes through here: the updater form (so two fast edits can't drop one)
-  // plus the dirty flag that drives the status and the discard guard.
-  const edit = (fn: (d: Draft) => Draft) => { setDraft((d) => (d ? fn(d) : d)); setDirty(true); };
-
-  const discardOk = async () =>
-    !dirty || await confirm({
-      title: "Discard changes?",
-      message: `"${draft?.name || "This table"}" has unsaved changes that the model's Save button won't keep. Leave without saving?`,
-      actionText: "Discard",
-      destructive: true,
-    });
-
-  const openTable = async (id: string) => {
-    if (!(await discardOk())) return;
+  const fromServer = (id: string): Draft | null => {
     const t = tables.find((x) => x.id === id);
-    if (!t) return;
-    setDraft({ id: t.id, name: t.name, columns: t.columns as Col[], rows: t.rows as Cell[][] });
-    setDirty(false);
+    return t ? { id: t.id, name: t.name, columns: t.columns as Col[], rows: t.rows as Cell[][] } : null;
+  };
+  // A pending edit wins over the server row; NEW_TABLE_KEY only ever exists as a pending edit.
+  const draft = selKey ? (tableEdits[selKey] ?? fromServer(selKey)) : null;
+  const edit = (fn: (d: Draft) => Draft) => { if (selKey && draft) editTable(selKey, fn(draft)); };
+
+  const newTable = () => {
+    editTable(NEW_TABLE_KEY, empty());
+    setSelKey(NEW_TABLE_KEY);
     setQIdx(null);
   };
-  const openQuery = async (i: number) => {
-    if (!(await discardOk())) return;
-    setQIdx(i);
-    setDraft(null);
-    setDirty(false);
-  };
-  const newTable = async () => {
-    if (!(await discardOk())) return;
-    setDraft(empty());
-    setDirty(false);
-    setQIdx(null);
-  };
-  const addQuery = async () => {
-    if (!(await discardOk())) return;
+  const addQuery = () => {
     update((d) => ({
       ...d,
       queryTables: [...d.queryTables, { name: `query${d.queryTables.length + 1}`, target: "b1", path: "", columns: [] }],
     }));
     setQIdx(model.queryTables.length);
-    setDraft(null);
-    setDirty(false);
+    setSelKey(null);
   };
-
-  if (listQ.isPending) return <BusyIndicator active delay={0} style={{ width: "100%", marginTop: "2rem" }} />;
 
   const typed = (col: Col, raw: string): Cell =>
     col.type === "number" ? (raw === "" ? null : Number(raw)) : col.type === "boolean" ? raw === "true" : raw;
@@ -136,6 +124,10 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
       <Text style={{ color: "var(--sapContent_LabelColor)", fontStyle: "italic", padding: "0 1rem" }}>{text}</Text>
     </ListItemCustom>
   );
+  const rowSummary = (d: { columns: unknown[]; rows: unknown[] }) =>
+    `${d.columns.length} cols · ${d.rows.length} rows`;
+
+  const pendingNew = tableEdits[NEW_TABLE_KEY];
 
   return (
     <div style={{ display: "flex", gap: "1rem", padding: "1rem", alignItems: "flex-start" }}>
@@ -144,8 +136,8 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
           selectionMode="SingleEnd"
           onItemClick={(e) => {
             const el = e.detail.item as HTMLElement;
-            if (el.dataset.id) void openTable(el.dataset.id);
-            else if (el.dataset.idx) void openQuery(Number(el.dataset.idx));
+            if (el.dataset.id) { setSelKey(el.dataset.id); setQIdx(null); }
+            else if (el.dataset.idx) { setQIdx(Number(el.dataset.idx)); setSelKey(null); }
           }}>
           {/* ListItemGroup's header slot only takes a list item, so the + button rides inside one.
               Inlined rather than extracted: a wrapper component would swallow the injected `slot`. */}
@@ -154,21 +146,27 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
               <ListItemCustom type="Inactive">
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
                   <Title level="H6">Lookup tables</Title>
-                  <Button icon="add" design="Transparent" tooltip="New table" onClick={() => void newTable()} />
+                  <Button icon="add" design="Transparent" tooltip="New table" onClick={newTable} />
                 </div>
               </ListItemCustom>
             }>
-            {tables.map((t) => (
-              <ListItemStandard key={t.id} data-id={t.id} selected={!!draft?.id && draft.id === t.id}
-                text={t.name}
-                additionalText={`${(t.columns as Col[]).length} cols · ${(t.rows as Val[][]).length} rows`} />
-            ))}
-            {/* An unsaved new table has no row on the server yet — without this the list shows
-                nothing selected while its editor is open. */}
-            {draft && !draft.id ? (
-              <ListItemStandard type="Inactive" selected text={draft.name || "New table"} additionalText="Unsaved" />
+            {tables.map((t) => {
+              const pending = tableEdits[t.id];
+              return (
+                <ListItemStandard key={t.id} data-id={t.id} selected={selKey === t.id}
+                  text={pending?.name || t.name}
+                  additionalText={pending
+                    ? `${rowSummary(pending)} · edited`
+                    : rowSummary({ columns: t.columns as unknown[], rows: t.rows as unknown[] })} />
+              );
+            })}
+            {/* An unsaved new table has no server row yet — without this the list shows nothing
+                selected while its editor is open. */}
+            {pendingNew ? (
+              <ListItemStandard data-id={NEW_TABLE_KEY} selected={selKey === NEW_TABLE_KEY}
+                text={pendingNew.name || "New table"} additionalText={`${rowSummary(pendingNew)} · new`} />
             ) : null}
-            {!tables.length && !(draft && !draft.id) ? emptyItem("None yet — use + to add one.") : null}
+            {!tables.length && !pendingNew ? emptyItem("None yet — use + to add one.") : null}
           </ListItemGroup>
 
           <ListItemGroup
@@ -176,7 +174,7 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
               <ListItemCustom type="Inactive">
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
                   <Title level="H6">Queries — this model</Title>
-                  <Button icon="add" design="Transparent" tooltip="New query" onClick={() => void addQuery()} />
+                  <Button icon="add" design="Transparent" tooltip="New query" onClick={addQuery} />
                 </div>
               </ListItemCustom>
             }>
@@ -190,28 +188,25 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
 
       {draft ? (
         <div style={EDITOR}>
-          {save.error ? <MessageStrip design="Negative" hideCloseButton>{save.error.message}</MessageStrip> : null}
-
           <Card
             header={
               <CardHeader
                 titleText={draft.name || "New lookup table"}
-                subtitleText="Its own server row, shared across models — the model's Save button doesn't cover it."
+                subtitleText="Its own server row, shared across every model that references it by name."
                 action={
                   <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    {dirty ? <ObjectStatus state="Critical">Unsaved changes</ObjectStatus> : null}
-                    <Button design="Emphasized" disabled={!draft.name.trim() || !draft.columns.length || save.isPending}
-                      onClick={() => save.mutate({ id: draft.id, name: draft.name.trim(), columns: draft.columns, rows: draft.rows })}>
-                      {save.isPending ? "Saving…" : "Save table"}
-                    </Button>
+                    {selKey && tableEdits[selKey] ? <ObjectStatus state="Critical">Unsaved</ObjectStatus> : null}
                     {draft.id ? (
-                      <Button id="tables-more" icon="overflow" design="Transparent" tooltip="More actions"
-                        disabled={remove.isPending} onClick={() => setMenuOpen(true)} />
+                      <Button icon="delete" design="Transparent" tooltip="Delete table"
+                        disabled={remove.isPending} onClick={() => void confirmRemoveTable(draft.id!, draft.name)} />
                     ) : null}
                   </div>
                 } />
             }>
             <div style={CARD_BODY}>
+              <MessageStrip design="Information" hideCloseButton style={{ marginBottom: "1rem" }}>
+                Saved with the model — use the Save button at the top of the page.
+              </MessageStrip>
               <Form {...FORM}>
                 <FormItem labelContent={<Label required>Name</Label>}>
                   <Input value={draft.name} placeholder="Referenced by LOOKUP and by table domains"
@@ -220,13 +215,6 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
               </Form>
             </div>
           </Card>
-
-          {menuOpen && draft.id ? (
-            <Menu open opener="tables-more" onClose={() => setMenuOpen(false)}
-              onItemClick={() => { setMenuOpen(false); void confirmRemoveTable(draft.id!, draft.name); }}>
-              <MenuItem icon="delete" text="Delete table" />
-            </Menu>
-          ) : null}
 
           <Card
             header={
@@ -242,6 +230,8 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
                   </Button>
                 } />
             }>
+            {/* Popin rather than Scroll: three short columns that must stay readable when the
+                builder is narrow. */}
             <Table
               overflowMode="Popin"
               rowActionCount={1}
@@ -338,15 +328,27 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
         <div style={EDITOR}>
           {(() => {
             const qt = model.queryTables[qIdx]!;
-            const setQt = (patch: Partial<ModelDef["queryTables"][number]>) =>
+            const setQt = (patch: Partial<QueryTable>) =>
               update((d) => ({ ...d, queryTables: d.queryTables.map((q, i) => (i === qIdx ? { ...q, ...patch } : q)) }));
+            const setLabel = (key: string, raw: string) => {
+              const labels = { ...qt.labels };
+              if (raw.trim()) labels[key] = raw;
+              else delete labels[key];
+              setQt({ labels: Object.keys(labels).length ? labels : undefined });
+            };
+            const setVisible = (key: string, visible: boolean) => {
+              const hidden = new Set(qt.hidden ?? []);
+              if (visible) hidden.delete(key);
+              else hidden.add(key);
+              setQt({ hidden: hidden.size ? [...hidden] : undefined });
+            };
             return (
               <>
                 <Card
                   header={
                     <CardHeader
                       titleText={qt.name || "New query"}
-                      subtitleText="Part of the model — saved with the model's Save button, not on its own."
+                      subtitleText="Part of the model — saved with the model's Save button."
                       action={
                         <Button icon="delete" design="Transparent" tooltip="Delete query"
                           onClick={() => void confirmRemoveQuery(qt.name, () => {
@@ -365,7 +367,11 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
                   </div>
                 </Card>
 
-                <QueryCard key={qIdx} target={qt.target} path={qt.path} columns={qt.columns} onChange={setQt} />
+                <QueryCard key={qIdx} target={qt.target} path={qt.path} columns={qt.columns}
+                  onChange={(patch) => {
+                    if (patch.columns) setQt({ ...patch, ...pruneColUi(patch.columns, qt.labels, qt.hidden) });
+                    else setQt(patch);
+                  }} />
 
                 {/* QueryEditor already shows the column count as a Tag — this only adds the mapping. */}
                 <Text>
@@ -373,6 +379,38 @@ export function TablesTab({ draft: model, update }: { draft: ModelDef; update: U
                     ? `key = ${qt.columns[0]}${qt.columns[1] ? `, label = ${qt.columns[1]}` : ""}`
                     : "Run Test fetch to take the columns from the response."}
                 </Text>
+
+                {qt.columns.length ? (
+                  <Card
+                    header={
+                      <CardHeader titleText="Columns"
+                        subtitleText="Labels and visibility apply to the value-help dialog only; every column still binds as a derived parameter."
+                        additionalText={`${qt.columns.length} column${qt.columns.length === 1 ? "" : "s"}`} />
+                    }>
+                    <Table overflowMode="Popin"
+                      headerRow={
+                        <TableHeaderRow>
+                          <TableHeaderCell minWidth="10rem"><span>Key</span></TableHeaderCell>
+                          <TableHeaderCell minWidth="12rem"><span>Label</span></TableHeaderCell>
+                          <TableHeaderCell width="7rem"><span>Value help</span></TableHeaderCell>
+                        </TableHeaderRow>
+                      }>
+                      {qt.columns.map((c) => (
+                        <TableRow key={c} rowKey={c}>
+                          <TableCell><Text>{c}</Text></TableCell>
+                          <TableCell>
+                            <Input placeholder={c} value={qt.labels?.[c] ?? ""}
+                              onInput={(e) => setLabel(c, e.target.value)} />
+                          </TableCell>
+                          <TableCell>
+                            <CheckBox checked={!qt.hidden?.includes(c)} accessibleName="Show in value help"
+                              onChange={(e) => setVisible(c, e.target.checked)} />
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </Table>
+                  </Card>
+                ) : null}
               </>
             );
           })()}

@@ -7,7 +7,7 @@ import {
   SegmentedButtonItem, Select, Option, Text, Toolbar, ToolbarSpacer,
 } from "@ui5/webcomponents-react";
 import { BarChart } from "@ui5/webcomponents-react-charts";
-import { authClient } from "../../auth-client.ts";
+import { meQuery } from "../../orpc.ts";
 import { orpc } from "../../orpc.ts";
 import { greeting, money, nextActions, percent, scaled, trendOf } from "./dashboardView.ts";
 
@@ -27,16 +27,16 @@ export function DashboardPage() {
   const [scope, setScope] = useState<"mine" | "tenant">("tenant");
   const [ageFilter, setAgeFilter] = useState<string | null>(null);
 
-  const { data: session } = useQuery<Awaited<ReturnType<typeof authClient.getSession>>["data"]>({ queryKey: ["session"] });
+  const { data: me } = useQuery(meQuery);
   const reps = useQuery(orpc.dashboard.salesReps.get.queryOptions());
   const o = useQuery(orpc.dashboard.overview.queryOptions({ input: { window, scope } }));
   const refresh = useMutation(orpc.dashboard.refresh.mutationOptions({
     onSuccess: () => void qc.invalidateQueries({ queryKey: orpc.dashboard.overview.queryOptions().queryKey }),
   }));
 
-  const userId = session?.user?.id ?? "";
+  const userId = me?.user?.id ?? "";
   const mapped = reps.data?.reps[userId] !== undefined;
-  const firstName = (session?.user?.name ?? session?.user?.email ?? "there").split(/[ @]/)[0]!;
+  const firstName = (me?.user?.name ?? me?.user?.email ?? "there").split(/[ @]/)[0]!;
 
   if (!o.data) return <Card loading style={{ height: "12rem" }} />;
   const d = o.data;

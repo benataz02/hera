@@ -50,6 +50,7 @@ export const ParamZ = z.object({
   /** informational per-unit price shown at the field's top-right; never enters the calculated price */
   priceExpr: z.string().optional(),
   readonly: z.boolean().optional(),
+  excludeFromDomains: z.boolean().optional(),
   unit: z.string().optional(),
   help: z.string().optional(),
   extractionHint: z.string().optional(),
@@ -116,7 +117,16 @@ export const ModelDefZ = z.object({
   bom: z.array(BomLineZ),
   routing: z.array(OperationZ),
   queryTables: z.array(
-    z.object({ name: z.string(), target: z.enum(["b1", "beas"]), path: z.string(), columns: z.array(z.string()) }),
+    z.object({
+      name: z.string(),
+      target: z.enum(["b1", "beas"]),
+      path: z.string(),
+      columns: z.array(z.string()),
+      /** dialog headers; missing/blank → show the key. Engine ignores. */
+      labels: z.record(z.string(), z.string()).optional(),
+      /** keys omitted from the value-help dialog. Still fetched, still derived. */
+      hidden: z.array(z.string()).optional(),
+    }),
   ),
   history: z
     .object({

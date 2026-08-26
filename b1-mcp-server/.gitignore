@@ -1,0 +1,18 @@
+# Dependencies
+/node_modules/
+
+# Build outputs
+/dist/
+
+# Environment and configuration files
+.env
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Claude AI files
+/.claude/
+CLAUDE.md
+
+/logs

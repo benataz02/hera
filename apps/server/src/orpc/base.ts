@@ -22,7 +22,7 @@ const requireSession = base.middleware(async ({ context, next }) => {
 });
 
 /** Resolve host subdomain → org, gated by this user's membership (the tenant boundary). */
-async function membershipFromHost(headers: Headers, userId: string) {
+export async function membershipFromHost(headers: Headers, userId: string) {
   // Caddy preserves Host; the dev proxy and e2e set X-Forwarded-Host. Prefer the latter.
   const host = headers.get("x-forwarded-host") ?? headers.get("host");
   const slug = tenantSlugFromHost(host, baseDomain);

@@ -9,7 +9,7 @@ import { PromptInput } from "@ui5/webcomponents-ai-react";
 import type { Entries, ModelDef, ResolvedLookups } from "@hera/config-engine";
 import type { AssistantEvent, AssistChatInput, Provider } from "@hera/assistant";
 import { client, orpc } from "../../orpc.ts";
-import { authClient } from "../../auth-client.ts";
+import { meQuery } from "../../orpc.ts";
 import { randomUuid } from "../../uuid.ts";
 import { confirm } from "../confirm.ts";
 import { MIME_BY_EXT, toBase64 } from "./ExtractPanel.tsx";
@@ -214,10 +214,10 @@ export function AssistantWindow({
   const prevEntriesRef = useRef(entries);
   const prevBatchesRef = useRef(batches);
 
-  const { data: session } = useQuery<Awaited<ReturnType<typeof authClient.getSession>>["data"]>({ queryKey: ["session"] });
+  const { data: me } = useQuery(meQuery);
   const providersQ = useQuery(orpc.assist.providers.queryOptions());
 
-  const firstName = session?.user?.name?.split(" ")[0] || session?.user?.email?.split("@")[0] || "there";
+  const firstName = me?.user?.name?.split(" ")[0] || me?.user?.email?.split("@")[0] || "there";
 
   // Default the provider-model Select once the list loads, if nothing (no loaded conversation, no
   // manual pick) has set one yet.

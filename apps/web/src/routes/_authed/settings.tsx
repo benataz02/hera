@@ -8,7 +8,7 @@ import {
 } from "@ui5/webcomponents-react";
 import type { EnabledEntity, EntitySchema } from "@hera/db";
 import { authClient } from "../../auth-client.ts";
-import { orpc } from "../../orpc.ts";
+import { orpc, meQuery } from "../../orpc.ts";
 
 export const Route = createFileRoute("/_authed/settings")({ component: Settings });
 
@@ -239,9 +239,15 @@ function Settings() {
 function SalesRepMapping() {
   const qc = useQueryClient();
   const reps = useQuery(orpc.dashboard.salesReps.get.queryOptions());
+  // No active org to fall back on (slug mode — see _authed.tsx), so pass the id explicitly.
+  // `tenantId` is organization.id.
+  const me = useQuery(meQuery);
   const members = useQuery({
-    queryKey: ["org-members"],
-    queryFn: async () => (await authClient.organization.listMembers()).data?.members ?? [],
+    queryKey: ["org-members", me.data?.tenantId],
+    enabled: !!me.data,
+    queryFn: async () =>
+      (await authClient.organization.listMembers({ query: { organizationId: me.data!.tenantId } }))
+        .data?.members ?? [],
   });
   const save = useMutation(orpc.dashboard.salesReps.set.mutationOptions({
     onSuccess: () => void qc.invalidateQueries({ queryKey: orpc.dashboard.salesReps.get.queryOptions().queryKey }),

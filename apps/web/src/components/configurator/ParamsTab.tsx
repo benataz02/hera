@@ -1,18 +1,17 @@
 import { useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
-  Bar, Button, BusyIndicator, CheckBox, Dialog, DynamicSideContent, IllustratedMessage, Input, Label,
-  List, ListItemStandard, Menu, MenuItem, MessageStrip,
-  MultiComboBox, MultiComboBoxItem, Option, Select, StepInput, Table, TableCell, TableHeaderCell,
+  Bar, Button, BusyIndicator, DynamicSideContent, IllustratedMessage, Input,
+  Menu, MenuItem, MessageStrip, Table, TableCell, TableHeaderCell,
   TableHeaderRow, TableRow, TableRowAction, Text, Title,
   type TableHeaderRowDomRef,
 } from "@ui5/webcomponents-react";
 import "@ui5/webcomponents-fiori/dist/illustrations/AddColumn.js";
-import { propagate, refKeyCols, type Entries, type ResolvedLookups } from "@hera/config-engine";
-import type { Issue, LookupRef, ModelDef, Option as EngineOption, Param } from "@hera/config-engine";
-import { client } from "../../orpc.ts";
+import { propagate, type Entries, type ResolvedLookups } from "@hera/config-engine";
+import type { Issue, ModelDef, Param } from "@hera/config-engine";
 import { confirm } from "../confirm.ts";
 import { ExprInput } from "./ExprInput.tsx";
-import { modelWithParam, mergeTableCols } from "./exprHelpers.ts";
+import { ParamDialog } from "./ParamDialog.tsx";
+import { mergeTableCols } from "./exprHelpers.ts";
 import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
 import { mergeQueryPicks, setQueryPick, type QueryPicks } from "./formHelpers.ts";
 import { issueFor } from "./useDraftModel.ts";
@@ -20,8 +19,6 @@ import { applyMove, canDrop, duplicateParam, parseRowKey, placeParam, removeFrom
 
 type Tables = { name: string; columns: string[] }[];
 type Update = (fn: (d: ModelDef) => ModelDef) => void;
-
-const UI_KINDS = ["input", "select", "radio", "checkbox", "multicombo", "step"] as const;
 
 const emptyParam = (): Param => ({ key: "", label: "", type: "string", ui: "select" });
 
@@ -106,7 +103,7 @@ export function ParamsTab({ draft, update, issues, tables, lookups, lookupsError
         const p = draft.parameters.find((x) => x.key === pk);
         rows.push({
           kind: "struct", key: `p:${pk}`, depth: 2, label: p?.label || pk,
-          detail: p ? `${p.type} · ${p.ui}${p.domain ? (p.domain.kind === "range" ? " · range" : ` · ${p.domain.ref.source}`) : ""}` : "missing definition",
+          detail: p ? `${p.type} · ${p.ui}${p.domain ? (p.domain.kind === "range" ? " · range" : ` · ${p.domain.ref.source}`) : ""}${p.excludeFromDomains ? " · excluded" : ""}` : "missing definition",
           ref: { kind: "param", key: pk },
         });
       });
@@ -426,265 +423,6 @@ function PreviewPane({ slot, draft, issues, lookups, lookupsError, onRetryLookup
         ) : lookupsError ? null : <BusyIndicator active delay={0} />}
       </div>
       <Bar design="Footer" startContent={prop ? <ConsistencyStatus prop={prop} /> : undefined} />
-    </div>
-  );
-}
-
-function ParamDialog({ draft, tables, suggestTables, initial, isNew, onOk, onCancel }: {
-  draft: ModelDef; tables: Tables; suggestTables: Tables; initial: Param; isNew: boolean;
-  onOk: (p: Param) => void; onCancel: () => void;
-}) {
-  const [p, setP] = useState<Param>(initial);
-  const set = (patch: Partial<Param>) => setP((x) => ({ ...x, ...patch }));
-  const keyOk = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(p.key);
-  const keyTaken = isNew && draft.parameters.some((x) => x.key === p.key);
-
-  return (
-    <Dialog open headerText={isNew ? "Add parameter" : `Edit ${initial.key}`} onClose={onCancel}
-      style={{ width: "min(46rem, 90vw)" }}
-      footer={
-        <Bar design="Footer" endContent={
-          <>
-            <Button design="Emphasized" disabled={!keyOk || keyTaken || !p.label}
-              onClick={() => onOk(p)}>OK</Button>
-            <Button onClick={onCancel}>Cancel</Button>
-          </>
-        } />
-      }>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", padding: "0.5rem 0" }}>
-        <Title level="H6" style={{ gridColumn: "1 / -1" }}>Basics</Title>
-        <div>
-          <Label required>Key</Label>
-          <Input value={p.key} disabled={!isNew} valueState={keyOk && !keyTaken ? "None" : "Negative"}
-            valueStateMessage={<div>{keyTaken ? "Key already exists" : "Must be a valid identifier"}</div>}
-            onInput={(e) => set({ key: e.target.value })} />
-        </div>
-        <div>
-          <Label required>Label</Label>
-          <Input value={p.label} onInput={(e) => set({ label: e.target.value })} />
-        </div>
-        <div>
-          <Label>Type</Label>
-          <Select value={p.type} onChange={(e) => set({ type: (e.detail.selectedOption as HTMLElement).dataset.v as Param["type"] })}>
-            {(["string", "number", "boolean"] as const).map((t) => <Option key={t} value={t} data-v={t}>{t}</Option>)}
-          </Select>
-        </div>
-        <div>
-          <Label>Control</Label>
-          <Select value={p.ui} onChange={(e) => set({ ui: (e.detail.selectedOption as HTMLElement).dataset.v as Param["ui"] })}>
-            {UI_KINDS.map((u) => <Option key={u} value={u} data-v={u}>{u}</Option>)}
-          </Select>
-        </div>
-        <div>
-          <Label>Unit</Label>
-          <Input value={p.unit ?? ""} onInput={(e) => set({ unit: e.target.value || undefined })} />
-        </div>
-
-        <Title level="H6" style={{ gridColumn: "1 / -1" }}>Value domain</Title>
-        <div style={{ gridColumn: "1 / -1" }}>
-          <DomainEditor draft={draft} tables={tables} value={p.domain} onChange={(domain) => set({ domain })} />
-        </div>
-
-        <Title level="H6" style={{ gridColumn: "1 / -1" }}>Behavior</Title>
-        <div style={{ gridColumn: "1 / -1" }}>
-          <Label>Default (expression)</Label>
-          <ExprInput optional value={p.defaultExpr} model={modelWithParam(draft, p)} tables={suggestTables} onChange={(v) => set({ defaultExpr: v })} />
-        </div>
-        <div>
-          <Label>Visible when</Label>
-          <ExprInput optional value={p.visibleWhen} model={modelWithParam(draft, p)} tables={suggestTables} onChange={(v) => set({ visibleWhen: v })} />
-        </div>
-        <div>
-          <Label>Required when</Label>
-          <ExprInput optional value={p.requiredWhen} model={modelWithParam(draft, p)} tables={suggestTables} onChange={(v) => set({ requiredWhen: v })} />
-        </div>
-        <div>
-          <Label>Price formula</Label>
-          <ExprInput optional value={p.priceExpr} model={modelWithParam(draft, p)} tables={suggestTables} onChange={(v) => set({ priceExpr: v })} />
-        </div>
-        <div style={{ alignSelf: "end" }}>
-          <CheckBox text="Read-only" checked={!!p.readonly}
-            onChange={(e) => set({ readonly: e.target.checked || undefined })} />
-        </div>
-
-        <Title level="H6" style={{ gridColumn: "1 / -1" }}>Help</Title>
-        <div>
-          <Label>Help text</Label>
-          <Input value={p.help ?? ""} onInput={(e) => set({ help: e.target.value || undefined })} />
-        </div>
-        <div style={{ gridColumn: "1 / -1" }}>
-          <Label>Extraction hint</Label>
-          <Input value={p.extractionHint ?? ""}
-            placeholder='Where/how this appears on drawings, e.g. "title block MATERIAL field"'
-            onInput={(e) => set({ extractionHint: e.target.value || undefined })} />
-        </div>
-      </div>
-    </Dialog>
-  );
-}
-
-function DomainEditor({ draft, tables, value, onChange }: {
-  draft: ModelDef; tables: Tables;
-  value: Param["domain"]; onChange: (d: Param["domain"]) => void;
-}) {
-  const kind = value === undefined ? "none" : value.kind === "range" ? "range" : value.ref.source;
-  const tenantNames = tables.map((t) => t.name);
-  const queryNames = draft.queryTables.map((q) => q.name);
-  const columnsOf = (name: string) =>
-    tables.find((t) => t.name === name)?.columns ??
-    draft.queryTables.find((q) => q.name === name)?.columns ?? [];
-
-  const setKind = (k: string) => {
-    if (k === "none") onChange(undefined);
-    else if (k === "range") onChange({ kind: "range", min: 0, max: 100, step: 1 });
-    else if (k === "manual") onChange({ kind: "options", ref: { source: "manual", options: [] } });
-    else if (k === "table") onChange({ kind: "options", ref: { source: "table", table: tenantNames[0] ?? "", valueCol: "" } });
-    else onChange({ kind: "options", ref: { source: "query", table: queryNames[0] ?? "" } });
-  };
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-      <Select value={kind} onChange={(e) => setKind((e.detail.selectedOption as HTMLElement).dataset.v!)}>
-        {[["none", "None (free entry)"], ["manual", "Manual list"], ["table", "Table"], ["query", "Query (B1/Beas)"], ["range", "Number range"]]
-          .map(([v, l]) => <Option key={v} value={v} data-v={v}>{l}</Option>)}
-      </Select>
-
-      {value?.kind === "range" ? (
-        <div style={{ display: "flex", gap: "0.5rem" }}>
-          <StepInput value={value.min} onChange={(e) => onChange({ ...value, min: e.target.value ?? 0 })} />
-          <StepInput value={value.max} onChange={(e) => onChange({ ...value, max: e.target.value ?? 0 })} />
-          <StepInput value={value.step ?? 1} min={0} onChange={(e) => onChange({ ...value, step: e.target.value || undefined })} />
-        </div>
-      ) : null}
-
-      {value?.kind === "options" && value.ref.source === "manual" ? (
-        <ManualOptions ref_={value.ref} onChange={(ref) => onChange({ kind: "options", ref })} />
-      ) : null}
-
-      {value?.kind === "options" && (value.ref.source === "table" || value.ref.source === "query") ? (
-        <SourceRefEditor ref_={value.ref}
-          names={value.ref.source === "table" ? tenantNames : queryNames}
-          columnsOf={columnsOf}
-          onChange={(ref) => onChange({ kind: "options", ref })} />
-      ) : null}
-
-      {value?.kind === "options" ? <PreviewButton ref_={value.ref} queryTables={draft.queryTables} /> : null}
-      {value?.kind === "options" && (value.ref.source === "table" || value.ref.source === "query") ? (
-        <Text>Define tables and queries under the Tables tab. Extra columns are always available as <code>{"<param>_<column>"}</code> in formulas; this list only chooses which extra columns the picker shows.</Text>
-      ) : null}
-    </div>
-  );
-}
-
-// One editor for both named sources: pick the source and which extra columns to expose
-// (default: all). Query refs take their key/label columns by convention (refKeyCols).
-function SourceRefEditor({ ref_, names, columnsOf, onChange }: {
-  ref_: Extract<LookupRef, { source: "table" | "query" }>;
-  names: string[];
-  columnsOf: (name: string) => string[];
-  onChange: (r: LookupRef) => void;
-}) {
-  const cols = columnsOf(ref_.table);
-  const { valueCol } = refKeyCols(ref_, cols);
-  const extra = cols.filter((c) => c !== valueCol);
-  const displayed = ref_.columns ?? extra;
-  const setTable = (name: string) =>
-    onChange(ref_.source === "query" ? { source: "query", table: name } : { source: "table", table: name, valueCol: "" });
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-      <div style={{ display: "flex", gap: "0.5rem" }}>
-        <Select value={ref_.table} onChange={(e) => setTable((e.detail.selectedOption as HTMLElement).dataset.v!)}>
-          {names.length === 0 ? <Option value="" data-v="">— none defined —</Option> : null}
-          {names.map((n) => <Option key={n} value={n} data-v={n}>{n}</Option>)}
-        </Select>
-        {ref_.source === "table" ? (
-          <>
-            <Select value={ref_.valueCol} onChange={(e) => onChange({ ...ref_, valueCol: (e.detail.selectedOption as HTMLElement).dataset.v! })}>
-              <Option value="" data-v="">value column…</Option>
-              {cols.map((c) => <Option key={c} value={c} data-v={c}>{c}</Option>)}
-            </Select>
-            <Select value={ref_.labelCol ?? ""} onChange={(e) => {
-              const v = (e.detail.selectedOption as HTMLElement).dataset.v!;
-              onChange({ ...ref_, labelCol: v || undefined });
-            }}>
-              <Option value="" data-v="">label column (optional)…</Option>
-              {cols.map((c) => <Option key={c} value={c} data-v={c}>{c}</Option>)}
-            </Select>
-          </>
-        ) : (
-          <Text style={{ alignSelf: "center" }}>Key = 1st query column{cols[1] ? `, label = 2nd (${cols[0]} / ${cols[1]})` : ""}.</Text>
-        )}
-      </div>
-      <div>
-        <Label>Displayed columns</Label>
-        <MultiComboBox
-          onSelectionChange={(e) => {
-            const sel = e.detail.items.map((i) => (i as HTMLElement).getAttribute("text")!);
-            onChange({ ...ref_, columns: sel.length === extra.length ? undefined : sel });
-          }}>
-          {extra.map((c) => (
-            <MultiComboBoxItem key={c} text={c} selected={displayed.includes(c)} />
-          ))}
-        </MultiComboBox>
-      </div>
-    </div>
-  );
-}
-
-function ManualOptions({ ref_, onChange }: {
-  ref_: Extract<LookupRef, { source: "manual" }>;
-  onChange: (r: LookupRef) => void;
-}) {
-  const setOpt = (i: number, patch: { value?: string; label?: string }) =>
-    onChange({
-      ...ref_,
-      options: ref_.options.map((o, j) => {
-        if (j !== i) return o;
-        const raw = patch.value;
-        // numbers stay numbers so table constraints compare correctly
-        const value = raw === undefined ? o.value : raw !== "" && !Number.isNaN(Number(raw)) ? Number(raw) : raw;
-        return { value, label: patch.label !== undefined ? patch.label || undefined : o.label };
-      }),
-    });
-  return (
-    <>
-      {ref_.options.map((o, i) => (
-        <div key={i} style={{ display: "flex", gap: "0.5rem" }}>
-          <Input placeholder="value" value={String(o.value ?? "")} onInput={(e) => setOpt(i, { value: e.target.value })} />
-          <Input placeholder="label (optional)" value={o.label ?? ""} onInput={(e) => setOpt(i, { label: e.target.value })} />
-          <Button icon="delete" design="Transparent" tooltip="Remove option" accessibleName="Remove option"
-            onClick={() => onChange({ ...ref_, options: ref_.options.filter((_, j) => j !== i) })} />
-        </div>
-      ))}
-      <Button icon="add" style={{ alignSelf: "start" }}
-        onClick={() => onChange({ ...ref_, options: [...ref_.options, { value: "" }] })}>Add option</Button>
-    </>
-  );
-}
-
-function PreviewButton({ ref_, queryTables }: { ref_: LookupRef; queryTables: ModelDef["queryTables"] }) {
-  const [state, setState] = useState<{ busy?: boolean; options?: EngineOption[]; error?: string }>({});
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-      <Button icon="show" style={{ alignSelf: "start" }} disabled={state.busy}
-        onClick={async () => {
-          setState({ busy: true });
-          try {
-            const r = await client.models.lookupPreview({ ref: ref_, queryTables, limit: 20 });
-            setState({ options: r.options });
-          } catch (e) {
-            setState({ error: e instanceof Error ? e.message : String(e) });
-          }
-        }}>
-        {state.busy ? "Loading…" : "Preview options"}
-      </Button>
-      {state.error ? <MessageStrip design="Negative" hideCloseButton>{state.error}</MessageStrip> : null}
-      {state.options ? (
-        state.options.length ? (
-          <List>{state.options.map((o, i) => <ListItemStandard key={i} additionalText={String(o.value)}>{o.label}</ListItemStandard>)}</List>
-        ) : <Text>No options returned.</Text>
-      ) : null}
     </div>
   );
 }

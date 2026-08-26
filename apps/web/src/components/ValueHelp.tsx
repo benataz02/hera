@@ -48,7 +48,7 @@ export function useRemoteSearch(onSearch?: (q: string) => void) {
 // `table`); the local filter then just narrows what came back.
 export function ValueHelpDialog({
   open, headerText, table, valueCol, columns, hiddenValues, onSelect, onClose,
-  onSearch, loading, hasMore, onLoadMore,
+  onSearch, loading, hasMore, onLoadMore, columnLabels, hidden,
 }: {
   open: boolean;
   headerText: string;
@@ -66,12 +66,17 @@ export function ValueHelpDialog({
   /** another page is available — growing loads it when the table is scrolled to the end */
   hasMore?: boolean;
   onLoadMore?: () => void;
+  /** dialog headers; missing/blank → the key */
+  columnLabels?: Record<string, string>;
+  /** keys omitted from the dialog (and local search). Still on the row for derived values. */
+  hidden?: string[];
 }) {
   const [q, setQ] = useState("");
   const [range, setRange] = useState({ first: 0, last: 20 });
   const virtRef = useRef<TableVirtualizerDomRef>(null);
   const remote = useRemoteSearch(onSearch);
-  const shown = [valueCol, ...columns];
+  const visible = [valueCol, ...columns].filter((c) => !hidden?.includes(c));
+  const shown = visible.length ? visible : [valueCol];
   const idx = shown.map((c) => table.columns.indexOf(c));
   const vi = table.columns.indexOf(valueCol);
 
@@ -82,7 +87,7 @@ export function ValueHelpDialog({
       return !needle || idx.some((i) => i >= 0 && String(r[i] ?? "").toLowerCase().includes(needle));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [table, q, hiddenValues]);
+  }, [table, q, hiddenValues, hidden]);
 
   useEffect(() => {
     setRange({ first: 0, last: 20 });
@@ -131,7 +136,7 @@ export function ValueHelpDialog({
           }}
           headerRow={
             <TableHeaderRow sticky>
-              {shown.map((c) => <TableHeaderCell key={c}><span>{c}</span></TableHeaderCell>)}
+              {shown.map((c) => <TableHeaderCell key={c}><span>{columnLabels?.[c] || c}</span></TableHeaderCell>)}
             </TableHeaderRow>
           }>
           {rows.slice(start, end).map((r, j) => {
@@ -156,7 +161,7 @@ export function ValueHelpDialog({
 // rejected on blur/Enter and the field snaps back to the committed option.
 export function ValueHelp({
   options, value, onChange, headerText, table, valueCol, columns, onSearch, disabled, readonly,
-  placeholder, id, valueState, loading, hasMore, onLoadMore, onOpen,
+  placeholder, id, valueState, loading, hasMore, onLoadMore, onOpen, columnLabels, hidden,
 }: {
   options: DomainOption[];
   value: Val | undefined;
@@ -181,6 +186,8 @@ export function ValueHelp({
   onLoadMore?: () => void;
   /** query value help resets its outer search before opening; generic value helps keep prime-once */
   onOpen?: () => void;
+  columnLabels?: Record<string, string>;
+  hidden?: string[];
 }) {
   const [typed, setTyped] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -232,7 +239,7 @@ export function ValueHelp({
           },
     [table, valueCol, columns, options],
   );
-  const hidden = useMemo(
+  const eliminated = useMemo(
     () => new Set(options.filter((o) => o.eliminatedBy).map((o) => o.value)),
     [options],
   );
@@ -260,7 +267,7 @@ export function ValueHelp({
       </Input>
       {open && !pending ? (
         <ValueHelpDialog open headerText={headerText} table={dlg.table} valueCol={dlg.valueCol} columns={dlg.columns}
-          hiddenValues={hidden} onSelect={(v, row) => {
+          columnLabels={columnLabels} hidden={hidden} hiddenValues={eliminated} onSelect={(v, row) => {
             const i = row ? dlg.table.rows.indexOf(row) : -1;
             pick(v, row, i < 0 ? undefined : options[i]?.label);
           }} onClose={() => setOpen(false)}
@@ -386,6 +393,7 @@ export function QueryValueHelp({
       }}
       disabled={disabled} readonly={readonly} valueState={page.error ? "Negative" : undefined}
       table={table} valueCol={valueCol} columns={displayColumns(lookupRef, table.columns)}
+      columnLabels={qt?.labels} hidden={qt?.hidden}
       onSearch={setSearch} onOpen={() => setSearch("")}
       // Asked and nothing back yet, or a search refetch — but never on a failure, or the field
       // would spin forever and the dialog never open (retry is off; the error shows as valueState).

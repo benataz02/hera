@@ -113,6 +113,8 @@ export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Iss
       c.params.forEach((pk, j) => {
         const p = model.parameters.find((x) => x.key === pk);
         if (!p) issues.push({ path: `constraints[${i}].params[${j}]`, message: `unknown parameter '${pk}'` });
+        else if (p.excludeFromDomains)
+          issues.push({ path: `constraints[${i}].params[${j}]`, message: `'${pk}' is excluded from engine domains` });
         else if (p.domain?.kind !== "options" && p.type !== "boolean")
           issues.push({ path: `constraints[${i}].params[${j}]`, message: `'${pk}' has no options domain` });
       });

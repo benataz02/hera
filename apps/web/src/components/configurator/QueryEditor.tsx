@@ -15,7 +15,7 @@ const MONO = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monos
 const BODY = { display: "flex", flexDirection: "column", gap: "0.75rem" } as const;
 
 // Test fetch *is* the column definition: the response's field names become the query's columns.
-// Body only — the caller supplies the container (a Card here, an ObjectPageSubSection in HistoryTab).
+// Body only — the caller supplies the container (a Card on Tables, a padded column on History).
 export function QueryEditor({ target, path, columns, onChange, children }: Query & {
   onChange: (patch: Partial<Query>) => void;
   children?: ReactNode;

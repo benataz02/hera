@@ -67,6 +67,13 @@ describe("checkModel", () => {
     expect(issues.some((i) => i.message.includes("arity") || i.message.includes("values"))).toBe(true);
   });
 
+  test("table constraint: excluded param is rejected", () => {
+    const bad = structuredClone(model);
+    bad.parameters.find((p) => p.key === "color")!.excludeFromDomains = true;
+    const issues = checkModel(bad, PRICES);
+    expect(issues.some((i) => i.message.includes("excluded from engine domains") && i.message.includes("color"))).toBe(true);
+  });
+
   test("structure referencing a missing param", () => {
     const bad = structuredClone(model);
     bad.structure.sections[0]!.groups[0]!.params.push("ghost");

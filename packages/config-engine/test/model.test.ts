@@ -22,6 +22,13 @@ describe("ModelDefZ", () => {
     expect(parsed.parameters[0]!.extractionHint).toBe("Title block MATERIAL field");
   });
 
+  test("keeps excludeFromDomains on a parameter", () => {
+    const m = structuredClone(model) as any;
+    m.parameters[0].excludeFromDomains = true;
+    const parsed = ModelDefZ.parse(m);
+    expect(parsed.parameters[0]!.excludeFromDomains).toBe(true);
+  });
+
   test("rejects unknown constraint kind", () => {
     const bad = structuredClone(model) as any;
     bad.constraints.push({ kind: "magic" });
@@ -53,5 +60,26 @@ describe("LookupRef columns", () => {
 
   test("derivedKey joins with underscore", () => {
     expect(derivedKey("material", "density")).toBe("material_density");
+  });
+
+  test("query table labels/hidden are kept and do not change derived or display columns", () => {
+    const m = structuredClone(model) as any;
+    m.queryTables = [{
+      name: "items", target: "b1", path: "/Items",
+      columns: ["ItemCode", "ItemName", "OnHand"],
+      labels: { ItemName: "Name" },
+      hidden: ["OnHand"],
+    }];
+    const parsed = ModelDefZ.parse(m);
+    expect(parsed.queryTables[0]).toEqual({
+      name: "items", target: "b1", path: "/Items",
+      columns: ["ItemCode", "ItemName", "OnHand"],
+      labels: { ItemName: "Name" },
+      hidden: ["OnHand"],
+    });
+    const ref = { source: "query" as const, table: "items" };
+    const cols = parsed.queryTables[0]!.columns;
+    expect(derivedColumns(ref, cols)).toEqual(["ItemName", "OnHand"]);
+    expect(displayColumns(ref, cols)).toEqual(["ItemName", "OnHand"]);
   });
 });
