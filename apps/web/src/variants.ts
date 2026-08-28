@@ -69,15 +69,7 @@ export function useObjectVariants(entity: string, recordKey?: string) {
   const selected = variants.find((v) => v.id === selectedId) ?? null;
   const persisted = selected ? normalizeObjectDef(selected.definition) : null;
 
-  /** Same-id Save must refetch projection so newly visible fields appear. */
-  const invalidateObjectGet = (variantId: string) => {
-    if (!recordKey) return;
-    return qc.invalidateQueries({
-      queryKey: orpc.entities.get.queryOptions({
-        input: { entity, key: recordKey, variantId },
-      }).queryKey,
-    });
-  };
+  const invalidateObjectGet = (_variantId: string) => undefined;
 
   const select = (id: string) => {
     const row = variants.find((v) => v.id === id);

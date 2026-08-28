@@ -2,14 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { and, eq } from "drizzle-orm";
 import {
   db,
-  agentRequest,
   configModel,
   configProject,
   configRun,
-  tenantIntegration,
 } from "@hera/db";
 import { call, makeTenant, makeUser, bindClient, tenantHeaders, TEST_MODEL } from "./harness.ts";
-import { hashToken } from "../src/crypto.ts";
 import { router } from "../src/orpc/router.ts";
 import {
   buildQuoteSeed,
@@ -18,40 +15,9 @@ import {
   type ConfigRunRow,
 } from "../src/config-quote.ts";
 import { computeOutputs } from "@hera/config-engine";
-import type { EnabledEntity } from "@hera/db";
 
 const code = (p: Promise<unknown>) =>
   p.then(() => "OK", (e) => (e as { code?: string }).code ?? "ERR");
-
-const quotationSchema: EnabledEntity = {
-  name: "Quotations",
-  typeName: "Document",
-  keys: ["DocEntry"],
-  editable: true,
-  properties: [
-    { name: "DocEntry", type: "Edm.Int32", nullable: false },
-    { name: "DocNum", type: "Edm.Int32", nullable: true },
-    { name: "CardCode", type: "Edm.String", nullable: true },
-    { name: "CardName", type: "Edm.String", nullable: true },
-    { name: "DocCurrency", type: "Edm.String", nullable: true },
-    { name: "Comments", type: "Edm.String", nullable: true },
-    { name: "U_HERA_DedupKey", type: "Edm.String", nullable: true },
-  ],
-  collections: [
-    {
-      name: "DocumentLines",
-      typeName: "DocumentLine",
-      many: true,
-      properties: [
-        { name: "LineNum", type: "Edm.Int32", nullable: true },
-        { name: "ItemCode", type: "Edm.String", nullable: true },
-        { name: "ItemDescription", type: "Edm.String", nullable: true },
-        { name: "Quantity", type: "Edm.Double", nullable: true },
-        { name: "UnitPrice", type: "Edm.Double", nullable: true },
-      ],
-    },
-  ],
-};
 
 async function setupCalculated(opts?: { currency?: string; customer?: boolean }) {
   const { tenantId, slug } = await makeTenant();
@@ -67,20 +33,7 @@ async function setupCalculated(opts?: { currency?: string; customer?: boolean })
     .values({ tenantId, name: definition.name, definition, portal: true })
     .returning({ id: configModel.id });
   const member = await makeUser("member", tenantId);
-  const token = crypto.randomUUID();
-  const now = new Date();
-  await db.insert(tenantIntegration).values({
-    tenantId,
-    agentTokenHash: hashToken(token),
-    enabledEntities: [quotationSchema],
-    writeCapabilities: [{ entity: "Quotations", dedupField: "U_HERA_DedupKey" }],
-    writeCapabilitiesCheckedAt: now,
-    lastSeenAt: now,
-  });
   const ictx = { context: { headers: tenantHeaders(slug, member.cookie) } };
-  const agentCtx = {
-    context: { headers: new Headers({ authorization: `Bearer ${token}` }) },
-  };
 
   const { id } = await call(
     router.configs.create,
@@ -113,10 +66,10 @@ async function setupCalculated(opts?: { currency?: string; customer?: boolean })
     runId: run!.id,
     commandId: configDocumentCommandId({ tenantId, projectId: id, runId: run!.id, selection: sel }),
     ictx,
-    agentCtx,
     sel,
   };
 }
+
 
 describe("configDocumentCommandId", () => {
   const base = { tenantId: "t1", projectId: "p1", runId: "r1" };
@@ -171,7 +124,8 @@ describe("buildQuoteSeed", () => {
     expect(lines[0]!.Quantity).toBe(100);
     expect(typeof lines[0]!.UnitPrice).toBe("number");
     expect((lines[0]!.UnitPrice as number) > 0).toBe(true);
-    expect(lines[0]!.priceSource).toBe("config");
+    // Only real B1 DocumentLines fields — an unknown property 400s on POST.
+    expect(Object.keys(lines[0]!).sort()).toEqual(["ItemCode", "ItemDescription", "Quantity", "UnitPrice"]);
 
     // Without model currency, DocCurrency is omitted (fallback = no forced default).
     const s2 = await setupCalculated();
@@ -235,359 +189,34 @@ describe("configs.select fencing", () => {
   });
 });
 
-describe("createQuote status + mutation fencing", () => {
-  test("draft/rejected/quoted cannot enqueue; calculated and requested can", async () => {
+describe("quoteDraft / createQuote", () => {
+  // The draft is pure: it recomputes the payload from the persisted run and never touches SAP,
+  // so it works with no agent configured. Posting is what needs one.
+  test("quoteDraft echoes the command id for the stored selection", async () => {
     const s = await setupCalculated();
     const draft = await call(router.configs.quoteDraft, { projectId: s.id }, s.ictx);
+    expect(draft.commandId).toBe(s.commandId);
     expect(draft.runId).toBe(s.runId);
-    expect(draft.schema?.name).toBe("Quotations");
-    expect(draft.profile?.entity).toBe("Quotations");
-    expect(draft.commandId).toBe(
-      configDocumentCommandId({
-        tenantId: s.tenantId,
-        projectId: s.id,
-        runId: s.runId,
-        selection: s.sel,
-      }),
-    );
-
-    // Force draft status
-    await db.update(configProject).set({ status: "draft" }).where(eq(configProject.id, s.id));
-    expect(
-      await code(
-        call(
-          router.configs.createQuote,
-          {
-            projectId: s.id,
-            runId: s.runId,
-            commandId: s.commandId,
-            data: draft.data,
-          },
-          s.ictx,
-        ),
-      ),
-    ).toBe("BAD_REQUEST");
-
-    await db.update(configProject).set({ status: "calculated" }).where(eq(configProject.id, s.id));
-    const created = await call(
-      router.configs.createQuote,
-      {
-        projectId: s.id,
-        runId: s.runId,
-        commandId: s.commandId,
-        data: draft.data,
-      },
-      s.ictx,
-    );
-    expect(created.requestId).toBeTruthy();
-
-    // Pending write blocks update/run/select (select uses tx-scoped assertConfigMutable)
-    expect(
-      await code(call(router.configs.update, { id: s.id, name: "blocked" }, s.ictx)),
-    ).toBe("CONFLICT");
-    expect(await code(call(router.configs.run, { projectId: s.id }, s.ictx))).toBe("CONFLICT");
-    expect(
-      await code(
-        call(
-          router.configs.select,
-          {
-            runId: s.runId,
-            selection: [{ candidateIdx: 0, batchQty: 100 }],
-          },
-          s.ictx,
-        ),
-      ),
-    ).toBe("CONFLICT");
-
-    // A second createQuote for the same project is rejected while the write is pending.
-    expect(
-      await code(
-        call(
-          router.configs.createQuote,
-          { projectId: s.id, runId: s.runId, commandId: s.commandId, data: draft.data },
-          s.ictx,
-        ),
-      ),
-    ).toBe("CONFLICT");
-
-    // Complete the write so we can exercise requested path on a fresh project
-    const pull = await call(router.sync.pull, { max: 1 }, s.agentCtx);
-    await call(
-      router.sync.ack,
-      {
-        id: pull.items[0]!.id,
-        attempt: pull.items[0]!.attempts,
-        result: { key: "10", record: { DocEntry: 10 } },
-        docEntry: "10",
-      },
-      s.agentCtx,
-    );
-
-    const [quoted] = await db.select().from(configProject).where(eq(configProject.id, s.id));
-    expect(quoted!.status).toBe("quoted");
-    expect(
-      await code(
-        call(
-          router.configs.createQuote,
-          {
-            projectId: s.id,
-            runId: s.runId,
-            commandId: s.commandId,
-            data: draft.data,
-          },
-          s.ictx,
-        ),
-      ),
-    ).toBe("BAD_REQUEST");
-    // Quoted also blocks mutations
-    expect(
-      await code(call(router.configs.update, { id: s.id, name: "nope" }, s.ictx)),
-    ).toBe("CONFLICT");
-
-    // requested may enqueue
-    const s2 = await setupCalculated();
-    await db.update(configProject).set({ status: "requested" }).where(eq(configProject.id, s2.id));
-    const draft2 = await call(router.configs.quoteDraft, { projectId: s2.id }, s2.ictx);
-    const created2 = await call(
-      router.configs.createQuote,
-      {
-        projectId: s2.id,
-        runId: s2.runId,
-        commandId: s2.commandId,
-        data: draft2.data,
-      },
-      s2.ictx,
-    );
-    expect(created2.requestId).toBeTruthy();
-
-    // rejected cannot enqueue
-    const s3 = await setupCalculated();
-    await db.update(configProject).set({ status: "rejected" }).where(eq(configProject.id, s3.id));
-    const [p3] = await db.select().from(configProject).where(eq(configProject.id, s3.id));
-    const [r3] = await db.select().from(configRun).where(eq(configRun.id, s3.runId));
-    const data3 = buildQuoteSeed(p3!, r3!);
-    expect(
-      await code(
-        call(
-          router.configs.createQuote,
-          {
-            projectId: s3.id,
-            runId: s3.runId,
-            commandId: s3.commandId,
-            data: data3,
-          },
-          s3.ictx,
-        ),
-      ),
-    ).toBe("BAD_REQUEST");
+    expect((draft.data.DocumentLines as unknown[]).length).toBeGreaterThan(0);
+    expect(draft.quoted).toBeNull();
   });
 
-  test("createQuote rejects a commandId that no longer matches the stored selection", async () => {
+  test("a stale command id is a conflict, and a tenant with no agent cannot post", async () => {
     const s = await setupCalculated();
-    const draft = await call(router.configs.quoteDraft, { projectId: s.id }, s.ictx);
-
-    // A commandId that was never derived from this run's selection.
     expect(
-      await code(
-        call(
-          router.configs.createQuote,
-          { projectId: s.id, runId: s.runId, commandId: "0".repeat(64), data: draft.data },
-          s.ictx,
-        ),
-      ),
+      await code(call(
+        router.configs.createQuote,
+        { projectId: s.id, runId: s.runId, commandId: "0".repeat(64) },
+        s.ictx,
+      )),
     ).toBe("CONFLICT");
-
-    // The picks change after the draft was taken — the client's id is now stale.
-    await db
-      .update(configRun)
-      .set({ selection: [{ candidateIdx: 0, batchQty: 500 }] })
-      .where(eq(configRun.id, s.runId));
     expect(
-      await code(
-        call(
-          router.configs.createQuote,
-          { projectId: s.id, runId: s.runId, commandId: s.commandId, data: draft.data },
-          s.ictx,
-        ),
-      ),
-    ).toBe("CONFLICT");
-  });
-
-  // Project-level single-flight: createQuote FOR UPDATEs config_project before assert/enqueue.
-  // An overlapping tx blocks on that row lock, then CONFLICTs once pending is visible.
-  test("overlapping createQuote waits on config_project lock then CONFLICT", async () => {
-    const s = await setupCalculated();
-    const draft = await call(router.configs.quoteDraft, { projectId: s.id }, s.ictx);
-
-    let release!: () => void;
-    const projectLocked = Promise.withResolvers<void>();
-    const hold = new Promise<void>((r) => {
-      release = r;
-    });
-
-    const holder = db.transaction(async (tx) => {
-      await tx
-        .select({ id: configProject.id })
-        .from(configProject)
-        .where(and(eq(configProject.id, s.id), eq(configProject.tenantId, s.tenantId)))
-        .for("update");
-      await tx
-        .select({ id: configRun.id })
-        .from(configRun)
-        .where(and(eq(configRun.id, s.runId), eq(configRun.tenantId, s.tenantId)))
-        .for("update");
-      await tx.insert(agentRequest).values({
-        tenantId: s.tenantId,
-        kind: "write",
-        status: "pending",
-        dedupKey: `write:Quotations:hold-${s.id}`,
-        payload: {
-          origin: { kind: "config-document", projectId: s.id, runId: s.runId },
-        },
-      });
-      projectLocked.resolve();
-      await hold;
-    });
-
-    await projectLocked.promise;
-
-    let settled = false;
-    const second = call(
-      router.configs.createQuote,
-      { projectId: s.id, runId: s.runId, commandId: s.commandId, data: draft.data },
-      s.ictx,
-    ).finally(() => {
-      settled = true;
-    });
-
-    await Bun.sleep(250);
-    expect(settled).toBe(false);
-
-    release();
-    await holder;
-    expect(await code(second)).toBe("CONFLICT");
-    expect(settled).toBe(true);
-  });
-});
-
-describe("completeWriteOrigin", () => {
-  test("ack sets run b1DocEntry, project quoted, one event; repeat does not duplicate", async () => {
-    const s = await setupCalculated();
-    const draft = await call(router.configs.quoteDraft, { projectId: s.id }, s.ictx);
-    const { requestId } = await call(
-      router.configs.createQuote,
-      {
-        projectId: s.id,
-        runId: s.runId,
-        commandId: s.commandId,
-        data: draft.data,
-      },
-      s.ictx,
-    );
-
-    const pull = await call(router.sync.pull, { max: 1 }, s.agentCtx);
-    expect(pull.items[0]!.id).toBe(requestId);
-    const payload = pull.items[0]!.payload as {
-      origin?: { kind: string; projectId: string; runId: string };
-      commandId: string;
-    };
-    expect(payload.origin).toEqual({ kind: "config-document", projectId: s.id, runId: s.runId });
-    expect(payload.commandId).toBe(draft.commandId);
-
-    await call(
-      router.sync.ack,
-      {
-        id: requestId,
-        attempt: pull.items[0]!.attempts,
-        result: { key: "55", record: { DocEntry: 55 } },
-        docEntry: "55",
-      },
-      s.agentCtx,
-    );
-
-    const [run] = await db.select().from(configRun).where(eq(configRun.id, s.runId));
-    expect(run!.b1DocEntry).toBe(55);
-    expect(run!.quotedAt).toBeTruthy();
-
-    const [project] = await db.select().from(configProject).where(eq(configProject.id, s.id));
-    expect(project!.status).toBe("quoted");
-    expect(project!.events.filter((e) => e.kind === "quoted")).toHaveLength(1);
-
-    // Stale/repeat ack is a no-op (attempt fence) — no second event
-    await call(
-      router.sync.ack,
-      {
-        id: requestId,
-        attempt: pull.items[0]!.attempts,
-        result: { key: "55", record: { DocEntry: 55 } },
-        docEntry: "55",
-      },
-      s.agentCtx,
-    );
-    const [again] = await db.select().from(configProject).where(eq(configProject.id, s.id));
-    expect(again!.events.filter((e) => e.kind === "quoted")).toHaveLength(1);
-  });
-
-  test("origin-conflict when the origin run is gone: write done, no wrong mutation", async () => {
-    const s = await setupCalculated();
-    const draft = await call(router.configs.quoteDraft, { projectId: s.id }, s.ictx);
-    const { requestId } = await call(
-      router.configs.createQuote,
-      {
-        projectId: s.id,
-        runId: s.runId,
-        commandId: s.commandId,
-        data: draft.data,
-      },
-      s.ictx,
-    );
-
-    // Simulate impossible-in-normal-use mismatch: the origin points at a run that no longer
-    // exists (a recalculate replaces the project's run row).
-    const goneRunId = crypto.randomUUID();
-    // Clear pending fence so we can re-insert the request for the test setup only.
-    await db.delete(agentRequest).where(
-      and(eq(agentRequest.tenantId, s.tenantId), eq(agentRequest.id, requestId)),
-    );
-    // Re-insert as in_flight with the original origin payload so ack can complete
-    const cmd = draft.commandId as string;
-    await db.insert(agentRequest).values({
-      id: requestId,
-      tenantId: s.tenantId,
-      kind: "write",
-      status: "in_flight",
-      attempts: 1,
-      leaseUntil: new Date(Date.now() + 60_000),
-      dedupKey: `write:Quotations:${cmd}`,
-      payload: {
-        operation: "create",
-        entity: "Quotations",
-        commandId: cmd,
-        data: { CardCode: "C0001" },
-        origin: { kind: "config-document", projectId: s.id, runId: goneRunId },
-      },
-    });
-
-    await call(
-      router.sync.ack,
-      {
-        id: requestId,
-        attempt: 1,
-        result: { key: "77", record: { DocEntry: 77 } },
-        docEntry: "77",
-      },
-      s.agentCtx,
-    );
-
-    const [req] = await db.select().from(agentRequest).where(eq(agentRequest.id, requestId));
-    expect(req!.status).toBe("done");
-    expect(req!.lastError).toMatch(/origin-conflict/i);
-
-    const [run] = await db.select().from(configRun).where(eq(configRun.id, s.runId));
-    expect(run!.b1DocEntry).toBeNull();
-    const [project] = await db.select().from(configProject).where(eq(configProject.id, s.id));
-    expect(project!.status).toBe("calculated");
-    expect(project!.events.filter((e) => e.kind === "quoted")).toHaveLength(0);
+      await code(call(
+        router.configs.createQuote,
+        { projectId: s.id, runId: s.runId, commandId: s.commandId },
+        s.ictx,
+      )),
+    ).toBe("SERVICE_UNAVAILABLE");
   });
 });
 

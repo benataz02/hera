@@ -39,6 +39,9 @@ export const Route = createFileRoute("/_authed")({
     const path = location.pathname;
     if (me.role === "client" && !path.startsWith("/portal")) throw redirect({ to: "/portal" });
     if (me.role !== "client" && path.startsWith("/portal")) throw redirect({ to: "/" });
+    if (me.role !== "admin" && me.role !== "owner" && (path === "/b1" || path.startsWith("/b1/"))) {
+      throw redirect({ to: "/" });
+    }
   },
   component: AppShell,
 });

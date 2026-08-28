@@ -1,20 +1,31 @@
-import { db, dashboardSnapshot, tenantIntegration, type B1Snapshot, type Bucket, type OpenQuote } from "@hera/db";
-import { assertAgentReady, runRequest } from "./orpc/routers/entities.ts";
+import { db, dashboardSnapshot, type B1Snapshot, type Bucket, type OpenQuote } from "@hera/db";
+import { readPages, type B1Transport, type QueryOptions } from "@hera/b1";
 
 const OPEN_QUOTE_CAP = 1000;
-const SYNC_INTERVAL_MS = 60 * 60_000;
+/** Rows per Service Layer page while walking the snapshot's history. */
+const PAGE_SIZE = 500;
+// ponytail: capped synchronous refresh — 40 pages x 500 rows is ~20k documents per stream. If a
+// tenant's history outgrows one request, that is when a job runner earns its place, not before.
+const MAX_PAGES = 40;
+
+export type SnapshotQueries = { orders: QueryOptions; quotes: QueryOptions; open: QueryOptions; probe: QueryOptions };
+
+const DOC_FIELDS = ["DocEntry", "DocNum", "DocDate", "DocTotal", "CardCode", "CardName", "SalesPersonCode"];
 
 /** Rolling 13 months: twelve so "last 12 months" is whole on the 1st, plus one prior month so
  *  the trend arrows always have something to compare against. */
-export function snapshotPaths(now: Date): { orders: string; quotes: string; open: string; probe: string } {
+export function snapshotQueries(now: Date): SnapshotQueries {
   const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 12, 1))
     .toISOString().slice(0, 10);
-  const docFields = "DocEntry,DocNum,DocDate,DocTotal,CardCode,CardName,SalesPersonCode";
   return {
-    orders: `/Orders?$select=${docFields},GrossProfit&$filter=DocDate ge '${from}'&$orderby=DocEntry`,
-    quotes: `/Quotations?$select=${docFields},DocumentStatus,Cancelled&$filter=DocDate ge '${from}'&$orderby=DocEntry`,
-    open: `/Quotations?$select=${docFields}&$filter=DocumentStatus eq 'bost_Open' and Cancelled eq 'tNO'&$orderby=DocEntry desc`,
-    probe: "/Orders?$select=DocEntry,GrossProfit&$top=1",
+    orders: { select: [...DOC_FIELDS, "GrossProfit"], filter: `DocDate ge '${from}'`, orderby: "DocEntry", maxPageSize: PAGE_SIZE },
+    quotes: { select: [...DOC_FIELDS, "DocumentStatus", "Cancelled"], filter: `DocDate ge '${from}'`, orderby: "DocEntry", maxPageSize: PAGE_SIZE },
+    open: {
+      select: DOC_FIELDS,
+      filter: "DocumentStatus eq 'bost_Open' and Cancelled eq 'tNO'",
+      orderby: "DocEntry desc", maxPageSize: PAGE_SIZE,
+    },
+    probe: { select: ["DocEntry", "GrossProfit"], top: 1 },
   };
 }
 
@@ -70,36 +81,37 @@ export function foldRows(input: {
   };
 }
 
-const rowsOf = (json: unknown): Record<string, unknown>[] => {
-  const v = Array.isArray(json) ? json : (json as { value?: unknown } | null)?.value;
-  return Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
-};
-
 export async function refreshB1Snapshot(
   tenantId: string,
-  fetchQuery: (path: string) => Promise<unknown>,
+  b1: B1Transport,
   now: Date = new Date(),
 ): Promise<void> {
-  const paths = snapshotPaths(now);
+  const q = snapshotQueries(now);
 
   // Probe once per run rather than assuming Orders exposes GrossProfit on this B1 version.
   let grossProfitAvailable = true;
   try {
-    await fetchQuery(paths.probe);
+    await b1.readEntitySet("Orders", q.probe);
   } catch {
     grossProfitAvailable = false;
   }
 
-  const ordersPath = grossProfitAvailable
-    ? paths.orders
-    : paths.orders.replace(",GrossProfit", "");
+  const ordersQuery = grossProfitAvailable
+    ? q.orders
+    : { ...q.orders, select: q.orders.select?.filter((c) => c !== "GrossProfit") };
+  // Each stream is a bounded nextLink walk. Without it a refresh silently kept only B1's first
+  // page (20 rows by default) and reported it as a whole year.
   const [orders, quotes, open] = await Promise.all([
-    fetchQuery(ordersPath), fetchQuery(paths.quotes), fetchQuery(paths.open),
+    readPages(b1, "Orders", ordersQuery, { maxPages: MAX_PAGES }),
+    readPages(b1, "Quotations", q.quotes, { maxPages: MAX_PAGES }),
+    readPages(b1, "Quotations", q.open, { maxPages: MAX_PAGES }),
   ]);
 
   const payload = foldRows({
-    orders: rowsOf(orders), quotes: rowsOf(quotes), open: rowsOf(open), grossProfitAvailable,
+    orders: orders.rows, quotes: quotes.rows, open: open.rows, grossProfitAvailable,
   });
+  // Hitting the page cap is truncation too — never report a capped walk as a complete one.
+  payload.openQuotesTruncated ||= open.truncated;
 
   await db
     .insert(dashboardSnapshot)
@@ -108,31 +120,4 @@ export async function refreshB1Snapshot(
       target: dashboardSnapshot.tenantId,
       set: { payload, computedAt: now, lastError: null },
     });
-}
-
-// ponytail: one in-process hourly interval, sequential per tenant — the same posture as
-// startHistorySync. Move both to a jobs table if the server ever runs multi-instance.
-export function startDashboardSnapshot(): void {
-  const tick = async () => {
-    try {
-      const tenants = await db.select({ tenantId: tenantIntegration.tenantId }).from(tenantIntegration);
-      for (const t of tenants) {
-        try {
-          await assertAgentReady(t.tenantId);
-          await refreshB1Snapshot(t.tenantId, (path) => runRequest(t.tenantId, "query", { target: "b1", path }));
-          console.log(`[dashboard-snapshot] ${t.tenantId}: ok`);
-        } catch (e) {
-          const message = e instanceof Error ? e.message : String(e);
-          console.error(`[dashboard-snapshot] ${t.tenantId} failed: ${message}`);
-          await db
-            .insert(dashboardSnapshot)
-            .values({ tenantId: t.tenantId, payload: foldRows({ orders: [], quotes: [], open: [], grossProfitAvailable: false }), lastError: message })
-            .onConflictDoUpdate({ target: dashboardSnapshot.tenantId, set: { lastError: message } });
-        }
-      }
-    } catch (e) {
-      console.error(`[dashboard-snapshot] tick failed: ${e instanceof Error ? e.message : e}`);
-    }
-  };
-  setInterval(() => void tick(), SYNC_INTERVAL_MS);
 }

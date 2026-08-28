@@ -37,7 +37,7 @@ describe("greeting", () => {
 
 describe("nextActions", () => {
   const base = {
-    attention: [], exceptions: { failed: [], agentStale: false, agentLastSeen: null },
+    attention: [],
   } as never;
 
   test("is empty when nothing needs a human", () => {
@@ -47,12 +47,9 @@ describe("nextActions", () => {
   test("pluralises and links each kind of work", () => {
     const o = {
       attention: [{ reason: "Portal request waiting" }, { reason: "Portal request waiting" }, { reason: "Rejected — needs rework" }],
-      exceptions: { failed: [{ id: "x" }], agentStale: true, agentLastSeen: null },
     } as never;
     expect(nextActions(o)).toEqual([
       { text: "3 configurations need you", to: "/configs" },
-      { text: "1 sync failed", to: "/settings" },
-      { text: "The on-prem agent is offline", to: "/settings" },
     ]);
   });
 });

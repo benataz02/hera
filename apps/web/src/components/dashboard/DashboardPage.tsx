@@ -3,8 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AnalyticalCardHeader, Button, Card, CardHeader, FlexBox, HeroBanner, Link, List,
-  ListItemStandard, MessageStrip, NumericSideIndicator, ObjectStatus, SegmentedButton,
-  SegmentedButtonItem, Select, Option, Text, Toolbar, ToolbarSpacer,
+  ListItemStandard, MessageStrip, NumericSideIndicator, Select, Option, Text, Toolbar, ToolbarSpacer,
 } from "@ui5/webcomponents-react";
 import { BarChart } from "@ui5/webcomponents-react-charts";
 import { meQuery } from "../../orpc.ts";
@@ -24,18 +23,14 @@ export function DashboardPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [window, setWindow] = useState<"month" | "quarter" | "year12">("month");
-  const [scope, setScope] = useState<"mine" | "tenant">("tenant");
   const [ageFilter, setAgeFilter] = useState<string | null>(null);
 
   const { data: me } = useQuery(meQuery);
-  const reps = useQuery(orpc.dashboard.salesReps.get.queryOptions());
-  const o = useQuery(orpc.dashboard.overview.queryOptions({ input: { window, scope } }));
+  const o = useQuery(orpc.dashboard.overview.queryOptions({ input: { window } }));
   const refresh = useMutation(orpc.dashboard.refresh.mutationOptions({
-    onSuccess: () => void qc.invalidateQueries({ queryKey: orpc.dashboard.overview.queryOptions().queryKey }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: orpc.dashboard.overview.queryOptions({ input: { window } }).queryKey }),
   }));
 
-  const userId = me?.user?.id ?? "";
-  const mapped = reps.data?.reps[userId] !== undefined;
   const firstName = (me?.user?.name ?? me?.user?.email ?? "there").split(/[ @]/)[0]!;
 
   if (!o.data) return <Card loading style={{ height: "12rem" }} />;
@@ -65,12 +60,6 @@ export function DashboardPage() {
       </HeroBanner>
 
       <Toolbar>
-        {mapped && (
-          <SegmentedButton onSelectionChange={(e) => setScope((e.detail.selectedItems[0] as HTMLElement).dataset.scope as "mine" | "tenant")}>
-            <SegmentedButtonItem data-scope="tenant" selected={scope === "tenant"}>Everyone</SegmentedButtonItem>
-            <SegmentedButtonItem data-scope="mine" selected={scope === "mine"}>Mine</SegmentedButtonItem>
-          </SegmentedButton>
-        )}
         <Select value={window} onChange={(e) => setWindow((e.detail.selectedOption as HTMLElement).dataset.key as typeof window)}>
           {WINDOWS.map((w) => <Option key={w.key} data-key={w.key} value={w.key}>{w.label}</Option>)}
         </Select>
@@ -78,11 +67,13 @@ export function DashboardPage() {
         <Button icon="refresh" disabled={refresh.isPending} onClick={() => refresh.mutate(undefined)} />
       </Toolbar>
 
-      {(d.snapshotError || !d.computedAt) && (
-        <MessageStrip design="Warning" hideCloseButton>
-          {d.snapshotError
-            ? `SAP figures could not be refreshed: ${d.snapshotError}`
-            : "SAP figures have not been collected yet. They appear after the first hourly sync."}
+      {(refresh.error || d.snapshotError || !d.computedAt) && (
+        <MessageStrip design="Critical" hideCloseButton>
+          {refresh.error
+            ? refresh.error.message
+            : d.snapshotError
+              ? `SAP figures could not be refreshed: ${d.snapshotError}`
+              : "SAP figures have not been collected yet."}
         </MessageStrip>
       )}
 
@@ -132,7 +123,7 @@ export function DashboardPage() {
             measures={[{
               accessor: "value", label: `Open value (${cur})`,
               formatter: (v: number) => money(v, cur),
-              highlightColor: (_v: unknown, row: { bucket: string }) =>
+              highlightColor: (_v, _m, row) =>
                 row.bucket === "30d+" ? "var(--sapNegativeColor)" : undefined,
             }]}
             dataset={d.pipeline}
@@ -160,22 +151,6 @@ export function DashboardPage() {
                 additionalTextState="Critical" onClick={() => navigate({ to: "/configs/$id", params: { id: a.id } })}
               >
                 {a.name} — {a.reason}
-              </ListItemStandard>
-            ))}
-          </List>
-        </Card>
-        <Card header={<CardHeader titleText="Exceptions" />}>
-          <List>
-            {d.exceptions.agentStale && (
-              <ListItemStandard><ObjectStatus state="Critical">The on-prem agent is offline</ObjectStatus></ListItemStandard>
-            )}
-            {d.exceptions.failed.length === 0 && !d.exceptions.agentStale && (
-              <ListItemStandard>No integration errors</ListItemStandard>
-            )}
-            {d.exceptions.failed.map((f) => (
-              <ListItemStandard key={f.id} description={f.lastError ?? undefined}
-                                additionalText={new Date(f.updatedAt).toLocaleDateString()}>
-                {f.kind} failed
               </ListItemStandard>
             ))}
           </List>

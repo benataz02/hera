@@ -33,6 +33,26 @@ export type LookupRef = z.infer<typeof LookupRefZ>;
 
 const KeyZ = z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, "must be a valid identifier");
 
+/** A live read, as data rather than as a URL string. `$select` is derived from the source's
+ *  `columns` and deliberately not stored — one field fewer, and the two can never disagree.
+ *  URL construction lives in packages/b1's query.ts and nowhere else. */
+export const ODataQueryZ = z.object({
+  entitySet: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be an entity set name"),
+  filter: z.string().optional(),
+  orderby: z.string().optional(),
+  /** rows per read — the value help's page size, not a hard total. */
+  top: z.number().int().positive().optional(),
+});
+export type ODataQuery = z.infer<typeof ODataQueryZ>;
+
+/** One named live source: where to read, what to read, and the column set it yields. */
+export const QuerySourceZ = z.object({
+  target: z.enum(["b1", "beas"]),
+  query: ODataQueryZ,
+  columns: z.array(z.string()),
+});
+export type QuerySource = z.infer<typeof QuerySourceZ>;
+
 export const ParamZ = z.object({
   key: KeyZ,
   label: z.string(),
@@ -117,11 +137,8 @@ export const ModelDefZ = z.object({
   bom: z.array(BomLineZ),
   routing: z.array(OperationZ),
   queryTables: z.array(
-    z.object({
+    QuerySourceZ.extend({
       name: z.string(),
-      target: z.enum(["b1", "beas"]),
-      path: z.string(),
-      columns: z.array(z.string()),
       /** dialog headers; missing/blank → show the key. Engine ignores. */
       labels: z.record(z.string(), z.string()).optional(),
       /** keys omitted from the value-help dialog. Still fetched, still derived. */
@@ -131,9 +148,7 @@ export const ModelDefZ = z.object({
   history: z
     .object({
       itemCodeParam: KeyZ.optional(),
-      query: z
-        .object({ target: z.enum(["b1", "beas"]), path: z.string(), columns: z.array(z.string()) })
-        .optional(),
+      query: QuerySourceZ.optional(),
       mappings: z.array(HistoryMappingZ),
       display: z.array(z.string()),
     })
@@ -147,7 +162,7 @@ export const ModelDefZ = z.object({
 export type ModelDef = z.infer<typeof ModelDefZ>;
 
 export type Option = { value: Val; label: string };
-export type ResolvedTable = { columns: string[]; rows: Val[][]; nextLink?: string };
+export type ResolvedTable = { columns: string[]; rows: Val[][]; /** $skip for the next page; absent = last page */ nextSkip?: number };
 /** Everything external, already fetched: engine never sees source kinds. */
 export type ResolvedLookups = {
   domains: Record<string, Option[]>;

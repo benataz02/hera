@@ -1,19 +1,22 @@
 import { createHash } from "node:crypto";
 import { ORPCError } from "@orpc/server";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   db,
-  agentRequest,
   configProject,
   configRun,
   type RunCandidate,
   type RunSelection,
 } from "@hera/db";
 import { computeOutputs, DslError } from "@hera/config-engine";
-import type { WritePayload } from "./writes.ts";
 
 export type ConfigProjectRow = typeof configProject.$inferSelect;
 export type ConfigRunRow = typeof configRun.$inferSelect;
+
+/** UDF on OQUT carrying configDocumentCommandId, so a retried createQuote finds the quotation it
+ *  already posted instead of posting a second one. Must exist in the customer's B1 — the install
+ *  step is one alphanumeric UDF of length 64 on Sales Quotation (Title). */
+export const DEDUP_UDF = "U_HERA_DedupKey";
 
 /** Deterministic create command id / SAP dedup UDF value for a project's current selection.
  *  Keyed on the selection itself, not a version counter: the same picks retried yield the same id
@@ -82,7 +85,6 @@ export function buildQuoteSeed(project: ConfigProjectRow, run: ConfigRunRow): Re
       ItemDescription: desc,
       Quantity: s.batchQty,
       UnitPrice: unitPrice,
-      priceSource: "config",
     };
   });
 
@@ -135,7 +137,7 @@ export function validateSelectionPairs(
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DbOrTx = typeof db | Tx;
 
-/** Reject update/run/select/createQuote while quoted or while a config-document write is pending/in-flight. */
+/** Reject update/run/select while quoted. */
 export async function assertConfigMutable(
   tenantId: string,
   projectId: string,
@@ -150,108 +152,4 @@ export async function assertConfigMutable(
   if (project.status === "quoted") {
     throw new ORPCError("CONFLICT", { message: "Configuration is quoted and locked" });
   }
-  const [pending] = await client
-    .select({ id: agentRequest.id })
-    .from(agentRequest)
-    .where(
-      and(
-        eq(agentRequest.tenantId, tenantId),
-        eq(agentRequest.kind, "write"),
-        inArray(agentRequest.status, ["pending", "in_flight"]),
-        sql`${agentRequest.payload}->'origin'->>'kind' = 'config-document'`,
-        sql`${agentRequest.payload}->'origin'->>'projectId' = ${projectId}`,
-      ),
-    )
-    .limit(1);
-  if (pending) {
-    throw new ORPCError("CONFLICT", {
-      message: "A quotation write is already in progress for this configuration",
-    });
-  }
-}
-
-/**
- * Configurator side effects inside the attempt-fenced ack transaction.
- * On run/version mismatch: leave the write done but record origin-conflict; do not mutate another selection.
- */
-export async function completeWriteOrigin(
-  tx: Tx,
-  tenantId: string,
-  requestId: string,
-  payload: WritePayload,
-  confirmed: { docEntry?: string | null; result?: unknown },
-): Promise<void> {
-  const origin = payload.origin;
-  if (!origin || origin.kind !== "config-document") return;
-
-  const [run] = await tx
-    .select()
-    .from(configRun)
-    .where(and(eq(configRun.id, origin.runId), eq(configRun.tenantId, tenantId)))
-    .for("update");
-
-  // The run row is replaced wholesale on every recalculate, so a surviving id with a matching
-  // project is proof this is still the selection that was enqueued.
-  const mismatch = !run || run.projectId !== origin.projectId;
-
-  if (mismatch) {
-    await tx
-      .update(agentRequest)
-      .set({ lastError: "origin-conflict", updatedAt: new Date() })
-      .where(and(eq(agentRequest.id, requestId), eq(agentRequest.tenantId, tenantId)));
-    return;
-  }
-
-  // Idempotent: already completed for this run.
-  if (run.b1DocEntry != null) return;
-
-  const docEntryRaw = confirmed.docEntry ?? extractDocEntry(confirmed.result);
-  const docEntry = docEntryRaw != null ? Number(docEntryRaw) : NaN;
-  if (!Number.isFinite(docEntry)) {
-    await tx
-      .update(agentRequest)
-      .set({ lastError: "origin-conflict: missing DocEntry", updatedAt: new Date() })
-      .where(and(eq(agentRequest.id, requestId), eq(agentRequest.tenantId, tenantId)));
-    return;
-  }
-
-  let totals = { value: 0, cost: 0 };
-  try {
-    totals = quotedTotals(run);
-  } catch {
-    // ponytail: margin is reporting-only — never fail a confirmed SAP write over it.
-    //           Nulls here just exclude the run from the margin roll-up.
-  }
-  await tx
-    .update(configRun)
-    .set({
-      b1DocEntry: docEntry,
-      quotedAt: new Date(),
-      quotedValue: totals.value ? String(totals.value) : null,
-      quotedCost: totals.cost ? String(totals.cost) : null,
-    })
-    .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, tenantId)));
-
-  await tx
-    .update(configProject)
-    .set({
-      status: "quoted",
-      events: sql`${configProject.events} || ${JSON.stringify([{ at: new Date().toISOString(), kind: "quoted" }])}::jsonb`,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(configProject.id, origin.projectId),
-        eq(configProject.tenantId, tenantId),
-        inArray(configProject.status, ["calculated", "requested"]),
-      ),
-    );
-}
-
-function extractDocEntry(result: unknown): string | undefined {
-  if (!result || typeof result !== "object") return undefined;
-  const r = result as { key?: unknown; record?: Record<string, unknown> };
-  if (r.key != null) return String(r.key);
-  if (r.record?.DocEntry != null) return String(r.record.DocEntry);
-  return undefined;
 }

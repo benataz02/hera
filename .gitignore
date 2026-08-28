@@ -5,3 +5,5 @@ dist/
 .DS_Store
 apps/web/src/routeTree.gen.ts
 packages/db/drizzle/
+apps/agent/agent.json
+apps/agent/hera-agent.exe

@@ -68,9 +68,9 @@ describe("buildOverview", () => {
     quotedAt: null, b1DocEntry: null, quotedValue: null, quotedCost: null, ...over,
   });
   const base = {
-    window: "month" as const, scope: "tenant" as const, now: NOW,
+    window: "month" as const, now: NOW,
     snapshot: { payload: emptySnapshot, computedAt: NOW, lastError: null },
-    salesPersonCode: null, projects: [], failed: [], agentLastSeen: NOW,
+    projects: [],
   };
 
   test("funnel counts every stage, ordered draft to ordered", () => {
@@ -139,7 +139,7 @@ describe("buildOverview", () => {
     expect(out.computedAt).toBeNull();
   });
 
-  test("mine scope with a rep code sums only that rep's buckets", () => {
+  test("sums every sales-employee bucket in the window", () => {
     const months = {
       "2026-08": {
         "1": { orders: { count: 1, value: 100, grossProfit: null }, quotes: { count: 2, closed: 1, value: 200 } },
@@ -148,7 +148,6 @@ describe("buildOverview", () => {
     };
     const snapshot = { payload: { ...emptySnapshot, months }, computedAt: NOW, lastError: null };
     expect(buildOverview({ ...base, snapshot }).orderValue.total).toBe(1000);
-    expect(buildOverview({ ...base, snapshot, scope: "mine", salesPersonCode: 1 }).orderValue.total).toBe(100);
   });
 
   test("conversion divides closed quotes by total quotes in the window", () => {
@@ -161,9 +160,4 @@ describe("buildOverview", () => {
     expect(out.conversion.rate).toBeCloseTo(0.25, 6);
   });
 
-  test("a stale agent is flagged without failing the rest of the overview", () => {
-    const out = buildOverview({ ...base, agentLastSeen: new Date(NOW.getTime() - 10 * 60_000) });
-    expect(out.exceptions.agentStale).toBe(true);
-    expect(out.funnel).toHaveLength(4);
-  });
 });

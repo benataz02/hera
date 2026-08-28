@@ -135,12 +135,12 @@ The **domain** decides which values are offered:
 | **None (free entry)** | open text/number | nothing |
 | **Manual list** | a fixed short list | value + optional label rows (numeric values stay numeric) |
 | **Table** | values from a lookup table | table name, value column, optional label column |
-| **Query (B1/Beas)** | values pulled live from SAP | target (B1/Beas), OData path, value field, optional label field |
+| **Query (B1/Beas)** | values pulled live from SAP | the name of a query table (defined on the Tables tab), value field, optional label field |
 | **Number range** | a bounded number | min, max, step |
 
 For **manual/table/query** domains, click **Preview options** to resolve the source live and see
-the first 20 results — the same resolution a real run uses. If the on-prem agent is offline (for
-query domains), you'll see that message here instead.
+the first 20 results — the same resolution a real run uses. If the workspace has no on-prem agent
+configured, or it is unreachable, you'll see that message here instead.
 
 ### Computed values
 
@@ -227,8 +227,10 @@ Tenant-wide lookup tables that `LOOKUP()` and **Table** domains reference by nam
 - **Unit price expression** — how the sell price is derived, with `unitCost` and `qty` in scope
   (e.g. `unitCost * 1.4`).
 - **Quote item code** — the SAP item code the resulting quote line uses.
-- **Query tables** — B1/Beas datasets snapshotted for `LOOKUP()` and table domains: a **name**,
-  **target** (B1/Beas), OData **path**, and the **columns** to keep.
+- **Query tables** — B1/Beas datasets read live for `LOOKUP()` and query domains: a **name**,
+  **target** (B1/Beas), an **entity set** with an optional **filter**, **order by** and page size,
+  and the **columns** to keep. There is no `$select` field: it is derived from the columns Test
+  fetch discovered, so the two can never drift apart.
 
 ---
 

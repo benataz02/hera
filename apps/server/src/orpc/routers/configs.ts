@@ -2,7 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
-  db, configModel, configProject, configRun, tenantIntegration, user,
+  db, configModel, configProject, configRun, user,
   type ProjectEvent, type RunCandidate, type RunSelection,
 } from "@hera/db";
 import { assistantConversation } from "@hera/assistant/schema";
@@ -11,27 +11,34 @@ import {
   type Entries, type ModelDef, type Outputs, type ResolvedLookups, type Val,
 } from "@hera/config-engine";
 import { userProcedure } from "../base.ts";
-import { assertAgentReady, runRequest } from "./entities.ts";
-import { agentFetcher, tenantTables } from "./models.ts";
-import { enrichLookups, fetchQueryTable, queryPagePath, resolveLookups, type QueryFetcher } from "../../lookups.ts";
-import { docHistoryPath, flattenDocs, sortDocRows } from "../../doc-history.ts";
+import { B1Error, rowsOf } from "@hera/b1";
+import { runnerFor, tenantConnector, viaB1 } from "../../b1.ts";
+import { tenantTables } from "./models.ts";
+import { enrichLookups, fetchQueryTable, queryPageSource, resolveLookups, type QueryRunner } from "../../lookups.ts";
 import { loadHistoryRows } from "../../history-sync.ts";
 import { scoreRows } from "../../similarity.ts";
+import { docHistoryQuery, flattenDocs, sortDocRows, type DocRow } from "../../doc-history.ts";
 import {
   assertConfigMutable,
   buildQuoteSeed,
   configDocumentCommandId,
+  quotedTotals,
   validateSelectionPairs,
+  DEDUP_UDF,
 } from "../../config-quote.ts";
-import { getEntityProfile } from "../../entity-profiles.ts";
-import { resolveWriteCapabilities, type WriteCapability } from "../../write-capabilities.ts";
-import { enqueueWrite, normalizeWriteInput } from "../../writes.ts";
 // The configuration process API: any member drives a project (draft -> calculated via run).
 // Trust model: browser propagates for preview; THESE handlers compute the numbers that get
 // stored. Lookups: ~5-min cache for interactive use, always fresh inside executeRun.
 
-export const needsAgent = (m: ModelDef): boolean =>
+export const needsSap = (m: ModelDef): boolean =>
   m.queryTables.length > 0 || m.parameters.some((p) => p.domain?.kind === "options" && p.domain.ref.source === "query");
+
+/** A runner for this model: the tenant's agent when the model reads live data, and otherwise one
+ *  that would throw if anything called it — so an agent-free model never touches sap_connection. */
+export async function modelRunner(tenantId: string, m: ModelDef): Promise<QueryRunner> {
+  if (!needsSap(m)) return () => Promise.reject(new Error("Model has no live queries"));
+  return runnerFor(await tenantConnector(tenantId));
+}
 
 export async function loadModel(tenantId: string, modelId: string) {
   const [m] = await db
@@ -46,11 +53,11 @@ export async function loadModel(tenantId: string, modelId: string) {
   return m;
 }
 
-async function freshLookups(tenantId: string, model: ModelDef, fetchQuery: QueryFetcher): Promise<ResolvedLookups> {
+async function freshLookups(tenantId: string, model: ModelDef, run: QueryRunner): Promise<ResolvedLookups> {
   try {
-    return await resolveLookups(model, await tenantTables(tenantId), fetchQuery);
+    return await resolveLookups(model, await tenantTables(tenantId), run);
   } catch (e) {
-    if (e instanceof ORPCError) throw e; // agent offline etc. — keep the specific message
+    if (e instanceof ORPCError) throw e; // SAP-not-connected etc. — keep the specific message
     throw new ORPCError("BAD_GATEWAY", { message: e instanceof Error ? e.message : String(e) });
   }
 }
@@ -58,7 +65,7 @@ async function freshLookups(tenantId: string, model: ModelDef, fetchQuery: Query
 // ponytail: per-process cache keyed by model updatedAt (auto-invalidates on save);
 // Redis/LRU only if the server ever scales past one Bun process.
 const CACHE_TTL_MS = 5 * 60_000;
-// The *promise* is cached, not the value: concurrent cold callers then share one agent round trip
+// The *promise* is cached, not the value: concurrent cold callers then share one lookup fetch
 // instead of racing (same trick as resolveLookups' fetchOnce).
 const lookupCache = new Map<string, { at: number; lookups: Promise<ResolvedLookups> }>();
 
@@ -66,29 +73,29 @@ const lookupCache = new Map<string, { at: number; lookups: Promise<ResolvedLooku
  *  the process page's auto-calculate would otherwise re-GET every query table on each keystroke. */
 export function cachedLookups(
   tenantId: string, model: Awaited<ReturnType<typeof loadModel>>,
-  fetchQuery?: QueryFetcher,
+  run?: QueryRunner,
 ): Promise<ResolvedLookups> {
   const key = `${tenantId}:${model.id}:${model.updatedAt.getTime()}`;
   const hit = lookupCache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.lookups;
-  // An injected fetcher is the test seam (see configurator.test.ts); the real agentFetcher asserts
-  // readiness per fetch itself; this check fails fast before tenant-table resolution.
-  const ready = fetchQuery || !needsAgent(model.definition) ? Promise.resolve() : assertAgentReady(tenantId);
-  const p = ready.then(() => freshLookups(tenantId, model.definition, fetchQuery ?? agentFetcher(tenantId)));
-  p.catch(() => lookupCache.delete(key)); // an offline agent must not poison the key for 5 minutes
+  // An injected runner is the test seam (see configurator.test.ts); production resolves the
+  // tenant's agent — but only for a model that actually reads live data.
+  const p = (async () =>
+    freshLookups(tenantId, model.definition, run ?? await modelRunner(tenantId, model.definition)))();
+  p.catch(() => lookupCache.delete(key)); // a failed live lookup must not poison the key for 5 minutes
   lookupCache.set(key, { at: Date.now(), lookups: p });
   return p;
 }
 
-/** One page of a model's query table, for the value help. The caller names a table; the path is
- *  resolved from the stored model by queryPagePath (`models.queryPage` is the raw-path variant and
- *  stays admin-only). */
+/** One page of a model's query table, for the value help. The caller names a table; the query is
+ *  resolved from the stored model by queryPageSource (`models.queryPage` is the ad-hoc-query
+ *  variant and stays admin-only). The cursor is a plain row offset and nothing else. */
 export const QueryPageZ = z.object({
   modelId: z.uuid(),
   table: z.string().min(1),
   search: z.string().optional(),
   searchCols: z.array(z.string()).optional(),
-  cursor: z.string().optional(),
+  cursor: z.number().int().min(0).optional(),
 });
 
 export async function queryTablePage(
@@ -96,12 +103,12 @@ export async function queryTablePage(
 ) {
   let q;
   try {
-    q = queryPagePath(definition, input);
+    q = queryPageSource(definition, input);
   } catch (e) {
     throw new ORPCError("BAD_REQUEST", { message: e instanceof Error ? e.message : String(e) });
   }
-  await assertAgentReady(tenantId);
-  return fetchQueryTable(agentFetcher(tenantId), q.target, q.path, q.columns, false);
+  const run = runnerFor(await tenantConnector(tenantId));
+  return fetchQueryTable(run, q.target, q.query, q.columns, { skip: q.skip });
 }
 
 /** Guarded run path shared by configs.run and Chati's calculate tool. expectedVersion=null skips
@@ -109,7 +116,7 @@ export async function queryTablePage(
  *  project, is returned instead of re-inserting. */
 export async function executeRunFromSnapshot(
   tenantId: string, projectId: string, entries: Entries, batches: number[],
-  expectedVersion: Date | null, fetchQuery: QueryFetcher,
+  expectedVersion: Date | null, run: QueryRunner,
 ) {
   if (!batches.length) throw new ORPCError("BAD_REQUEST", { message: "Add at least one batch quantity" });
   const [project] = await db.select().from(configProject)
@@ -140,7 +147,7 @@ export async function executeRunFromSnapshot(
   }
 
   const lookups = await enrichLookups(
-    model.definition, entries, await cachedLookups(tenantId, model, fetchQuery), fetchQuery,
+    model.definition, entries, await cachedLookups(tenantId, model, run), run,
   );
 
   try {
@@ -192,7 +199,7 @@ export async function executeRunFromSnapshot(
   }
 }
 
-export async function executeRun(tenantId: string, projectId: string, fetchQuery: QueryFetcher) {
+export async function executeRun(tenantId: string, projectId: string, run: QueryRunner) {
   const [project] = await db
     .select()
     .from(configProject)
@@ -200,14 +207,18 @@ export async function executeRun(tenantId: string, projectId: string, fetchQuery
     .limit(1);
   if (!project) throw new ORPCError("NOT_FOUND");
   const { runId, candidateCount, capped, widest } = await executeRunFromSnapshot(
-    tenantId, projectId, project.entries, project.batches, null, fetchQuery,
+    tenantId, projectId, project.entries, project.batches, null, run,
   );
   return { runId, candidateCount, capped, widest };
 }
 
 // Exact help: live B1 Orders + Quotations for the project customer and/or the item-code param.
 // itemCode is only ever a quoted filter value.
-export async function fetchDocHistory(tenantId: string, projectId: string, itemCode?: string) {
+export async function fetchDocHistory(
+  tenantId: string,
+  projectId: string,
+  itemCode?: string,
+): Promise<{ itemCode: string | null; cardCode: string | null; rows: DocRow[] }> {
   const [project] = await db
     .select({ customer: configProject.customer })
     .from(configProject)
@@ -217,16 +228,22 @@ export async function fetchDocHistory(tenantId: string, projectId: string, itemC
   const trimmedItemCode = itemCode?.trim() || undefined;
   const cardCode = project.customer?.cardCode;
   if (!trimmedItemCode && !cardCode) return { itemCode: null, cardCode: null, rows: [] };
-  await assertAgentReady(tenantId);
-  const fetchDocs = (entity: "Orders" | "Quotations") =>
-    runRequest(tenantId, "query", { target: "b1", path: docHistoryPath(entity, { itemCode: trimmedItemCode, cardCode }) });
-  const [orders, quotations] = await Promise.all([fetchDocs("Orders"), fetchDocs("Quotations")]);
+
+  const opts = { itemCode: trimmedItemCode, cardCode };
+  const { b1 } = await tenantConnector(tenantId);
+  // Two crossjoins in parallel — one per document type; B1 has no union.
+  const [orders, quotes] = await viaB1(() =>
+    Promise.all([
+      b1.crossJoin(docHistoryQuery("Orders", opts)),
+      b1.crossJoin(docHistoryQuery("Quotations", opts)),
+    ]),
+  );
   return {
     itemCode: trimmedItemCode ?? null,
     cardCode: cardCode ?? null,
     rows: sortDocRows([
-      ...flattenDocs("order", orders, { itemCode: trimmedItemCode, cardCode }),
-      ...flattenDocs("quotation", quotations, { itemCode: trimmedItemCode, cardCode }),
+      ...flattenDocs("order", orders.data, opts),
+      ...flattenDocs("quotation", quotes.data, opts),
     ]),
   };
 }
@@ -258,6 +275,93 @@ export async function searchSimilarRows(tenantId: string, projectId: string, ent
       values: Object.fromEntries(h.mappings.map((m) => [m.param, coerce(m.param, s.row[m.column] ?? null)])),
     })),
   };
+}
+
+// ---- Quotation write-back -------------------------------------------------------------------
+// Numbers are recomputed from the persisted run on both the draft and the post, so the browser
+// can influence *which* selection is quoted (via commandId) and nothing else.
+
+async function loadProjectAndRun(tenantId: string, projectId: string, runId?: string) {
+  const [project] = await db.select().from(configProject)
+    .where(and(eq(configProject.id, projectId), eq(configProject.tenantId, tenantId))).limit(1);
+  if (!project) throw new ORPCError("NOT_FOUND");
+  const [run] = await db.select().from(configRun)
+    .where(and(eq(configRun.projectId, projectId), eq(configRun.tenantId, tenantId))).limit(1);
+  if (!run) throw new ORPCError("BAD_REQUEST", { message: "Calculate the configuration before quoting" });
+  if (runId && run.id !== runId) throw new ORPCError("CONFLICT", { message: "STATE_CHANGED" });
+  return { project, run };
+}
+
+export async function quoteDraft(tenantId: string, projectId: string) {
+  const { project, run } = await loadProjectAndRun(tenantId, projectId);
+  const commandId = configDocumentCommandId({ tenantId, projectId, runId: run.id, selection: run.selection ?? [] });
+  return {
+    runId: run.id,
+    commandId,
+    data: buildQuoteSeed(project, run),
+    totals: quotedTotals(run),
+    quoted: run.b1DocEntry === null ? null : { docEntry: run.b1DocEntry, quotedAt: run.quotedAt },
+  };
+}
+
+export async function createQuote(
+  tenantId: string,
+  input: { projectId: string; runId: string; commandId: string; comments?: string; docDueDate?: string },
+) {
+  const { project, run } = await loadProjectAndRun(tenantId, input.projectId, input.runId);
+  // Already posted: the row IS the idempotency record for a retry that got its response.
+  if (run.b1DocEntry !== null) return { docEntry: run.b1DocEntry, docNum: null, reused: true };
+
+  const commandId = configDocumentCommandId({ tenantId, projectId: input.projectId, runId: run.id, selection: run.selection ?? [] });
+  if (commandId !== input.commandId)
+    throw new ORPCError("CONFLICT", { message: "STATE_CHANGED" });
+
+  const seed = buildQuoteSeed(project, run);
+  const { b1 } = await tenantConnector(tenantId);
+
+  return viaB1(async () => {
+    // Check-then-create against the dedup UDF. This covers the window the DB cannot: we POSTed,
+    // B1 created the quotation, and our response never arrived.
+    const existing = await b1.readEntitySet("Quotations", {
+      filter: `${DEDUP_UDF} eq '${commandId}'`, select: ["DocEntry", "DocNum"], top: 1,
+    }).catch((e) => {
+      // Only a 400 means "no such property"; an unreachable agent or a rejected session is a
+      // different problem and must keep its own status rather than becoming setup advice.
+      if (e instanceof B1Error && e.status === 400)
+        throw new ORPCError("BAD_REQUEST", {
+          message: `Cannot check for an existing quotation: ${DEDUP_UDF} is missing from Sales Quotation in SAP. Create it (alphanumeric, length 64) and try again. (${e.message})`,
+        });
+      throw e;
+    });
+    const prior = rowsOf(existing.data)[0];
+
+    // createEntity answers with the document itself (Prefer: return-representation), not a
+    // collection — so this is `.data`, not `rowsOf(.data)[0]`.
+    const doc = (prior ?? (await b1.createEntity("Quotations", {
+      ...seed,
+      [DEDUP_UDF]: commandId,
+      ...(input.comments ? { Comments: input.comments } : {}),
+      ...(input.docDueDate ? { DocDueDate: input.docDueDate } : {}),
+    }, { prefer: "representation" })).data ?? {}) as Record<string, unknown>;
+    const docEntry = Number(doc.DocEntry);
+    if (!Number.isFinite(docEntry))
+      throw new ORPCError("BAD_GATEWAY", { message: "SAP created the quotation but returned no DocEntry" });
+
+    const totals = quotedTotals(run);
+    const now = new Date();
+    await db.transaction(async (tx) => {
+      await tx.update(configRun)
+        .set({
+          b1DocEntry: docEntry, quotedAt: now,
+          quotedValue: totals.value.toFixed(4), quotedCost: totals.cost.toFixed(4),
+        })
+        .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, tenantId)));
+      await tx.update(configProject)
+        .set({ status: "quoted", events: pushEvent("quoted"), updatedAt: now })
+        .where(and(eq(configProject.id, input.projectId), eq(configProject.tenantId, tenantId)));
+    });
+    return { docEntry, docNum: doc.DocNum === undefined ? null : Number(doc.DocNum), reused: !!prior };
+  });
 }
 
 export function applySelection(
@@ -402,10 +506,8 @@ export const configsRouter = {
     .input(z.object({ modelId: z.uuid(), entries: EntriesZ.optional() }))
     .handler(async ({ input, context }) => {
       const model = await loadModel(context.tenantId, input.modelId);
-      return enrichLookups(
-        model.definition, input.entries ?? {}, await cachedLookups(context.tenantId, model),
-        agentFetcher(context.tenantId),
-      );
+      const run = await modelRunner(context.tenantId, model.definition);
+      return enrichLookups(model.definition, input.entries ?? {}, await cachedLookups(context.tenantId, model, run), run);
     }),
 
   // Value help paging for a query-backed parameter (see queryTablePage).
@@ -433,8 +535,7 @@ export const configsRouter = {
       .limit(1);
     if (!project) throw new ORPCError("NOT_FOUND");
     const model = await loadModel(context.tenantId, project.modelId);
-    if (needsAgent(model.definition)) await assertAgentReady(context.tenantId);
-    return executeRun(context.tenantId, input.projectId, agentFetcher(context.tenantId));
+    return executeRun(context.tenantId, input.projectId, await modelRunner(context.tenantId, model.definition));
   }),
 
   // Store the user's candidate/batch/override picks; totals are recomputed HERE from the
@@ -463,142 +564,23 @@ export const configsRouter = {
       });
     }),
 
-  // Canonical Quotations draft for the latest selected run (server-authoritative prices).
+  // What will be posted to B1, recomputed from the persisted project + run. The commandId comes
+  // back with it and is echoed by createQuote, so the client can never widen the selection
+  // between preview and post.
   quoteDraft: userProcedure
     .input(z.object({ projectId: z.uuid() }))
-    .handler(async ({ input, context }) => {
-      const [project] = await db
-        .select()
-        .from(configProject)
-        .where(and(eq(configProject.id, input.projectId), eq(configProject.tenantId, context.tenantId)))
-        .limit(1);
-      if (!project) throw new ORPCError("NOT_FOUND");
-      const [run] = await db
-        .select()
-        .from(configRun)
-        .where(and(eq(configRun.projectId, project.id), eq(configRun.tenantId, context.tenantId)))
-        .limit(1);
-      if (!run?.selection?.length) {
-        throw new ORPCError("BAD_REQUEST", { message: "Select candidates before creating a quote draft" });
-      }
-      const commandId = configDocumentCommandId({
-        tenantId: context.tenantId,
-        projectId: project.id,
-        runId: run.id,
-        selection: run.selection,
-      });
-      const entity = "Quotations";
-      const profile = getEntityProfile(entity);
-      const [ti] = await db
-        .select({ enabledEntities: tenantIntegration.enabledEntities })
-        .from(tenantIntegration)
-        .where(eq(tenantIntegration.tenantId, context.tenantId))
-        .limit(1);
-      const schema = (ti?.enabledEntities ?? []).find((e) => e.name === entity) ?? null;
-      return {
-        projectId: project.id,
-        runId: run.id,
-        commandId,
-        data: buildQuoteSeed(project, run),
-        schema,
-        profile,
-      };
-    }),
+    .handler(({ input, context }) => quoteDraft(context.tenantId, input.projectId)),
 
-  // Enqueue a Quotations create with server-derived command id + config-document origin.
-  // Fenced: FOR UPDATE project (single-flight) → FOR UPDATE run →
-  // status / assertConfigMutable / commandId match → enqueue on the same tx.
   createQuote: userProcedure
     .input(z.object({
       projectId: z.uuid(),
       runId: z.uuid(),
       commandId: z.string().length(64),
-      data: z.record(z.string(), z.unknown()),
+      // Only these two are the salesperson's to set; every number is recomputed server-side.
+      comments: z.string().max(2000).optional(),
+      docDueDate: z.iso.date().optional(),
     }))
-    .handler(async ({ input, context }) => {
-      const entity = "Quotations";
-      const profile = getEntityProfile(entity);
-      if (!profile?.create) {
-        throw new ORPCError("BAD_REQUEST", { message: "Quotations profile does not support create" });
-      }
-      const [row] = await db
-        .select({
-          enabledEntities: tenantIntegration.enabledEntities,
-          writeCapabilities: tenantIntegration.writeCapabilities,
-          writeCapabilitiesCheckedAt: tenantIntegration.writeCapabilitiesCheckedAt,
-          lastSeenAt: tenantIntegration.lastSeenAt,
-        })
-        .from(tenantIntegration)
-        .where(eq(tenantIntegration.tenantId, context.tenantId))
-        .limit(1);
-      const schema = (row?.enabledEntities ?? []).find((e) => e.name === entity);
-      if (!schema?.editable) {
-        throw new ORPCError("FORBIDDEN", { message: `Entity '${entity}' is not enabled for write` });
-      }
-      const caps = resolveWriteCapabilities({
-        entity,
-        profile,
-        writeCapabilities: (row?.writeCapabilities ?? null) as WriteCapability[] | null,
-        checkedAt: row?.writeCapabilitiesCheckedAt ?? null,
-        lastSeenAt: row?.lastSeenAt ?? null,
-      });
-
-      return db.transaction(async (tx) => {
-        // Shared project lock first so two runs cannot both pass mutable + enqueue.
-        const [project] = await tx
-          .select()
-          .from(configProject)
-          .where(and(eq(configProject.id, input.projectId), eq(configProject.tenantId, context.tenantId)))
-          .for("update");
-        if (!project) throw new ORPCError("NOT_FOUND");
-
-        const [run] = await tx
-          .select()
-          .from(configRun)
-          .where(and(eq(configRun.id, input.runId), eq(configRun.tenantId, context.tenantId)))
-          .for("update");
-        if (!run || run.projectId !== input.projectId) throw new ORPCError("NOT_FOUND");
-
-        if (project.status !== "calculated" && project.status !== "requested") {
-          throw new ORPCError("BAD_REQUEST", {
-            message: "Only a calculated or requested configuration can be quoted",
-          });
-        }
-
-        // Same connection as the locked project/run: pending/in_flight config-document write blocks create.
-        await assertConfigMutable(context.tenantId, run.projectId, tx);
-
-        // Re-derive the id from the locked selection: if it no longer matches the one the client
-        // took from quoteDraft, the picks changed underneath it.
-        if (!run.selection?.length) {
-          throw new ORPCError("CONFLICT", { message: "Selection changed; reload the quote draft" });
-        }
-        const commandId = configDocumentCommandId({
-          tenantId: context.tenantId,
-          projectId: project.id,
-          runId: run.id,
-          selection: run.selection,
-        });
-        if (commandId !== input.commandId) {
-          throw new ORPCError("CONFLICT", { message: "Selection changed; reload the quote draft" });
-        }
-        const payload = normalizeWriteInput({
-          operation: "create",
-          entity,
-          data: input.data,
-          commandId,
-          origin: {
-            kind: "config-document",
-            projectId: project.id,
-            runId: run.id,
-          },
-          schema,
-          profile,
-          canCreate: caps.canCreate,
-        });
-        return enqueueWrite(context.tenantId, payload, tx);
-      });
-    }),
+    .handler(({ input, context }) => createQuote(context.tenantId, input)),
 
   // Internal reviewer sends a portal request back with a note. requested → rejected.
   reject: userProcedure

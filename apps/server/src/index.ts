@@ -3,8 +3,6 @@ import { serveStatic } from "hono/bun";
 import { RPCHandler, BodyLimitPlugin } from "@orpc/server/fetch";
 import { auth } from "./auth.ts";
 import { router } from "./orpc/router.ts";
-import { startHistorySync } from "./history-sync.ts";
-import { startDashboardSnapshot } from "./dashboard-snapshot.ts";
 
 const app = new Hono();
 // 22MB: Chati's attachment cap (15MB decoded, ~20MB base64-inflated) plus headroom for the rest
@@ -12,13 +10,10 @@ const app = new Hono();
 // the running byte count crosses the cap — before the request body is ever fully buffered/parsed.
 const rpc = new RPCHandler(router, { plugins: [new BodyLimitPlugin({ maxBodySize: 22 * 1024 * 1024 })] });
 
-startHistorySync();
-startDashboardSnapshot();
-
 // Layer 1 identity — Better Auth owns /api/auth/*.
 app.all("/api/auth/*", (c) => auth.handler(c.req.raw));
 
-// oRPC — both browser (session) and agent (bearer) procedures live here.
+// oRPC — browser session procedures.
 app.use("/rpc/*", async (c, next) => {
   const { matched, response } = await rpc.handle(c.req.raw, {
     prefix: "/rpc",

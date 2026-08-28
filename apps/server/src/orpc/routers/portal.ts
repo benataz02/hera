@@ -11,11 +11,10 @@ import { adminProcedure, baseDomain, clientProcedure, sessionProcedure } from ".
 import { hashToken } from "../../crypto.ts";
 import { tenantSlugFromHost } from "../../tenant.ts";
 import {
-  applySelection, cachedLookups, executeRun, loadModel, needsAgent, pushEvent,
+  applySelection, cachedLookups, executeRun, loadModel, modelRunner, pushEvent,
   QueryPageZ, queryTablePage,
 } from "./configs.ts";
-import { assertAgentReady } from "./entities.ts";
-import { agentFetcher } from "./models.ts";
+
 import { ExtractFileZ, extractSuggestions } from "./extraction.ts";
 import { enrichLookups } from "../../lookups.ts";
 
@@ -371,8 +370,7 @@ export const portalRouter = {
       throw new ORPCError("BAD_REQUEST", { message: "A submitted request is locked — withdraw it to make changes." });
     const model = await loadModel(context.tenantId, p.modelId);
     if (!model.portal) throw new ORPCError("BAD_REQUEST", { message: UNAVAILABLE });
-    if (needsAgent(model.definition)) await assertAgentReady(context.tenantId);
-    return executeRun(context.tenantId, p.id, agentFetcher(context.tenantId));
+    return executeRun(context.tenantId, p.id, await modelRunner(context.tenantId, model.definition));
   }),
 
   // Resolved lookups for live propagation in the portal wizard (same cache as configs.lookups).
@@ -383,10 +381,8 @@ export const portalRouter = {
     .handler(async ({ input, context }) => {
       const model = await loadModel(context.tenantId, input.modelId);
       if (!model.portal) throw new ORPCError("BAD_REQUEST", { message: UNAVAILABLE });
-      return enrichLookups(
-        model.definition, input.entries ?? {}, await cachedLookups(context.tenantId, model),
-        agentFetcher(context.tenantId),
-      );
+      const run = await modelRunner(context.tenantId, model.definition);
+      return enrichLookups(model.definition, input.entries ?? {}, await cachedLookups(context.tenantId, model, run), run);
     }),
 
   // Value help paging, model-scoped exactly like the internal one: a portal client names a query

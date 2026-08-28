@@ -1,10 +1,10 @@
-import { useNavigate, useRouter, useRouterState, useMatches, Outlet } from "@tanstack/react-router";
+import { useNavigate, useRouter, useRouterState, Outlet } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Avatar,
   Breadcrumbs, BreadcrumbsItem,
   Button,
-  NavigationLayout, ShellBar, SideNavigation, SideNavigationItem,
+  NavigationLayout, ShellBar, SideNavigation, SideNavigationGroup, SideNavigationItem,
   ToggleButton,
   UserMenu,
   UserMenuAccount,
@@ -12,7 +12,7 @@ import {
 } from "@ui5/webcomponents-react";
 import type { SideNavigationPropTypes, NavigationLayoutDomRef, NavigationLayoutPropTypes } from "@ui5/webcomponents-react";
 import { authClient } from "../auth-client.ts";
-import { orpc, client, meQuery } from "../orpc.ts";
+import { meQuery, orpc } from "../orpc.ts";
 import { GlobalSearch, type SearchEntry } from "./GlobalSearch.tsx";
 import { useRef, useState, useEffect, useMemo } from "react";
 import { getTheme, setTheme } from '@ui5/webcomponents-base/dist/config/Theme.js';
@@ -34,27 +34,19 @@ export function AppShell() {
   const [theme, setThemeState] = useState<string>(() => localStorage.getItem("theme") ?? getTheme());
 
   // Identity + org role in one query, already primed by _authed's beforeLoad — a cache read.
-  // Role decides whether the Settings (entity config) item shows; the server gates it too.
+  // Role decides whether the Settings item shows; the server gates it too.
   const me = useQuery(meQuery);
   const user = me.data?.user;
   const isAdmin = me.data?.role === "admin" || me.data?.role === "owner";
   const isClient = me.data?.role === "client";
-
-  const entities = useQuery({ ...orpc.entities.getEnabled.queryOptions(), enabled: !!me.data && !isClient });
-  const enabled = entities.data ?? [];
-
-  // Open the agent's B1 Service Layer session once per app load so the first query/value-help
-  // doesn't wait out the /Login round-trip. Best-effort: ignore failures (e.g. agent offline).
-  // Skipped for client (portal) sessions — they never touch entity data.
-  useEffect(() => {
-    if (me.data && !isClient) void client.entities.login().catch(() => {});
-  }, [me.data, isClient]);
+  const pins = useQuery({ ...orpc.entities.navPins.queryOptions(), enabled: isAdmin });
 
   const onSelect: SideNavigationPropTypes["onSelectionChange"] = (e) => {
     const el = e.detail.item as HTMLElement;
-    const entity = el.dataset.entity;
     const to = el.dataset.to;
-    if (entity) navigate({ to: "/$entity", params: { entity } });
+    if (!to) return;
+    const pin = /^\/b1\/([^/]+)$/.exec(to);
+    if (pin) navigate({ to: "/b1/$entity", params: { entity: pin[1]! } });
     else navigate({ to: to });
   };
 
@@ -73,13 +65,20 @@ export function AppShell() {
     const page = (text: string, to: string, icon: string) => ({ group: "Menus", text, icon, run: () => navigate({ to }) });
     return [
       page("Home", "/", "home"),
-      ...enabled.map((ent) => ({
-        group: "Menus", text: ent.name, icon: "list", description: "SAP B1 entity",
-        run: () => navigate({ to: "/$entity", params: { entity: ent.name } }),
-      })),
       page("Configurations", "/configs", "sales-quote"),
       ...(isAdmin
-        ? [page("Configurator models", "/models", "tree"), page("Settings", "/settings", "action-settings")]
+        ? [
+            page("Entities", "/b1", "database"),
+            ...(pins.data?.entities ?? []).map((p) => ({
+              group: "Menus" as const,
+              text: p.label,
+              description: p.name,
+              icon: "document",
+              run: () => navigate({ to: "/b1/$entity", params: { entity: p.name } }),
+            })),
+            page("Configurator models", "/models", "tree"),
+            page("Settings", "/settings", "action-settings"),
+          ]
         : []),
       ...THEMES.map((t) => ({
         group: "Settings", text: t.labelKey, description: "Theme", icon: "palette",
@@ -89,7 +88,7 @@ export function AppShell() {
       { group: "Settings", text: "Cozy", description: "Density", icon: "resize-horizontal", run: () => setDensity('cozy') },
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, isAdmin, navigate]);
+  }, [isAdmin, navigate, pins.data]);
 
   type Density = 'cozy' | 'compact';
 
@@ -117,7 +116,7 @@ export function AppShell() {
 
   const signOut = async () => {
     await authClient.signOut();
-    queryClient.clear(); // drop session + role + entity caches, not just the session
+    queryClient.clear(); // drop session + role caches, not just the session
     navigate({ to: "/login" });
   };
 
@@ -200,7 +199,13 @@ export function AppShell() {
         </>
       }
       sideContent={
-        <SideNavigation onSelectionChange={onSelect}>
+        <SideNavigation
+          onSelectionChange={onSelect}
+          fixedItems={isAdmin ? (
+            <SideNavigationItem text="Settings" icon="action-settings" data-to="/settings"
+              selected={pathname === "/settings"} />
+          ) : undefined}
+        >
           {isClient ? (
             <>
               <SideNavigationItem text="My requests" icon="sales-quote" data-to="/portal"
@@ -211,37 +216,33 @@ export function AppShell() {
           ) : (
             <>
               <SideNavigationItem text="Home" icon="home" data-to="/" selected={pathname === "/"} />
-              {enabled.map((ent) => (
-                <SideNavigationItem
-                  key={ent.name}
-                  text={ent.name}
-                  icon="list"
-                  data-entity={ent.name}
-                  selected={pathname === `/${ent.name}`}
-                />
-              ))}
-              <SideNavigationItem
-                text="Configurations"
-                icon="sales-quote"
-                data-to="/configs"
-                selected={pathname === "/configs" || pathname.startsWith("/configs/")}
-              />
               {isAdmin ? (
-                <>
+                <SideNavigationGroup text="SAP entities" expanded>
+                  <SideNavigationItem text="Entities" icon="database" data-to="/b1"
+                    selected={pathname === "/b1"} />
+                  {(pins.data?.entities ?? []).map((p) => (
+                    <SideNavigationItem key={p.name} text={p.label} icon="document"
+                      data-to={`/b1/${p.name}`}
+                      selected={pathname === `/b1/${p.name}` || pathname.startsWith(`/b1/${p.name}/`)} />
+                  ))}
+                </SideNavigationGroup>
+              ) : null}
+              <SideNavigationGroup text="Configurator" expanded>
+                <SideNavigationItem
+                  text="Configurations"
+                  icon="sales-quote"
+                  data-to="/configs"
+                  selected={pathname === "/configs" || pathname.startsWith("/configs/")}
+                />
+                {isAdmin ? (
                   <SideNavigationItem
                     text="Configurator models"
                     icon="tree"
                     data-to="/models"
                     selected={pathname === "/models" || pathname.startsWith("/models/")}
                   />
-                  <SideNavigationItem
-                    text="Settings"
-                    icon="action-settings"
-                    data-to="/settings"
-                    selected={pathname === "/settings"}
-                  />
-                </>
-              ) : null}
+                ) : null}
+              </SideNavigationGroup>
             </>
           )}
         </SideNavigation>

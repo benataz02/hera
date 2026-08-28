@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="4.0" xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx">
+  <edmx:DataServices>
+    <Schema Namespace="SAPB1" xmlns="http://docs.oasis-open.org/odata/ns/edm">
+      <EnumType IsFlags="false" Name="BoStatus" UnderlyingType="Edm.Int32">
+        <Member Name="bost_Open" Value="0"><Annotation String="O" Term="SAPB1.ValidValue"/></Member>
+        <Member Name="bost_Close" Value="1"><Annotation String="C" Term="SAPB1.ValidValue"/></Member>
+      </EnumType>
+      <EnumType IsFlags="false" Name="BoYesNoEnum" UnderlyingType="Edm.Int32">
+        <Member Name="tNO" Value="0"><Annotation String="N" Term="SAPB1.ValidValue"/></Member>
+        <Member Name="tYES" Value="1"><Annotation String="Y" Term="SAPB1.ValidValue"/></Member>
+      </EnumType>
+      <ComplexType Name="DocumentLine">
+        <Property Name="LineNum" Type="Edm.Int32">
+          <Annotation Term="Common.Label" String="Row Number"/>
+        </Property>
+        <Property Name="ItemCode" Type="Edm.String" MaxLength="50">
+          <Annotation Term="Common.Label" String="Item No."/>
+        </Property>
+        <Property Name="Quantity" Type="Edm.Double"/>
+      </ComplexType>
+      <EntityType Name="Document">
+        <Key><PropertyRef Name="DocEntry"/></Key>
+        <Property Name="DocEntry" Type="Edm.Int32"/>
+        <Property Name="DocNum" Type="Edm.Int32"/>
+        <Property Name="DocDate" Type="Edm.DateTimeOffset">
+          <Annotation Term="Common.Label" String="Posting Date"/>
+        </Property>
+        <Property Name="CardCode" Type="Edm.String" MaxLength="15">
+          <Annotation Term="Common.Label" String="Customer/Vendor Code"/>
+        </Property>
+        <Property Name="DocumentStatus" Type="SAPB1.BoStatus"/>
+        <Property Name="Cancelled" Type="SAPB1.BoYesNoEnum"/>
+        <Property Name="U_HERA_DedupKey" Type="Edm.String" MaxLength="64">
+          <Annotation Term="Common.Label" String="HERA dedup key"/>
+        </Property>
+        <Property Name="Mystery" Type="SAPB1.NotDeclaredAnywhere"/>
+        <Property Name="DocumentLines" Type="Collection(SAPB1.DocumentLine)"/>
+        <NavigationProperty Name="BusinessPartner" Type="SAPB1.BusinessPartner">
+          <ReferentialConstraint Property="CardCode" ReferencedProperty="CardCode"/>
+        </NavigationProperty>
+      </EntityType>
+      <EntityType Name="Item">
+        <Key><PropertyRef Name="ItemCode"/></Key>
+        <Property Name="ItemCode" Type="Edm.String" MaxLength="50"/>
+        <Property Name="ItemName" Type="Edm.String"/>
+      </EntityType>
+      <EntityContainer Name="ServiceLayer">
+        <EntitySet EntityType="SAPB1.Document" Name="Orders">
+          <Annotation Term="Common.Label" String="Sales Order"/>
+          <Annotation Term="SAPB1.TableName" String="ORDR"/>
+        </EntitySet>
+        <EntitySet EntityType="SAPB1.Item" Name="Items">
+          <Annotation Term="Common.Label" String="Items"/>
+          <Annotation Term="SAPB1.TableName" String="OITM"/>
+        </EntitySet>
+        <EntitySet EntityType="SAPB1.BusinessPartner" Name="BusinessPartners">
+          <Annotation Term="Common.Label" String="Business Partners"/>
+          <Annotation Term="SAPB1.TableName" String="OCRD"/>
+        </EntitySet>
+        <EntitySet EntityType="SAPB1.U_ProjectData" Name="U_ProjectData">
+          <Annotation Term="Common.Label" String="Project Data"/>
+          <Annotation Term="SAPB1.TableName" String="@ProjectData"/>
+        </EntitySet>
+        <EntitySet EntityType="SAPB1.MyUDO" Name="MyUDO">
+          <Annotation Term="SAPB1.TableName" String="@MyUDO"/>
+        </EntitySet>
+        <EntitySet EntityType="SAPB1.B1Session" Name="B1Sessions"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>

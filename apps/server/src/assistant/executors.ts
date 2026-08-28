@@ -14,7 +14,7 @@ import {
   searchSimilarRows as realSimilar, fetchDocHistory as realDocs, loadModel,
   executeRunFromSnapshot, applySelection,
 } from "../orpc/routers/configs.ts";
-import { agentFetcher } from "../orpc/routers/models.ts";
+import { modelRunner } from "../orpc/routers/configs.ts";
 import type { DocRow } from "../doc-history.ts";
 
 // Tool executors: the server-side implementations closed over one turn's context. Each returns
@@ -190,7 +190,7 @@ export function createExecutors(
       try {
         const r = await executeRunFromSnapshot(
           ctx.tenantId, ctx.projectId, ctx.working.entries, ctx.working.batches,
-          new Date(ctx.working.projectVersion), agentFetcher(ctx.tenantId),
+          new Date(ctx.working.projectVersion), await modelRunner(ctx.tenantId, ctx.model.definition),
         );
         state.frozen = true;
         state.lastRun = { runId: r.runId, candidates: r.candidates };

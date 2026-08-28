@@ -39,7 +39,7 @@ describe("ModelDefZ", () => {
 describe("LookupRef columns", () => {
   test("accepts named-source query refs and rejects the old inline shape", () => {
     expect(LookupRefZ.safeParse({ source: "query", table: "items", valueCol: "ItemCode" }).success).toBe(true);
-    expect(LookupRefZ.safeParse({ source: "query", target: "b1", path: "/Items", valueField: "ItemCode" }).success).toBe(false);
+    expect(LookupRefZ.safeParse({ source: "query", target: "b1", query: { entitySet: "Items" }, valueField: "ItemCode" }).success).toBe(false);
     expect(LookupRefZ.safeParse({ source: "table", table: "mats", valueCol: "code", columns: ["density"] }).success).toBe(true);
   });
 
@@ -65,14 +65,14 @@ describe("LookupRef columns", () => {
   test("query table labels/hidden are kept and do not change derived or display columns", () => {
     const m = structuredClone(model) as any;
     m.queryTables = [{
-      name: "items", target: "b1", path: "/Items",
+      name: "items", target: "b1", query: { entitySet: "Items" },
       columns: ["ItemCode", "ItemName", "OnHand"],
       labels: { ItemName: "Name" },
       hidden: ["OnHand"],
     }];
     const parsed = ModelDefZ.parse(m);
     expect(parsed.queryTables[0]).toEqual({
-      name: "items", target: "b1", path: "/Items",
+      name: "items", target: "b1", query: { entitySet: "Items" },
       columns: ["ItemCode", "ItemName", "OnHand"],
       labels: { ItemName: "Name" },
       hidden: ["OnHand"],

@@ -90,7 +90,7 @@ describe("checkModel", () => {
     const m = structuredClone(model);
     m.history = {
       itemCodeParam: "material",
-      query: { target: "b1", path: "/x", columns: ["mat", "sec", "price"] },
+      query: { target: "b1", query: { entitySet: "X" }, columns: ["mat", "sec", "price"] },
       mappings: [
         { param: "material", column: "mat", match: "exact", weight: 2 },
         { param: "section", column: "sec", match: "closeness", weight: 1 },
@@ -104,7 +104,7 @@ describe("checkModel", () => {
     const m = structuredClone(model);
     m.history = {
       itemCodeParam: "nope",
-      query: { target: "b1", path: "/x", columns: ["mat"] },
+      query: { target: "b1", query: { entitySet: "X" }, columns: ["mat"] },
       mappings: [
         { param: "ghost", column: "mat", match: "exact", weight: 1 },
         { param: "material", column: "mat", match: "closeness", weight: 1 },
@@ -171,7 +171,7 @@ describe("lookup ref validation", () => {
 
   it("resolves query refs against model.queryTables", () => {
     const m = withRef({ source: "query", table: "items", valueCol: "ItemCode" });
-    m.queryTables = [{ name: "items", target: "b1", path: "/Items", columns: ["ItemCode", "ItemName"] }];
+    m.queryTables = [{ name: "items", target: "b1", query: { entitySet: "Items" }, columns: ["ItemCode", "ItemName"] }];
     expect(checkModel(m, [{ name: "prices", columns: ["code", "price"] }])).toEqual([]);
   });
 

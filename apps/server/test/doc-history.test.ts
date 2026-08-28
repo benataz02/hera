@@ -1,30 +1,41 @@
 import { describe, expect, test } from "bun:test";
-import { docHistoryPath, flattenDocs, sortDocRows } from "../src/doc-history.ts";
+import { crossJoinPath } from "@hera/b1";
+import { docHistoryQuery, flattenDocs, sortDocRows } from "../src/doc-history.ts";
 
-describe("docHistoryPath", () => {
+describe("docHistoryQuery", () => {
   test("both criteria OR'd against the crossjoin, quotes escaped, ordered by DocDate desc", () => {
-    const p = docHistoryPath("Orders", { itemCode: "IT'M", cardCode: "C001" });
-    expect(p.startsWith("/$crossjoin(Orders,Orders/DocumentLines)?")).toBe(true);
-    expect(decodeURIComponent(p)).toContain(
+    const spec = docHistoryQuery("Orders", { itemCode: "IT'M", cardCode: "C001" });
+    expect(spec.entities).toEqual(["Orders", "Orders/DocumentLines"]);
+    expect(spec.filter).toContain(
       "(Orders/CardCode eq 'C001' or Orders/DocumentLines/ItemCode eq 'IT''M')",
     );
-    expect(decodeURIComponent(p)).toContain("$orderby=Orders/DocDate desc");
-    expect(p).toContain("$top=10");
+    expect(spec.orderby).toBe("Orders/DocDate desc");
+    expect(spec.top).toBe(10);
     // B1 has no lambdas — the whole reason this is a crossjoin.
-    expect(decodeURIComponent(p)).not.toContain("any(");
+    expect(spec.filter).not.toContain("any(");
   });
 
   // Without this the crossjoin pairs every document with every line in the company.
   test("always joins on DocEntry, even with a single criterion", () => {
     for (const opts of [{ cardCode: "C001" }, { itemCode: "A" }]) {
-      expect(decodeURIComponent(docHistoryPath("Quotations", opts))).toContain(
+      expect(docHistoryQuery("Quotations", opts).filter).toContain(
         "Quotations/DocEntry eq Quotations/DocumentLines/DocEntry and (",
       );
     }
   });
 
   test("throws without criteria", () => {
-    expect(() => docHistoryPath("Quotations", {})).toThrow();
+    expect(() => docHistoryQuery("Quotations", {})).toThrow();
+  });
+
+  // The spec still has to come out as the URL that was verified against b1s/v2.
+  test("builds the verified crossjoin URL", () => {
+    const url = crossJoinPath(docHistoryQuery("Orders", { itemCode: "A", cardCode: "C001", top: 5 }));
+    expect(url.startsWith("$crossjoin(Orders,Orders/DocumentLines)?")).toBe(true);
+    expect(url).toContain("$expand=Orders($select=DocNum,DocDate,CardCode,CardName),Orders/DocumentLines($select=ItemCode,ItemDescription,Quantity,UnitPrice)");
+    expect(decodeURIComponent(url)).toContain("Orders/DocEntry eq Orders/DocumentLines/DocEntry");
+    expect(decodeURIComponent(url)).toContain("$orderby=Orders/DocDate desc");
+    expect(url).toContain("$top=5");
   });
 });
 

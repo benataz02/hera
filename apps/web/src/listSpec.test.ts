@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { applySpec, formatCell, EMPTY_SPEC, listFetchSelect, type ListColumn, type ListVariantDef } from "./listSpec.ts";
+import { applySpec, boolFilterState, formatCell, EMPTY_SPEC, listFetchSelect, nextBoolFilter, type ListColumn, type ListVariantDef } from "./listSpec.ts";
 
 const COLUMNS: ListColumn[] = [
   { name: "name", type: "string" },
@@ -102,10 +102,22 @@ test("nulls sort first and never match a comparison", () => {
   expect(names(applySpec(rows, spec({ filter: [{ field: "qty", op: "gt", value: 0 }] }), COLUMNS))).not.toContain("Blank");
 });
 
-test("formatCell renders dates locally, not as a Date toString", () => {
+test("a boolean filter cycles Any -> Yes -> No -> Any", () => {
+  expect(boolFilterState(undefined)).toBeUndefined();
+  expect(boolFilterState({ field: "Cancelled", op: "eq", value: true })).toBe(true);
+  expect(boolFilterState({ field: "Cancelled", op: "eq", value: false })).toBe(false);
+  expect(nextBoolFilter(undefined)).toBe(true);
+  expect(nextBoolFilter(true)).toBe(false);
+  expect(nextBoolFilter(false)).toBe(""); // "" is what setCond reads as "drop this filter"
+});
+
+test("formatCell renders the local date only, not a Date toString", () => {
   const iso = "2026-07-20T10:00:00Z";
-  expect(formatCell(iso, "date")).toBe(new Date(iso).toLocaleString());
-  expect(formatCell(new Date(iso), "Edm.DateTimeOffset")).toBe(new Date(iso).toLocaleString());
+  expect(formatCell(iso, "date")).toBe(new Date(2026, 6, 20).toLocaleDateString());
+  expect(formatCell(new Date(iso), "Edm.DateTimeOffset")).toBe(new Date(iso).toLocaleDateString());
+  // The day is read off the string: UTC midnight must not roll back a day west of Greenwich.
+  expect(formatCell("2026-07-20T00:00:00Z", "Edm.DateTimeOffset")).toBe(new Date(2026, 6, 20).toLocaleDateString());
+  expect(formatCell("14:30:00", "Edm.TimeOfDay")).toBe("14:30:00");
   expect(formatCell("not a date", "date")).toBe("not a date");
   expect(formatCell(null, "string")).toBe("");
   expect(formatCell({ a: 1 }, "string")).toBe('{"a":1}');

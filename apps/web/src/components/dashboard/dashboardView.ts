@@ -37,8 +37,5 @@ export function nextActions(o: Overview): Array<{ text: string; to: string }> {
   const out: Array<{ text: string; to: string }> = [];
   const n = o.attention.length;
   if (n) out.push({ text: `${n} configuration${n === 1 ? "" : "s"} need${n === 1 ? "s" : ""} you`, to: "/configs" });
-  const f = o.exceptions.failed.length;
-  if (f) out.push({ text: `${f} sync${f === 1 ? "" : "s"} failed`, to: "/settings" });
-  if (o.exceptions.agentStale) out.push({ text: "The on-prem agent is offline", to: "/settings" });
   return out;
 }

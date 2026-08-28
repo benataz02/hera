@@ -1,14 +1,16 @@
-import { and, eq, sql } from "drizzle-orm";
-import { db, configHistory, configModel } from "@hera/db";
+import { and, eq } from "drizzle-orm";
+import { db, configHistory } from "@hera/db";
 import type { ModelDef, Val } from "@hera/config-engine";
-import { fetchQueryTable, type QueryFetcher } from "./lookups.ts";
-import { assertAgentReady, runRequest } from "./orpc/routers/entities.ts";
+import { fetchQueryTable, type QueryRunner } from "./lookups.ts";
 
 // Pull a model's history query rows into config_history, wholesale (delete + insert, one tx).
 // The query is the source of truth — no dedup/merge. Read side (configs.similar) goes through
 // loadHistoryRows' 5-min cache, invalidated on every sync.
 
 const CACHE_TTL_MS = 5 * 60_000;
+/** Pages of the history query one sync will walk. At B1's default page size that is tens of
+ *  thousands of rows — deeper history is the signal to move this off the request path. */
+const HISTORY_MAX_PAGES = 200;
 const cache = new Map<string, { at: number; rows: Record<string, Val>[] }>();
 const keyOf = (tenantId: string, modelId: string) => `${tenantId}:${modelId}`;
 
@@ -30,11 +32,13 @@ export async function syncModelHistory(
   tenantId: string,
   modelId: string,
   def: ModelDef,
-  fetchQuery: QueryFetcher,
+  run: QueryRunner,
 ): Promise<{ count: number }> {
   const q = def.history?.query;
-  if (!q?.path) throw new Error("Model has no history query");
-  const t = await fetchQueryTable(fetchQuery, q.target, q.path, q.columns, true);
+  if (!q) throw new Error("Model has no history query");
+  // ponytail: capped synchronous walk. The cap is stated here, at the call site, precisely
+  // because packages/b1 has no readAll to hide it in.
+  const t = await fetchQueryTable(run, q.target, q.query, q.columns, { maxPages: HISTORY_MAX_PAGES });
   const rows = t.rows.map((r) => Object.fromEntries(t.columns.map((c, i) => [c, r[i] ?? null])));
   await db.transaction(async (tx) => {
     await tx.delete(configHistory).where(and(eq(configHistory.tenantId, tenantId), eq(configHistory.modelId, modelId)));
@@ -44,32 +48,4 @@ export async function syncModelHistory(
   });
   cache.delete(keyOf(tenantId, modelId));
   return { count: rows.length };
-}
-
-const SYNC_INTERVAL_MS = 60 * 60_000;
-
-// ponytail: single in-process hourly interval, sequential per model; move to a jobs table if the
-// server ever runs multi-instance or a tenant's sync gets slow enough to matter.
-export function startHistorySync(): void {
-  const tick = async () => {
-    try {
-      const models = await db
-        .select({ id: configModel.id, tenantId: configModel.tenantId, definition: configModel.definition })
-        .from(configModel)
-        .where(sql`${configModel.definition} -> 'history' -> 'query' is not null`);
-      for (const m of models) {
-        try {
-          await assertAgentReady(m.tenantId);
-          const { count } = await syncModelHistory(m.tenantId, m.id, m.definition, (target, path, opts) =>
-            runRequest(m.tenantId, "query", { target, path, all: opts?.all !== false }));
-          console.log(`[history-sync] ${m.tenantId}/${m.id}: ${count} rows`);
-        } catch (e) {
-          console.error(`[history-sync] ${m.tenantId}/${m.id} failed: ${e instanceof Error ? e.message : e}`);
-        }
-      }
-    } catch (e) {
-      console.error(`[history-sync] tick failed: ${e instanceof Error ? e.message : e}`);
-    }
-  };
-  setInterval(() => void tick(), SYNC_INTERVAL_MS);
 }

@@ -1,8 +1,7 @@
 import { os, ORPCError } from "@orpc/server";
 import { and, eq } from "drizzle-orm";
-import { db, tenantIntegration, member, organization, portalClient } from "@hera/db";
+import { db, member, organization, portalClient } from "@hera/db";
 import { auth } from "../auth.ts";
-import { hashToken } from "../crypto.ts";
 import { tenantSlugFromHost } from "../tenant.ts";
 
 export const baseDomain = process.env.APP_BASE_DOMAIN ?? "lvh.me";
@@ -50,7 +49,7 @@ export const userProcedure = base.use(requireSession).use(async ({ context, next
   return next({ context: { tenantId: row.tenantId, role: row.role, userId: context.user.id } });
 });
 
-/** Like userProcedure, but only org admins/owners — gates the entity-config panel. */
+/** Like userProcedure, but only org admins/owners — gates Settings and the model builder. */
 export const adminProcedure = userProcedure.use(({ context, next }) => {
   if (context.role !== "admin" && context.role !== "owner") {
     throw new ORPCError("FORBIDDEN", { message: "Admins only" });
@@ -75,20 +74,3 @@ export const clientProcedure = base.use(requireSession).use(async ({ context, ne
     context: { tenantId: row.tenantId, userId: context.user.id, cardCode: b.cardCode, cardName: b.cardName },
   });
 });
-
-// --- Layer 2: on-prem agent via per-tenant bearer token (NOT a user session) ---
-const requireAgent = base.middleware(async ({ context, next }) => {
-  const header = context.headers.get("authorization");
-  const token = header?.startsWith("Bearer ") ? header.slice(7) : null;
-  if (!token) throw new ORPCError("UNAUTHORIZED");
-  const [row] = await db
-    .select({ tenantId: tenantIntegration.tenantId })
-    .from(tenantIntegration)
-    .where(eq(tenantIntegration.agentTokenHash, hashToken(token)))
-    .limit(1);
-  if (!row) throw new ORPCError("UNAUTHORIZED");
-  return next({ context: { tenantId: row.tenantId } });
-});
-
-/** Procedures the on-prem agent calls; tenant resolved from its token, never an IP. */
-export const agentProcedure = base.use(requireAgent);

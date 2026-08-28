@@ -1,12 +1,11 @@
 import { createAssistantRouter } from "../assistant/router.ts";
-import { syncRouter } from "./routers/sync.ts";
-import { entitiesRouter } from "./routers/entities.ts";
 import { variantsRouter } from "./routers/variants.ts";
 import { modelsRouter } from "./routers/models.ts";
 import { configsRouter } from "./routers/configs.ts";
 import { extractionRouter } from "./routers/extraction.ts";
 import { portalClientsRouter, portalRouter } from "./routers/portal.ts";
 import { dashboardRouter } from "./routers/dashboard.ts";
+import { entitiesRouter } from "./routers/entities.ts";
 import { sessionProcedure, membershipFromHost } from "./base.ts";
 
 export const router = {
@@ -18,8 +17,6 @@ export const router = {
     ...(await membershipFromHost(context.headers, context.user.id)),
     user: context.user,
   })),
-  sync: syncRouter,
-  entities: entitiesRouter,
   variants: variantsRouter,
   models: modelsRouter,
   configs: configsRouter,
@@ -27,6 +24,7 @@ export const router = {
   portal: portalRouter,
   portalClients: portalClientsRouter,
   dashboard: dashboardRouter,
+  entities: entitiesRouter,
   assist: createAssistantRouter(),
 };
 

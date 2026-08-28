@@ -1,0 +1,12 @@
+{
+  "port": 4000,
+  "secret": "dev-secret-change-me-min-32-chars-long",
+  "b1": {
+    "slUrl": "http://localhost:50001",
+    "companyDb": "ALUMIGRAF",
+    "user": "manager",
+    "pass": "1234",
+    "allowSelfSigned": true,
+    "timeoutMs": 60000
+  }
+}

@@ -4,7 +4,7 @@ import { mergeQueryPicks, resolveEntry, setEntry, setQueryPick } from "./formHel
 
 const base: ResolvedLookups = {
   domains: { item: [{ value: "A", label: "Ay" }] },
-  tables: { items: { columns: ["id", "name"], rows: [["A", "Ay"]], nextLink: "/p2" } },
+  tables: { items: { columns: ["id", "name"], rows: [["A", "Ay"]], nextSkip: 2 } },
 };
 
 describe("mergeQueryPicks", () => {
@@ -16,7 +16,7 @@ describe("mergeQueryPicks", () => {
     const picks = setQueryPick({}, "item", "items", { columns: ["id", "name"], rows: [["B", "Bee"]] });
     const lk = mergeQueryPicks(base, picks);
     expect(lk.domains).toBe(base.domains);
-    expect(lk.tables.items?.nextLink).toBe("/p2");
+    expect(lk.tables.items?.nextSkip).toBe(2);
     expect(lk.tables.items?.rows).toEqual([["B", "Bee"], ["A", "Ay"]]);
   });
 

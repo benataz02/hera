@@ -7,7 +7,7 @@ import {
 import type { Issue, ModelDef } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
 import { issueFor } from "./useDraftModel.ts";
-import { QueryEditor } from "./QueryEditor.tsx";
+import { QueryEditor, emptyQuery } from "./QueryEditor.tsx";
 
 type Update = (fn: (d: ModelDef) => ModelDef) => void;
 type History = NonNullable<ModelDef["history"]>;
@@ -74,7 +74,7 @@ export function HistoryTab({ draft, update, issues, modelId, dirty }: {
               </FormItem>
               <FormItem>
                 <QueryEditor
-                  target={h.query.target} path={h.query.path} columns={h.query.columns}
+                  target={h.query.target} query={h.query.query} columns={h.query.columns}
                   onChange={(patch) => setH({ query: { ...h.query!, ...patch } })}>
                   {strip(errMsg("history.query"))}
                 </QueryEditor>
@@ -83,7 +83,7 @@ export function HistoryTab({ draft, update, issues, modelId, dirty }: {
           ) : (
             <>
               <FormItem>
-                <Button icon="add" onClick={() => setH({ query: { target: "b1", path: "", columns: [] } })}>
+                <Button icon="add" onClick={() => setH({ query: { target: "b1", query: emptyQuery(), columns: [] } })}>
                   Add history query
                 </Button>
               </FormItem>

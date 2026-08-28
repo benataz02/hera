@@ -278,7 +278,7 @@ export function ValueHelp({
 }
 
 /** Value help over a model's queryTable. Empty search starts from the canonical lookup page, then
- *  follows its @odata.nextLink on scroll; non-empty search starts a separate remote page chain so a
+ *  pages by row offset on scroll; non-empty search starts a separate remote page chain so a
  *  match past page 1 is still findable. */
 /** Which endpoint pages this table. The builder preview edits an *unsaved* draft, so it posts the
  *  raw OData path (admin-only); wizard and portal name a saved model's query table instead, and the
@@ -309,18 +309,18 @@ export function QueryValueHelp({
   const searchCols = [pinned.valueCol, pinned.labelCol].filter((c): c is string => !!c);
 
   // initialData only seeds a new cache entry. Replace the empty-search entry when the canonical
-  // lookup refreshes so its rows and nextLink cannot remain stale.
+  // lookup refreshes so its rows and its next-page offset cannot remain stale.
   useEffect(() => {
-    if (!canonicalTable || !qt?.path) return;
-    const data = { pages: [canonicalTable], pageParams: [undefined as string | undefined] };
+    if (!canonicalTable || !qt?.query.entitySet) return;
+    const data = { pages: [canonicalTable], pageParams: [undefined as number | undefined] };
     const key = source.kind === "draft"
       ? orpc.models.queryPage.infiniteKey({
-          input: () => ({ target: qt.target, path: qt.path, columns: qt.columns, search: "", searchCols }),
-          initialPageParam: undefined as string | undefined,
+          input: () => ({ target: qt.target, query: qt.query, columns: qt.columns, search: "", searchCols }),
+          initialPageParam: undefined as number | undefined,
         })
       : (source.kind === "portal" ? orpc.portal.queryPage : orpc.configs.queryPage).infiniteKey({
           input: () => ({ modelId: source.modelId, table: qt.name, cursor: undefined, search: "", searchCols }),
-          initialPageParam: undefined as string | undefined,
+          initialPageParam: undefined as number | undefined,
         });
     let current = true;
     void (async () => {
@@ -331,20 +331,22 @@ export function QueryValueHelp({
   }, [canonicalTable, pinned.labelCol, pinned.valueCol, qt, queryClient, source.kind,
     source.kind === "draft" ? undefined : source.modelId]);
 
-  // The cursor IS the next page's path: B1's nextLink already carries the filter and the skip.
-  // The canonical first page is real cache data (including its nextLink), not placeholder data:
-  // opening F4 or focusing an empty field cannot refetch page 1, and growing starts at page 2.
+  // The cursor is a row offset, and the search rides with it on every page — the server rebuilds
+  // the same query and only moves $skip. (It used to be B1's @odata.nextLink, which forced the
+  // server to re-validate a client-supplied URL on every page.)
+  // The canonical first page is real cache data (offset included), not placeholder data: opening
+  // F4 or focusing an empty field cannot refetch page 1, and growing starts at page 2.
   // keepPreviousData matters beyond the flicker: without it a search refetch empties `rows`, which
   // makes ValueHelp's `pending` true and unmounts the open F4 dialog mid-search (losing what the
   // user just typed into it). The table shows its own `loading` state instead.
   const term = (search ?? "").trim();
   const canonical = term === "" ? canonicalTable : undefined;
   const common = {
-    initialPageParam: undefined as string | undefined,
+    initialPageParam: undefined as number | undefined,
     initialData: canonical
-      ? { pages: [canonical], pageParams: [undefined as string | undefined] }
+      ? { pages: [canonical], pageParams: [undefined as number | undefined] }
       : undefined,
-    enabled: !!qt?.path && search !== null,
+    enabled: !!qt?.query.entitySet && search !== null,
     retry: false,
     staleTime: canonical ? Infinity : 5 * 60_000,
     placeholderData: keepPreviousData,
@@ -352,19 +354,19 @@ export function QueryValueHelp({
   const page = useInfiniteQuery(
     source.kind === "draft"
       ? orpc.models.queryPage.infiniteOptions({
-          input: (next: string | undefined) => ({
-            target: qt?.target ?? "b1", path: next ?? qt?.path ?? "", columns: qt?.columns,
-            ...(next ? {} : { search: term, searchCols }),
+          input: (next: number | undefined) => ({
+            target: qt?.target ?? "b1", query: qt?.query ?? { entitySet: "" }, columns: qt?.columns,
+            cursor: next, search: term, searchCols,
           }),
-          getNextPageParam: (last) => last.nextLink,
+          getNextPageParam: (last) => last.nextSkip,
           ...common,
         })
       : (source.kind === "portal" ? orpc.portal.queryPage : orpc.configs.queryPage).infiniteOptions({
-          input: (next: string | undefined) => ({
+          input: (next: number | undefined) => ({
             modelId: source.modelId, table: qt?.name ?? "", cursor: next,
             search: term, searchCols,
           }),
-          getNextPageParam: (last) => last.nextLink,
+          getNextPageParam: (last) => last.nextSkip,
           ...common,
         }),
   );

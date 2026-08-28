@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db, configModel, configProject, configRun } from "@hera/db";
 import type { ModelDef } from "@hera/config-engine";
 import { applySelection, executeRun } from "../src/orpc/routers/configs.ts";
-import type { QueryFetcher } from "../src/lookups.ts";
+import type { QueryRunner } from "../src/lookups.ts";
 
 const tenantId = `test-cfg-${crypto.randomUUID()}`;
 
@@ -24,15 +24,16 @@ const model: ModelDef = {
   constraints: [],
   bom: [{ id: "body", itemCode: '"BODY"', qty: 'size == "S" ? 1 : 2', price: "3", scrapPct: 0 }],
   routing: [{ id: "cut", resource: "SAW", setupMin: "10", runMinPerUnit: "1", ratePerHour: "60" }],
-  queryTables: [{ name: "items", target: "b1", path: "/Items?$select=ItemCode", columns: ["ItemCode"] }],
+  queryTables: [{ name: "items", target: "b1", query: { entitySet: "Items" }, columns: ["ItemCode"] }],
   pricing: { priceExpr: "unitCost * 2", quoteItemCode: "BOX" },
   batchDefaults: [10],
 };
 
-const fakeFetch: QueryFetcher = async (target, path) => {
+const fakeFetch: QueryRunner = async (target, query, columns) => {
   expect(target).toBe("b1");
-  expect(path).toBe("/Items?$select=ItemCode");
-  return { value: [{ ItemCode: "A" }, { ItemCode: "B" }] };
+  expect(query).toEqual({ entitySet: "Items" });
+  expect(columns).toEqual(["ItemCode"]);
+  return { rows: [{ ItemCode: "A" }, { ItemCode: "B" }] };
 };
 
 describe.skipIf(!process.env.DATABASE_URL)("configurator run + select (integration)", () => {
@@ -105,7 +106,7 @@ describe.skipIf(!process.env.DATABASE_URL)("configurator run + select (integrati
       constraints: [],
       bom: [{ id: "body", itemCode: "material", qty: "1", price: "material_Price", scrapPct: 0 }],
       routing: [],
-      queryTables: [{ name: "items", target: "b1", path: "/Items?$select=ItemCode,Price", columns: ["ItemCode", "Price"] }],
+      queryTables: [{ name: "items", target: "b1", query: { entitySet: "Items" }, columns: ["ItemCode", "Price"] }],
       pricing: { priceExpr: "unitCost", quoteItemCode: "BOX" },
       batchDefaults: [1],
     };
@@ -116,21 +117,19 @@ describe.skipIf(!process.env.DATABASE_URL)("configurator run + select (integrati
       .values({ tenantId, modelId: m!.id, name: "off-page", batches: [1], entries: { material: "B" }, createdBy: "tester" })
       .returning({ id: configProject.id });
 
-    const paths: string[] = [];
-    const fetcher: QueryFetcher = async (_target, path, opts) => {
-      expect(opts).toEqual({ all: false });
-      paths.push(path);
-      const encoded = /[?&]\$filter=([^&]*)/.exec(path)?.[1];
-      if (!encoded) return { value: [{ ItemCode: "A", Price: 3 }] };
-      expect(decodeURIComponent(encoded)).toBe("ItemCode eq 'B'");
-      return { value: [{ ItemCode: "B", Price: 11 }] };
+    const reads: (string | undefined)[] = [];
+    const fetcher: QueryRunner = async (_target, query) => {
+      reads.push(query.filter);
+      if (!query.filter) return { rows: [{ ItemCode: "A", Price: 3 }] };
+      expect(query.filter).toBe("ItemCode eq 'B'");
+      return { rows: [{ ItemCode: "B", Price: 11 }] };
     };
 
     const result = await executeRun(tenantId, p!.id, fetcher);
     const [run] = await db.select().from(configRun)
       .where(and(eq(configRun.id, result.runId), eq(configRun.tenantId, tenantId))).limit(1);
 
-    expect(paths).toHaveLength(2);
+    expect(reads).toHaveLength(2);
     expect(run!.lookupSnapshot.domains.material).toEqual([{ value: "A", label: "3" }]);
     expect(run!.lookupSnapshot.tables.items!.rows).toEqual([["A", 3], ["B", 11]]);
     expect(run!.candidates[0]!.perBatch[0]!.outputs.unitCost).toBe(11);
@@ -149,9 +148,9 @@ describe.skipIf(!process.env.DATABASE_URL)("configurator run + select (integrati
       .returning({ id: configProject.id });
 
     let fetches = 0;
-    const counting: QueryFetcher = async (target, path) => {
+    const counting: QueryRunner = async (target, query, columns, opts) => {
       fetches++;
-      return fakeFetch(target, path);
+      return fakeFetch(target, query, columns, opts);
     };
 
     const first = await executeRun(tenantId, p!.id, counting);

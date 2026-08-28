@@ -4,10 +4,7 @@ import { and, eq, ne, or } from "drizzle-orm";
 import { db, uiVariant, user, ListVariantDefZ, ObjectVariantDefZ, WidthsZ, type ListVariantDef } from "@hera/db";
 import { userProcedure } from "../base.ts";
 
-// Saved SAP-Fiori "views" for entity pages. Per-user, plus admin-published `shared` (public) views.
-// SaveZ validates the definition's SHAPE per page at save time; field-name EXISTENCE against the
-// live B1 schema is still only checked downstream, by entities.list, since that's the only place
-// that knows the current schema.
+// Saved list/object "views". Per-user, plus admin-published `shared` (public) views.
 
 const PageZ = z.enum(["list", "object"]);
 

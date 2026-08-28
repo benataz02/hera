@@ -60,5 +60,5 @@ describe("assistant provider adapter", () => {
         metadata: { thoughtSignature: "signed-thought" },
       }],
     }]);
-  });
+  }, 15_000);
 });

@@ -9,7 +9,7 @@ import {
 import "@ui5/webcomponents-fiori/dist/illustrations/NoData.js";
 import type { ModelDef, Val } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
-import { QueryCard } from "./QueryEditor.tsx";
+import { QueryCard, emptyQuery } from "./QueryEditor.tsx";
 import { colMinWidth } from "./tableWidths.ts";
 import { NEW_TABLE_KEY, type TableCell as Cell, type TableCol as Col, type TableDraft as Draft } from "./useDraftModel.ts";
 import { confirm } from "../confirm.ts";
@@ -97,7 +97,7 @@ export function TablesTab({ draft: model, update, tableEdits, editTable }: {
   const addQuery = () => {
     update((d) => ({
       ...d,
-      queryTables: [...d.queryTables, { name: `query${d.queryTables.length + 1}`, target: "b1", path: "", columns: [] }],
+      queryTables: [...d.queryTables, { name: `query${d.queryTables.length + 1}`, target: "b1", query: emptyQuery(), columns: [] }],
     }));
     setQIdx(model.queryTables.length);
     setSelKey(null);
@@ -367,7 +367,7 @@ export function TablesTab({ draft: model, update, tableEdits, editTable }: {
                   </div>
                 </Card>
 
-                <QueryCard key={qIdx} target={qt.target} path={qt.path} columns={qt.columns}
+                <QueryCard key={qIdx} target={qt.target} query={qt.query} columns={qt.columns}
                   onChange={(patch) => {
                     if (patch.columns) setQt({ ...patch, ...pruneColUi(patch.columns, qt.labels, qt.hidden) });
                     else setQt(patch);

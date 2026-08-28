@@ -14,7 +14,7 @@ describe("spec test 1 — a client-role session is FORBIDDEN on every internal p
     // spot-check across routers (quotes-equivalent lists, configs, models, extraction)
     expect(await code(call(router.configs.list, undefined, ctx))).toBe("FORBIDDEN");
     expect(await code(call(router.configs.models, undefined, ctx))).toBe("FORBIDDEN");
-    expect(await code(call(router.entities.getEnabled, undefined, ctx))).toBe("FORBIDDEN");
+    expect(await code(call(router.dashboard.overview, { window: "month" }, ctx))).toBe("FORBIDDEN");
     expect(await code(call(router.models.list, undefined, ctx))).toBe("FORBIDDEN");
     expect(await code(call(router.extraction.extract, {
       modelId: crypto.randomUUID(),

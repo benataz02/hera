@@ -2,10 +2,10 @@ import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { and, count, eq, max } from "drizzle-orm";
 import { db, configHistory, configModel, configProject, configTable } from "@hera/db";
-import { checkModel, LookupRefZ, ModelDefZ, ValZ } from "@hera/config-engine";
+import { checkModel, LookupRefZ, ModelDefZ, ODataQueryZ, ValZ } from "@hera/config-engine";
 import { adminProcedure } from "../base.ts";
-import { assertAgentReady, runRequest } from "./entities.ts";
-import { addQueryTables, fetchQueryTable, optionsFromRef, resolveLookups, tablesFromTenant, withSearch, type QueryFetcher, type TenantTable } from "../../lookups.ts";
+import { addQueryTables, fetchQueryTable, optionsFromRef, resolveLookups, tablesFromTenant, withSearch, type TenantTable } from "../../lookups.ts";
+import { runnerFor, tenantConnector } from "../../b1.ts";
 import { syncModelHistory } from "../../history-sync.ts";
 
 // Admin-only configurator model builder API. save is the gate: a model that passes
@@ -22,13 +22,6 @@ export async function tenantTables(tenantId: string): Promise<TenantTable[]> {
     .select({ name: configTable.name, columns: configTable.columns, rows: configTable.rows })
     .from(configTable)
     .where(eq(configTable.tenantId, tenantId));
-}
-
-export function agentFetcher(tenantId: string): QueryFetcher {
-  return async (target, path, opts) => {
-    await assertAgentReady(tenantId);
-    return runRequest(tenantId, "query", { target, path, all: opts?.all !== false });
-  };
 }
 
 export const modelsRouter = {
@@ -155,30 +148,31 @@ export const modelsRouter = {
     }))
     .handler(async ({ input, context }) => {
       const tables = tablesFromTenant(await tenantTables(context.tenantId));
-      await addQueryTables(tables, input.queryTables ?? [], agentFetcher(context.tenantId));
+      await addQueryTables(tables, input.queryTables ?? [], runnerFor(await tenantConnector(context.tenantId)));
       const options = optionsFromRef(input.ref, tables);
       return { options: options.slice(0, input.limit) };
     }),
 
   // One page of a query: the editor's "Test fetch" (columns come from the response, never
-  // hand-typed) and the lazy value help both live here. `path` is the query's own path on page 1
-  // and the previous page's @odata.nextLink after that — B1 bakes the search into that link, so
-  // `search` only ever applies to the first page.
+  // hand-typed) and the builder's value help both live here. Admin-only, because unlike
+  // configs.queryPage it takes an ad-hoc query instead of naming a saved model's table —
+  // the builder is editing a draft that is not stored yet.
   queryPage: adminProcedure
     .input(z.object({
       target: z.enum(["b1", "beas"]),
-      path: z.string().min(1),
+      query: ODataQueryZ,
       columns: z.array(z.string()).optional(),
       search: z.string().optional(),
       searchCols: z.array(z.string()).optional(),
+      cursor: z.number().int().min(0).optional(),
     }))
-    .handler(({ input, context }) =>
+    .handler(async ({ input, context }) =>
       fetchQueryTable(
-        agentFetcher(context.tenantId),
+        runnerFor(await tenantConnector(context.tenantId)),
         input.target,
-        withSearch(input.path, input.searchCols ?? [], input.search ?? ""),
+        withSearch(input.query, input.searchCols ?? [], input.search ?? ""),
         input.columns,
-        false,
+        { skip: input.cursor },
       ),
     ),
 
@@ -190,10 +184,9 @@ export const modelsRouter = {
       .where(and(eq(configModel.id, input.id), eq(configModel.tenantId, context.tenantId)))
       .limit(1);
     if (!m) throw new ORPCError("NOT_FOUND");
-    if (!m.definition.history?.query?.path)
+    if (!m.definition.history?.query)
       throw new ORPCError("BAD_REQUEST", { message: "Save a history query first" });
-    await assertAgentReady(context.tenantId);
-    return syncModelHistory(context.tenantId, m.id, m.definition, agentFetcher(context.tenantId));
+    return syncModelHistory(context.tenantId, m.id, m.definition, runnerFor(await tenantConnector(context.tenantId)));
   }),
 
   historyInfo: adminProcedure.input(z.object({ id: z.uuid() })).handler(async ({ input, context }) => {
@@ -211,9 +204,12 @@ export const modelsRouter = {
     .input(z.object({ definition: ModelDefZ }))
     .handler(async ({ input, context }) => {
       try {
-        return await resolveLookups(input.definition, await tenantTables(context.tenantId), agentFetcher(context.tenantId));
+        return await resolveLookups(
+          input.definition, await tenantTables(context.tenantId),
+          runnerFor(await tenantConnector(context.tenantId)),
+        );
       } catch (e) {
-        if (e instanceof ORPCError) throw e; // agent offline etc. — keep the specific message
+        if (e instanceof ORPCError) throw e; // SAP-unavailable etc. — keep the specific message
         throw new ORPCError("BAD_GATEWAY", { message: e instanceof Error ? e.message : String(e) });
       }
     }),

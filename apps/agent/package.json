@@ -4,14 +4,13 @@
   "private": true,
   "scripts": {
     "dev": "bun run --hot src/index.ts",
-    "start": "bun run src/index.ts"
+    "start": "bun run src/index.ts",
+    "build": "bun build --compile --outfile hera-agent.exe src/index.ts"
   },
   "dependencies": {
-    "@hera/server": "workspace:*",
-    "@orpc/client": "^1.14.6",
-    "fast-xml-parser": "^4.5.0"
+    "@hera/b1": "workspace:*"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.14"
+    "@types/bun": "^1.4.0"
   }
 }

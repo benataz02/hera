@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@hera/assistant": "workspace:*",
+    "@hera/b1": "workspace:*",
     "@hera/config-engine": "workspace:*",
     "@hera/server": "workspace:*",
     "@orpc/client": "^1.14.6",

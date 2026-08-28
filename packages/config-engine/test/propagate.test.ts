@@ -193,7 +193,7 @@ describe("derived lookup columns", () => {
         { key: "height", label: "Height", type: "number", ui: "input", defaultExpr: "mp_ItemHeight" },
       ],
       computed: [],
-      queryTables: [{ name: "raw", target: "b1", path: "Items", columns: ["ItemCode", "ItemName", "ItemHeight"] }],
+      queryTables: [{ name: "raw", target: "b1", query: { entitySet: "Items" }, columns: ["ItemCode", "ItemName", "ItemHeight"] }],
     };
     const lk: ResolvedLookups = {
       domains: { mp: [{ value: "A1", label: "Bar" }] },

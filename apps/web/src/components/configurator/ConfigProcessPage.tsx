@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar, Button, BusyIndicator, Dialog, DynamicSideContent, Label, MessageStrip, ObjectPage,
@@ -65,7 +65,6 @@ export function ConfigProcessPage({ id }: { id: string }) {
   const [assistantBusy, setAssistantBusy] = useState(false);
   const [aiMarks, setAiMarks] = useState<Map<string, string>>(new Map());
   const [assistantProjectVersion, setAssistantProjectVersion] = useState<string | null>(null);
-  const [quoteFooter, setQuoteFooter] = useState<ReactElement | undefined>(undefined);
 
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: orpc.configs.get.queryOptions({ input: { id } }).queryKey });
@@ -292,7 +291,6 @@ export function ConfigProcessPage({ id }: { id: string }) {
       }
       footerArea={
         sectionId === "candidates" ? candidatesFooter
-        : sectionId === "quote" ? quoteFooter
         : configureFooter
       }
     >
@@ -338,7 +336,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
       </ObjectPageSection>
       <ObjectPageSection id="quote" titleText="Create quote" hideTitleText>
         {latestRun?.selection?.length || select.isSuccess ? (
-          <StepCreateQuote projectId={id} onFooterChange={setQuoteFooter} />
+          <StepCreateQuote projectId={id} />
         ) : (
           <Text>Save a candidate selection to continue.</Text>
         )}

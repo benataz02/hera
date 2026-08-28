@@ -1,26 +1,31 @@
 import { describe, expect, test } from "bun:test";
-import { foldRows, snapshotPaths } from "../src/dashboard-snapshot.ts";
+import { entitySetPath } from "@hera/b1";
+import { foldRows, snapshotQueries } from "../src/dashboard-snapshot.ts";
 
 const NOW = new Date("2026-08-19T12:00:00Z");
 
-describe("snapshotPaths", () => {
+describe("snapshotQueries", () => {
   test("windows orders and quotations over a rolling 13 months", () => {
-    const p = snapshotPaths(NOW);
-    expect(p.orders).toContain("/Orders?");
-    expect(p.orders).toContain("DocDate ge '2025-08-01'");
-    expect(p.quotes).toContain("/Quotations?");
-    expect(p.quotes).toContain("DocDate ge '2025-08-01'");
+    const q = snapshotQueries(NOW);
+    expect(q.orders.filter).toBe("DocDate ge '2025-08-01'");
+    expect(q.orders.select).toContain("GrossProfit");
+    expect(q.quotes.filter).toBe("DocDate ge '2025-08-01'");
   });
 
   test("open quotations are filtered on status and cancellation, not on date", () => {
-    const p = snapshotPaths(NOW);
-    expect(p.open).toContain("DocumentStatus eq 'bost_Open'");
-    expect(p.open).toContain("Cancelled eq 'tNO'");
-    expect(p.open).not.toContain("DocDate ge");
+    const q = snapshotQueries(NOW);
+    expect(q.open.filter).toContain("DocumentStatus eq 'bost_Open'");
+    expect(q.open.filter).toContain("Cancelled eq 'tNO'");
+    expect(q.open.filter).not.toContain("DocDate ge");
   });
 
   test("the gross-profit probe asks for a single row", () => {
-    expect(snapshotPaths(NOW).probe).toBe("/Orders?$select=DocEntry,GrossProfit&$top=1");
+    expect(entitySetPath("Orders", snapshotQueries(NOW).probe)).toBe("Orders?$select=DocEntry%2CGrossProfit&$top=1");
+  });
+
+  test("history streams ask B1 for a real page size, so the walk is not 20 rows at a time", () => {
+    const q = snapshotQueries(NOW);
+    for (const s of [q.orders, q.quotes, q.open]) expect(s.maxPageSize).toBeGreaterThan(100);
   });
 });
 

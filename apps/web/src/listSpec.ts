@@ -36,6 +36,14 @@ export const isTextType = (t: string) => /string|char|memo|guid|text/i.test(t);
 
 export const EMPTY_SPEC: ListVariantDef = { select: [], filter: [], orderby: [], filterBar: [] };
 
+/** A boolean filter has three states, not two: undefined = unfiltered. */
+export const boolFilterState = (c?: FilterCond): boolean | undefined =>
+  c ? c.value === true || c.value === "true" : undefined;
+
+/** Click cycle for the filter bar's boolean checkbox: Any -> Yes -> No -> Any ("" clears). */
+export const nextBoolFilter = (v: boolean | undefined): boolean | "" =>
+  v === undefined ? true : v ? false : "";
+
 // Rendered columns only — identity keys are merged separately via listSelect for the OData $select.
 export const visibleColumns = (spec: ListVariantDef, columns: ListColumn[]): string[] =>
   spec.select.length ? spec.select : columns.map((c) => c.name);
@@ -124,13 +132,20 @@ export function applySpec<T extends Record<string, unknown>>(
   return out;
 }
 
-// Table cells are strings. Dates get toLocaleString instead of String(date), which would render
-// "Mon Jul 20 2026 10:33:21 GMT+0200 (Central European Summer Time)".
+// Table cells are strings. Dates render as the local date alone — B1's date columns come back as
+// "2026-08-28T00:00:00Z" and the time half is never meaningful.
+//
+// The y/m/d are read off the string rather than through `new Date(v).toLocaleDateString()`: that
+// parses "…T00:00:00Z" as UTC midnight, which is the *previous* day anywhere west of Greenwich.
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})/;
 export const formatCell = (v: unknown, type = ""): string => {
   if (v == null) return "";
   if (isDateType(type)) {
+    if (type === "Edm.Time" || type === "Edm.TimeOfDay") return String(v);
+    const iso = ISO_DATE.exec(String(v));
+    if (iso) return new Date(+iso[1]!, +iso[2]! - 1, +iso[3]!).toLocaleDateString();
     const d = new Date(v as string | number | Date);
-    return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleString();
+    return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleDateString();
   }
   return typeof v === "object" ? JSON.stringify(v) : String(v);
 };
