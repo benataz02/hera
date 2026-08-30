@@ -3,10 +3,12 @@ import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Bar, Button, BusyIndicator, Form, FormGroup, FormItem, Label, MessageStrip, ObjectPage,
-  ObjectPageSection, ObjectPageSubSection, ObjectPageTitle, Tag, Title, Toolbar, ToolbarButton,
+  ObjectPageSection, ObjectPageSubSection, ObjectPageTitle, ObjectStatus, Tag, Title, Toolbar,
+  ToolbarButton,
 } from "@ui5/webcomponents-react";
 import { coerceKey, parseKeyParam, type B1Field } from "@hera/b1";
 import type { Val } from "@hera/config-engine";
+import { formatCell } from "../../listSpec.ts";
 import { orpc } from "../../orpc.ts";
 import { toast } from "../toast.ts";
 import { EntityField } from "./EntityField.tsx";
@@ -18,15 +20,25 @@ import { EntityField } from "./EntityField.tsx";
 // profile names — the page reads that from entities.profile rather than deciding for itself, so
 // the button and the server rule cannot drift apart. Every save carries the ETag read with the
 // row; a concurrent change comes back as a conflict instead of a silent overwrite.
+//
+// Display/edit is the Form's own switch: `accessibleMode` changes the markup and ARIA it emits,
+// and `itemSpacing` goes Large -> Normal so the page does not jump when texts become inputs.
+//
+// The sections MUST be flat children of ObjectPage. It reads them with React.Children, which
+// walks arrays but NOT fragments — a `<>…</>` around the collection sections is one opaque child,
+// and the anchor bar then draws a single blank tab instead of one per section.
 
-/** The line that identifies the row at a glance: its first two non-key text-ish fields. */
-function subtitleOf(fields: B1Field[], keys: string[], row: Record<string, unknown>): string {
-  return fields
-    .filter((f) => f.kind === "string" && !keys.includes(f.name))
-    .slice(0, 2)
-    .map((f) => row[f.name])
-    .filter((v) => v != null && v !== "")
-    .join(" · ");
+/** B1's BoStatus. Only the colour is ours; the text is the field's own enum label (bost_Open). */
+const STATUS_STATE: Record<string, "Information" | "Positive" | "None"> = {
+  O: "Information", C: "None", P: "Positive", D: "Positive",
+};
+
+/** The line that identifies the row: the profile's fields, else the first two non-key strings. */
+function subtitleOf(fields: B1Field[], keys: string[], row: Record<string, unknown>, names?: string[]) {
+  const picked = names?.length
+    ? names.map((n) => fields.find((f) => f.name === n)).filter((f): f is B1Field => !!f)
+    : fields.filter((f) => f.kind === "string" && !keys.includes(f.name)).slice(0, 2);
+  return picked.map((f) => formatCell(row[f.name], f.edmType)).filter(Boolean).join(" · ");
 }
 
 export function EntityObjectPage({ entity, entityKey }: { entity: string; entityKey: string }) {
@@ -50,11 +62,12 @@ export function EntityObjectPage({ entity, entityKey }: { entity: string; entity
     },
   }));
 
-  const { scalars, collections } = useMemo(() => {
+  const { scalars, collections, status } = useMemo(() => {
     const fields = schema.data?.fields ?? [];
     return {
       scalars: fields.filter((f) => f.kind !== "collection"),
       collections: fields.filter((f) => f.kind === "collection"),
+      status: fields.find((f) => f.name === "DocumentStatus"),
     };
   }, [schema.data]);
 
@@ -69,13 +82,15 @@ export function EntityObjectPage({ entity, entityKey }: { entity: string; entity
   const editable = new Set(profile?.editable ?? []);
   const editing = draft !== null;
   const value = (name: string) => (editing && name in draft! ? draft![name] : row[name]);
+  const statusState = status ? STATUS_STATE[String(row.DocumentStatus)] : undefined;
 
   return (
     <ObjectPage
+      mode="IconTabBar"
       titleArea={
         <ObjectPageTitle
           header={<Title>{String(row[profile?.titleField ?? keys[0] ?? ""] ?? keys.map((k) => row[k]).join(" / "))}</Title>}
-          subHeader={<span>{subtitleOf(scalars, keys, row)}</span>}
+          subHeader={<span>{subtitleOf(scalars, keys, row, profile?.subtitleFields)}</span>}
           actionsBar={
             <Toolbar design="Transparent">
               {profile && !editing ? (
@@ -92,6 +107,12 @@ export function EntityObjectPage({ entity, entityKey }: { entity: string; entity
                 onClick={() => navigate({ to: "/b1/$entity", params: { entity } })} />
             </Toolbar>
           }>
+          {statusState ? (
+            <ObjectStatus state={statusState}>
+              {(status!.options?.find((o) => o.value === row.DocumentStatus)?.label ?? String(row.DocumentStatus))
+                .replace(/^bost_/, "")}
+            </ObjectStatus>
+          ) : null}
           <Tag design="Set2">{schema.data!.table}</Tag>
         </ObjectPageTitle>
       }
@@ -108,7 +129,8 @@ export function EntityObjectPage({ entity, entityKey }: { entity: string; entity
           } />
         ) : undefined
       }>
-      <ObjectPageSection id="general" titleText={schema.data!.label}>
+      {[
+      <ObjectPageSection key="general" id="general" titleText={schema.data!.label}>
         <ObjectPageSubSection id="fields" titleText="Fields">
           <>
             {update.error ? <MessageStrip design="Negative" hideCloseButton>{update.error.message}</MessageStrip> : null}
@@ -118,7 +140,8 @@ export function EntityObjectPage({ entity, entityKey }: { entity: string; entity
                 {`${schema.data!.label} is read-only in HERA.`}
               </MessageStrip>
             ) : null}
-            <Form layout="S1 M2 L3 XL3" labelSpan="S12 M4 L4 XL4">
+            <Form layout="S1 M2 L3 XL3" labelSpan="S12 M4 L4 XL4"
+              accessibleMode={editing ? "Edit" : "Display"} itemSpacing={editing ? "Normal" : "Large"}>
               <FormGroup>
                 {scalars.map((f) => (
                   <FormItem key={f.name} labelContent={<Label>{f.label ?? f.name}</Label>}>
@@ -134,17 +157,15 @@ export function EntityObjectPage({ entity, entityKey }: { entity: string; entity
             </Form>
           </>
         </ObjectPageSubSection>
-      </ObjectPageSection>
-
-      <>
-        {collections.map((f) => (
-          <ObjectPageSection key={f.name} id={f.name} titleText={f.label ?? f.name}>
-            <ObjectPageSubSection id={`${f.name}-rows`} titleText={f.label ?? f.name}>
-              <EntityField field={f} value={row[f.name]} />
-            </ObjectPageSubSection>
-          </ObjectPageSection>
-        ))}
-      </>
+      </ObjectPageSection>,
+      ...collections.map((f) => (
+        <ObjectPageSection key={f.name} id={f.name} titleText={f.label ?? f.name}>
+          <ObjectPageSubSection id={`${f.name}-rows`} titleText={f.label ?? f.name}>
+            <EntityField field={f} value={row[f.name]} />
+          </ObjectPageSubSection>
+        </ObjectPageSection>
+      )),
+      ]}
     </ObjectPage>
   );
 }

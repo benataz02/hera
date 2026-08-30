@@ -46,7 +46,7 @@ export const auth = betterAuth({
   // origins need trusting; baseURL's own origin is trusted automatically. A pattern without
   // `://` is matched against URL.host — which includes the port — hence both forms: prod
   // (`acme.hera.app`) and dev (`acme.lvh.me:5173`).
-  trustedOrigins: [`*.${baseDomain}`, `*.${baseDomain}:*`],
+  trustedOrigins: [`*.${baseDomain}`, `*.${baseDomain}:*`, `http://192.168.1.134:5173`],
   advanced: {
     crossSubDomainCookies: { enabled: true, domain: `.${baseDomain}` },
   },

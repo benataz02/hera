@@ -1,9 +1,7 @@
 import { useNavigate, useRouter, useRouterState, Outlet } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Avatar,
-  Breadcrumbs, BreadcrumbsItem,
-  Button,
+  Avatar, Button,
   NavigationLayout, ShellBar, SideNavigation, SideNavigationGroup, SideNavigationItem,
   ToggleButton,
   UserMenu,
@@ -217,7 +215,7 @@ export function AppShell() {
             <>
               <SideNavigationItem text="Home" icon="home" data-to="/" selected={pathname === "/"} />
               {isAdmin ? (
-                <SideNavigationGroup text="SAP entities" expanded>
+                <SideNavigationGroup text="SAP Business One" expanded>
                   <SideNavigationItem text="Entities" icon="database" data-to="/b1"
                     selected={pathname === "/b1"} />
                   {(pins.data?.entities ?? []).map((p) => (

@@ -10,8 +10,11 @@ import { EntityValueHelp } from "./EntityValueHelp.tsx";
 //
 // INVARIANT: the branch order below mirrors ConfiguratorForm.control() — checkbox before select
 // before free input — so the two renderers cannot disagree about what a value looks like.
-// Without `onChange` every control renders readonly (focusable, copyable, announced) rather than
-// disabled: a generic entity is read-only and these fields exist precisely to be read.
+//
+// No `onChange` = display mode, and display mode is text — the Fiori form guideline, and what
+// `Form accessibleMode="Display"` on the caller announces. A readonly Input reads the same to a
+// user but costs a custom element (and, for a lookup, a query hook) per field; a B1 document
+// header carries ~120 of them and most are never edited.
 
 /** Strings past this render as a TextArea. B1's long text fields (Comments, Remarks) are 254+. */
 const LONG_TEXT = 120;
@@ -21,14 +24,11 @@ export function EntityField({
 }: {
   field: B1Field;
   value: unknown;
-  /** absent = read-only */
+  /** absent = display mode */
   onChange?: (v: Val | undefined) => void;
   /** used as the value-help dialog title */
   entityLabel?: string;
 }) {
-  const ro = !onChange;
-  const set = (v: Val | undefined) => onChange?.(v);
-
   if (field.kind === "collection") {
     const rows = Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
     const cols = (field.fields ?? []).filter((f) => f.kind !== "collection");
@@ -45,26 +45,31 @@ export function EntityField({
     );
   }
 
+  if (!onChange) {
+    // A tick is already the display form of a boolean; everything else is its formatted string.
+    if (field.kind === "boolean") return <CheckBox checked={decodeBool(value)} readonly />;
+    if (field.kind === "enum")
+      return <Text>{field.options?.find((o) => o.value === value)?.label ?? formatCell(value)}</Text>;
+    return <Text>{formatCell(value, field.edmType)}</Text>;
+  }
+
   if (field.lookup)
     return (
       <EntityValueHelp
         entitySet={field.lookup.entitySet} keyField={field.lookup.keyField}
-        value={(value ?? undefined) as Val | undefined} onChange={set} readonly={ro}
+        value={(value ?? undefined) as Val | undefined} onChange={onChange}
         headerText={`${field.label ?? field.name}${entityLabel ? ` — ${entityLabel}` : ""}`}
       />
     );
 
   // Edm.Boolean and BoYesNoEnum alike: a checkbox, sent back in whichever form the field wants.
   if (field.kind === "boolean")
-    return (
-      <CheckBox checked={decodeBool(value)} readonly={ro}
-        onChange={(e) => set(encodeBool(field, e.target.checked))} />
-    );
+    return <CheckBox checked={decodeBool(value)} onChange={(e) => onChange(encodeBool(field, e.target.checked))} />;
 
   if (field.kind === "enum")
     return (
-      <Select readonly={ro} style={{ width: "100%" }}
-        onChange={(e) => set((e.detail.selectedOption as HTMLElement).dataset.v ?? undefined)}>
+      <Select style={{ width: "100%" }}
+        onChange={(e) => onChange((e.detail.selectedOption as HTMLElement).dataset.v ?? undefined)}>
         <Option data-v="" selected={value == null || value === ""}>—</Option>
         {(field.options ?? []).map((o) => (
           <Option key={o.value} data-v={o.value} selected={value === o.value}>{o.label}</Option>
@@ -77,34 +82,32 @@ export function EntityField({
   // value ISO, so no locale string ever reaches SAP.
   if (field.kind === "date")
     return (
-      <DatePicker readonly={ro} style={{ width: "100%" }} formatPattern="yyyy-MM-dd"
+      <DatePicker style={{ width: "100%" }} formatPattern="yyyy-MM-dd"
         value={value == null ? "" : String(value).slice(0, 10)}
-        onChange={(e) => set(e.target.value || undefined)} />
+        onChange={(e) => onChange(e.target.value || undefined)} />
     );
 
   if (field.kind === "time")
-    return <Input readonly={ro} style={{ width: "100%" }} value={value == null ? "" : String(value)}
-      onInput={(e) => set(e.target.value || undefined)} />;
+    return <Input style={{ width: "100%" }} value={value == null ? "" : String(value)}
+      onInput={(e) => onChange(e.target.value || undefined)} />;
 
   if (field.kind === "number")
     return (
-      <StepInput readonly={ro} style={{ width: "100%" }}
+      <StepInput style={{ width: "100%" }}
         value={typeof value === "number" ? value : value == null ? undefined : Number(value)}
-        onChange={(e) => set(e.target.value ?? undefined)} />
+        onChange={(e) => onChange(e.target.value ?? undefined)} />
     );
 
   // Edm.String / Edm.Guid.
-  if (ro && field.maxLength && field.maxLength > LONG_TEXT && String(value ?? "").length > 60)
-    return <Text>{String(value ?? "")}</Text>;
   if (field.maxLength && field.maxLength > LONG_TEXT)
     return (
-      <TextArea readonly={ro} growing growingMaxRows={5} rows={2} style={{ width: "100%" }}
+      <TextArea growing growingMaxRows={5} rows={2} style={{ width: "100%" }}
         maxlength={field.maxLength} value={value == null ? "" : String(value)}
-        onInput={(e) => set(e.target.value || undefined)} />
+        onInput={(e) => onChange(e.target.value || undefined)} />
     );
   return (
-    <Input readonly={ro} style={{ width: "100%" }} maxlength={field.maxLength}
+    <Input style={{ width: "100%" }} maxlength={field.maxLength}
       value={value == null ? "" : String(value)}
-      onInput={(e) => set(e.target.value || undefined)} />
+      onInput={(e) => onChange(e.target.value || undefined)} />
   );
 }
