@@ -15,6 +15,7 @@ import { tenantConnector, viaB1 } from "../../b1.ts";
 import { entitySchema } from "../../entity-meta.ts";
 import { bad, readOne, readRows } from "../../entity-read.ts";
 import { printDocument } from "../../print.ts";
+import { documentChain } from "../../doc-chain.ts";
 import {
   applySelection, cachedLookups, executeRun, loadModel, modelRunner, pushEvent,
   QueryPageZ, queryTablePage,
@@ -404,6 +405,42 @@ export const portalRouter = {
         const { row } = await readOne(b1, schema, input.entity, input.docEntry);
         if (row.CardCode !== context.cardCode) throw new ORPCError("NOT_FOUND");
         return printDocument(context.tenantId, input.entity, input.docEntry);
+      }),
+
+    /** The live SAP document chain for one of this client's projects: the quotation HERA wrote,
+     *  then whatever SAP has since made of it. Empty until the project is quoted — before that
+     *  there is no b1DocEntry to walk from. */
+    chain: clientProcedure
+      .input(z.object({ projectId: z.uuid() }))
+      .handler(async ({ input, context }) => {
+        const p = await loadOwnProject(input.projectId, context);
+        const [run] = await db
+          .select({ b1DocEntry: configRun.b1DocEntry })
+          .from(configRun)
+          .where(and(eq(configRun.projectId, p.id), eq(configRun.tenantId, context.tenantId)))
+          .limit(1);
+        const quotation = run?.b1DocEntry;
+        if (quotation == null) return [];
+
+        const { b1 } = await tenantConnector(context.tenantId);
+        const [head, chain] = await Promise.all([
+          viaB1(() => b1.readEntity("Quotations", quotation, {
+            select: ["DocEntry", "DocNum", "DocDate", "DocTotal", "DocumentStatus"],
+          })),
+          viaB1(() => documentChain(b1, quotation)),
+        ]);
+        const q = head.data as Record<string, unknown>;
+        return [
+          {
+            entity: "Quotations" as const,
+            docEntry: Number(q.DocEntry ?? quotation),
+            docNum: Number(q.DocNum ?? 0),
+            docDate: String(q.DocDate ?? ""),
+            docTotal: Number(q.DocTotal ?? 0),
+            docStatus: String(q.DocumentStatus ?? ""),
+          },
+          ...chain,
+        ];
       }),
   },
 

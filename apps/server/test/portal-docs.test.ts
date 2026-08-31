@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { call, makeTenant, makeUser, bindClient, tenantHeaders } from "./harness.ts";
+import { db, configModel } from "@hera/db";
+import { call, makeTenant, makeUser, bindClient, tenantHeaders, TEST_MODEL } from "./harness.ts";
 import { startMockAgent, connectTenant, type MockAgent } from "./mock-agent.ts";
 import { router } from "../src/orpc/router.ts";
 
@@ -146,5 +147,19 @@ describe.skipIf(!process.env.DATABASE_URL)("portal.docs", () => {
     const plain = await makeUser("member", s.tenantId);
     const ctx = { context: { headers: tenantHeaders(s.slug, plain.cookie) } };
     expect(await code(call(router.portal.docs.rows, { entity: "Orders", spec: EMPTY, top: 10 }, ctx))).toBe("FORBIDDEN");
+  });
+
+  test("chain is empty until the project is quoted, and never crosses CardCodes", async () => {
+    const s = await setup();
+    const [model] = await db.insert(configModel)
+      .values({ tenantId: s.tenantId, name: TEST_MODEL.name, definition: TEST_MODEL, portal: true })
+      .returning({ id: configModel.id });
+    const { id } = await call(router.portal.projects.create, { modelId: model!.id, name: "A's bracket" }, s.ctxA);
+
+    // No run, so no b1DocEntry, so nothing to walk — and no B1 read is made at all.
+    expect(await call(router.portal.docs.chain, { projectId: id }, s.ctxA)).toEqual([]);
+    expect(s.agent.calls.some((c) => c.route === "/cross-join")).toBe(false);
+
+    expect(await code(call(router.portal.docs.chain, { projectId: id }, s.ctxB))).toBe("NOT_FOUND");
   });
 });

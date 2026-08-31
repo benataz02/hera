@@ -85,6 +85,19 @@ export function startMockAgent(store: MockStore = {}): MockAgent {
           Object.assign(found, body.data, { "@odata.etag": `W/"${nextEtag++}"` });
           return Response.json({ status: 204, data: null });
         }
+        case "/cross-join": {
+          // Enough to prove the walk wires up: pair each document of the leading entity with each
+          // of its own lines, and let the caller's assertions do the rest. The mock does not
+          // parse the $filter — the filter's shape is asserted by doc-chain.test.ts, which is
+          // pure and does not need a server.
+          const [lead] = body.entities as string[];
+          const docs = store[lead!] ?? [];
+          const value = docs.flatMap((d) =>
+            ((d.DocumentLines as Record<string, unknown>[] | undefined) ?? [{}]).map((l) => ({
+              [lead!]: d, [`${lead}/DocumentLines`]: l,
+            })));
+          return Response.json({ status: 200, data: { value } });
+        }
         case "/print": {
           if (!["Quotations", "Orders", "DeliveryNotes", "Invoices"].includes(body.entity))
             return fail(400, null, `No print layout configured for '${body.entity}'`);
