@@ -8,5 +8,18 @@
     "pass": "1234",
     "allowSelfSigned": true,
     "timeoutMs": 60000
+  },
+  "apiGateway": {
+    "url": "https://localhost:60020",
+    "companyDb": "ALUMIGRAF",
+    "user": "manager",
+    "pass": "1234",
+    "allowSelfSigned": true,
+    "layouts": {
+      "Quotations": "QUT20009",
+      "Orders": "RDR20011",
+      "DeliveryNotes": "DLN20013",
+      "Invoices": "INV20017"
+    }
   }
 }

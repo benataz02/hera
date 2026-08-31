@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { DirectTransport, ServiceLayer, B1Error, type B1Transport } from "@hera/b1";
+import { ApiGateway, type ApiGatewayConfig } from "./api-gateway.ts";
 
 // One agent service, one B1 company database. A second company DB means a second agent on a
 // second port with its own agent.json — which is what keeps ServiceLayer exactly as the sample
@@ -16,7 +17,7 @@ type ServiceConfig = {
   companyDb?: string; user: string; pass: string;
   allowSelfSigned?: boolean; timeoutMs?: number;
 };
-type AgentConfig = { port?: number; secret: string; b1: ServiceConfig; beas?: ServiceConfig };
+type AgentConfig = { port?: number; secret: string; b1: ServiceConfig; beas?: ServiceConfig; apiGateway?: ApiGatewayConfig };
 
 const configPath = process.env.HERA_AGENT_CONFIG ?? "agent.json";
 const config = JSON.parse(readFileSync(configPath, "utf8")) as AgentConfig;
@@ -31,6 +32,10 @@ const services = { b1: build(config.b1), ...(config.beas ? { beas: build(config.
 const transports: Record<string, B1Transport> = Object.fromEntries(
   Object.entries(services).map(([k, sl]) => [k, new DirectTransport(sl)]),
 );
+
+// Optional: an install without a Reporting Service simply has no apiGateway block, and /print
+// answers 503 rather than the agent refusing to start.
+const gateway = config.apiGateway ? new ApiGateway(config.apiGateway, logger) : null;
 
 const sha = (s: string) => createHash("sha256").update(s).digest();
 const secretHash = sha(config.secret);
@@ -66,14 +71,22 @@ const server = Bun.serve({
     if (!authorized(req)) return fail(401, null, "Bad agent secret");
     if (req.method !== "POST") return fail(405, null, "Method not allowed");
 
-    const [, target, ...rest] = pathname.split("/");
-    const transport = target ? transports[target] : undefined;
-    const handler = routes[`/${rest.join("/")}`];
-    if (!transport) return fail(404, null, `Unknown target '${target}'`);
-    if (!handler) return fail(404, null, `Unknown operation '${pathname}'`);
-
     logger.info(`${req.method} ${pathname}`);
     try {
+      // Print is not a B1Transport operation: it talks to a different service on a different
+      // port, so it sits beside the /{target}/{operation} split rather than inside it.
+      if (pathname === "/print") {
+        if (!gateway) throw new B1Error(503, null, "No apiGateway block in agent.json — printing is not configured");
+        const b = (await req.json()) as { entity?: unknown; docEntry?: unknown };
+        return Response.json(await gateway.exportPdf(String(b.entity ?? ""), Number(b.docEntry)));
+      }
+
+      const [, target, ...rest] = pathname.split("/");
+      const transport = target ? transports[target] : undefined;
+      const handler = routes[`/${rest.join("/")}`];
+      if (!transport) return fail(404, null, `Unknown target '${target}'`);
+      if (!handler) return fail(404, null, `Unknown operation '${pathname}'`);
+
       return Response.json(await handler(transport, await req.json()));
     } catch (e) {
       if (e instanceof B1Error) {
@@ -86,7 +99,7 @@ const server = Bun.serve({
   },
 });
 
-console.log(`hera-agent on :${server.port} — services: ${Object.keys(services).join(", ")}`);
+console.log(`hera-agent on :${server.port} — services: ${Object.keys(services).join(", ")}${gateway ? " + print" : ""}`);
 
 // Release the B1 licence slot when the service stops.
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
