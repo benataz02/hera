@@ -2,14 +2,14 @@ import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 import { db, b1NavPin, ListVariantDefZ, type B1NavPin } from "@hera/db";
-import { categoriesOf, categoryNames, coerceKey, countOf, rowsOf, type Key } from "@hera/b1";
+import { categoriesOf, categoryNames, coerceKey, type Key } from "@hera/b1";
 import { adminProcedure } from "../base.ts";
 import { tenantConnector, viaB1 } from "../../b1.ts";
 import { assertEntity, entityList, entitySchema } from "../../entity-meta.ts";
-import { compileList } from "../../entity-list.ts";
 import { missingRequired, pickEditable, profileOf } from "../../entity-profiles.ts";
 import { buildCopy, COPY_SELECT, findFlow, flowsFrom } from "../../doc-copy.ts";
 import { printDocument } from "../../print.ts";
+import { bad, readOne, readRows } from "../../entity-read.ts";
 
 // The B1 entity surface: list what B1 exposes, read a schema, page rows, open one row — for any
 // entity set. Writing is different: update/create/copy work only on the curated entities in
@@ -29,23 +29,6 @@ const curated = (entity: string) => {
   const p = profileOf(entity);
   if (!p) throw new ORPCError("FORBIDDEN", { message: `${entity} is read-only in HERA` });
   return p;
-};
-
-const bad = (e: unknown): never => {
-  throw e instanceof ORPCError
-    ? e
-    : new ORPCError("BAD_REQUEST", { message: e instanceof Error ? e.message : String(e) });
-};
-
-/** Schema decides string vs integer quoting — a digit-looking ItemCode is not an Int32 key. */
-const keyed = async (tenantId: string, entity: string, raw: Key) => {
-  const b1 = await b1Of(tenantId);
-  const schema = await viaB1(() => entitySchema(tenantId, b1, entity)).catch(bad);
-  try {
-    return { b1, key: coerceKey(schema, raw) };
-  } catch (e) {
-    return bad(e);
-  }
 };
 
 const PIN_CAP = 20;
@@ -97,30 +80,16 @@ export const entitiesRouter = {
     .handler(async ({ input, context }) => {
       const b1 = await b1Of(context.tenantId);
       const schema = await viaB1(() => entitySchema(context.tenantId, b1, input.entity)).catch(bad);
-      let query;
-      try {
-        query = compileList(schema, input.spec, { top: input.top, skip: input.skip, count: input.count });
-      } catch (e) {
-        return bad(e);
-      }
-      const res = await viaB1(() => b1.readEntitySet(input.entity, query));
-      const rows = rowsOf(res.data);
-      return {
-        rows,
-        keys: schema.keys,
-        total: countOf(res.data),
-        // A full page probably means another one; one empty read at the end beats $count per page.
-        nextSkip: rows.length === input.top ? (input.skip ?? 0) + rows.length : undefined,
-      };
+      return readRows(b1, schema, input.entity, input);
     }),
 
   /** One row, with its ETag — which is what makes a curated edit safe in Phase 3. */
   one: adminProcedure
     .input(z.object({ entity: EntityZ, key: KeyZ }))
     .handler(async ({ input, context }) => {
-      const { b1, key } = await keyed(context.tenantId, input.entity, input.key);
-      const res = await viaB1(() => b1.readEntity(input.entity, key));
-      return { row: res.data as Record<string, unknown>, etag: res.etag ?? null };
+      const b1 = await b1Of(context.tenantId);
+      const schema = await viaB1(() => entitySchema(context.tenantId, b1, input.entity)).catch(bad);
+      return readOne(b1, schema, input.entity, input.key);
     }),
 
   /** What a user may change here, if anything. Absent = a read-only generic entity. */
@@ -148,7 +117,10 @@ export const entitiesRouter = {
       if (!Object.keys(payload).length)
         throw new ORPCError("BAD_REQUEST", { message: "Nothing to update" });
 
-      const { b1, key } = await keyed(context.tenantId, input.entity, input.key);
+      const b1 = await b1Of(context.tenantId);
+      const schema = await viaB1(() => entitySchema(context.tenantId, b1, input.entity)).catch(bad);
+      let key: Key;
+      try { key = coerceKey(schema, input.key); } catch (e) { return bad(e); }
       await viaB1(() => b1.updateEntity(input.entity, key, payload, { etag: input.etag }));
       // B1's PATCH answers 204; re-read so the caller gets the new ETag rather than a stale one.
       const fresh = await viaB1(() => b1.readEntity(input.entity, key));
