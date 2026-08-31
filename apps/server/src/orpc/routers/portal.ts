@@ -33,7 +33,7 @@ const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
 // --- Admin side: invites are rows in portal_client (invite and binding are one row) ---
 export const portalClientsRouter = {
   invite: adminProcedure
-    .input(z.object({ email: z.email(), cardCode: z.string().min(1), cardName: z.string().min(1) }))
+    .input(z.object({ email: z.email(), cardCode: z.string().min(1) }))
     .handler(async ({ input, context }) => {
       const email = input.email.toLowerCase();
       const [existing] = await db
@@ -44,10 +44,25 @@ export const portalClientsRouter = {
         .limit(1);
       if (existing)
         throw new ORPCError("BAD_REQUEST", { message: `${email} already has access to this workspace` });
+
+      // The binding is the portal's whole trust model — validate it against SAP rather than
+      // trusting three text boxes. The stored name is B1's, never the browser's.
+      const { b1 } = await tenantConnector(context.tenantId);
+      const res = await viaB1(() =>
+        b1.readEntity("BusinessPartners", input.cardCode, { select: ["CardCode", "CardName", "CardType"] }),
+      ).catch((e: unknown) => {
+        if (e instanceof ORPCError && e.code === "NOT_FOUND")
+          throw new ORPCError("BAD_REQUEST", { message: `No business partner ${input.cardCode} in SAP.` });
+        throw e;
+      });
+      const bp = res.data as { CardCode?: string; CardName?: string; CardType?: string };
+      if (bp.CardType !== "cCustomer")
+        throw new ORPCError("BAD_REQUEST", { message: `${input.cardCode} is not a customer in SAP.` });
+
       const token = randomBytes(32).toString("hex");
       await db.insert(portalClient).values({
         tenantId: context.tenantId, email,
-        cardCode: input.cardCode, cardName: input.cardName,
+        cardCode: String(bp.CardCode ?? input.cardCode), cardName: String(bp.CardName ?? ""),
         inviteTokenHash: hashToken(token),
       });
       // ponytail: copy-link invites; email provider when onboarding volume demands

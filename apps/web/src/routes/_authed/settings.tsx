@@ -7,6 +7,7 @@ import {
   Text, Toast,
 } from "@ui5/webcomponents-react";
 import { orpc } from "../../orpc.ts";
+import { EntityValueHelp } from "../../components/b1/EntityValueHelp.tsx";
 
 export const Route = createFileRoute("/_authed/settings")({ component: Settings });
 
@@ -16,7 +17,6 @@ function Settings() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [invEmail, setInvEmail] = useState("");
   const [invCardCode, setInvCardCode] = useState("");
-  const [invCardName, setInvCardName] = useState("");
   const [acceptUrl, setAcceptUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -35,7 +35,7 @@ function Settings() {
       <Card header={<CardHeader titleText="Portal clients" subtitleText="Invite your customers to configure and request quotes" />}>
         <FlexBox direction="Column" style={{ padding: "1rem", gap: "1rem" }}>
           <Button design="Emphasized" style={{ alignSelf: "start" }}
-            onClick={() => { setInvEmail(""); setInvCardCode(""); setInvCardName(""); setAcceptUrl(null); setInviteOpen(true); }}>
+            onClick={() => { setInvEmail(""); setInvCardCode(""); setAcceptUrl(null); setInviteOpen(true); }}>
             Invite client
           </Button>
           {revoke.error ? <MessageStrip design="Negative" hideCloseButton>{revoke.error.message}</MessageStrip> : null}
@@ -78,8 +78,8 @@ function Settings() {
             acceptUrl ? <Button onClick={() => setInviteOpen(false)}>Done</Button> : (
               <>
                 <Button design="Emphasized"
-                  disabled={!invEmail.trim() || !invCardCode.trim() || !invCardName.trim() || invite.isPending}
-                  onClick={() => invite.mutate({ email: invEmail.trim(), cardCode: invCardCode.trim(), cardName: invCardName.trim() })}>
+                  disabled={!invEmail.trim() || !invCardCode.trim() || invite.isPending}
+                  onClick={() => invite.mutate({ email: invEmail.trim(), cardCode: invCardCode.trim() })}>
                   {invite.isPending ? "Creating…" : "Create invite"}
                 </Button>
                 <Button onClick={() => setInviteOpen(false)}>Cancel</Button>
@@ -103,10 +103,14 @@ function Settings() {
             {invite.error ? <MessageStrip design="Negative" hideCloseButton>{invite.error.message}</MessageStrip> : null}
             <Label required>Client email</Label>
             <Input type="Email" value={invEmail} onInput={(e) => setInvEmail(e.target.value)} />
-            <Label required>Customer code</Label>
-            <Input placeholder="CardCode" value={invCardCode} onInput={(e) => setInvCardCode(e.target.value)} />
-            <Label required>Customer name</Label>
-            <Input placeholder="Customer name" value={invCardName} onInput={(e) => setInvCardName(e.target.value)} />
+            <Label required>Customer</Label>
+            <EntityValueHelp
+              entitySet="BusinessPartners"
+              keyField="CardCode"
+              value={invCardCode}
+              onChange={(v) => setInvCardCode(v == null ? "" : String(v))}
+              headerText="Select a customer"
+            />
           </FlexBox>
         )}
       </Dialog>
