@@ -206,10 +206,17 @@ export function AppShell() {
         >
           {isClient ? (
             <>
-              <SideNavigationItem text="My requests" icon="sales-quote" data-to="/portal"
-                selected={pathname === "/portal" || (pathname.startsWith("/portal/") && pathname !== "/portal/new")} />
-              <SideNavigationItem text="New request" icon="add-document" data-to="/portal/new"
-                selected={pathname === "/portal/new"} />
+              {/* "New request" leaves the nav — it is a button on the Projects page now. */}
+              <SideNavigationItem text="My requests" icon="sales-order" data-to="/portal"
+                selected={pathname === "/portal" || pathname === "/portal/new" || (pathname.startsWith("/portal/") && !pathname.startsWith("/portal/docs"))} />
+              <SideNavigationItem text="Quotations" icon="sales-quote" data-to="/portal/docs/Quotations"
+                selected={pathname.startsWith("/portal/docs/Quotations")} />
+              <SideNavigationItem text="Sales orders" icon="sales-order-item" data-to="/portal/docs/Orders"
+                selected={pathname.startsWith("/portal/docs/Orders")} />
+              <SideNavigationItem text="Deliveries" icon="shipping-status" data-to="/portal/docs/DeliveryNotes"
+                selected={pathname.startsWith("/portal/docs/DeliveryNotes")} />
+              <SideNavigationItem text="Invoices" icon="monitor-payments" data-to="/portal/docs/Invoices"
+                selected={pathname.startsWith("/portal/docs/Invoices")} />
             </>
           ) : (
             <>

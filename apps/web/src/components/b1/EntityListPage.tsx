@@ -17,12 +17,22 @@ const noData = () => (
     subtitleText="Nothing in SAP matches this view." />
 );
 
-export function EntityListPage({ entity }: { entity: string }) {
+// `scope` is the only thing that differs between the internal and the portal mounts: which
+// procedures answer, which variant namespace the saved view lives in, and where a row click goes.
+// The server fences the portal set independently — this is which page you are on, not permission.
+export function EntityListPage({ entity, scope = "internal" }: { entity: string; scope?: "internal" | "portal" }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
-  const schema = useQuery({ ...orpc.entities.schema.queryOptions({ input: { entity } }), retry: false, staleTime: 60 * 60_000 });
-  const listSpec = useListSpec(`b1:${entity}`);
+  const portal = scope === "portal";
+  const schema = useQuery({
+    ...(portal
+      ? orpc.portal.docs.schema.queryOptions({ input: { entity } })
+      : orpc.entities.schema.queryOptions({ input: { entity } })),
+    retry: false,
+    staleTime: 60 * 60_000,
+  });
+  const listSpec = useListSpec(portal ? `portal:${entity}` : `b1:${entity}`);
 
   const columns = useMemo<ListColumn[]>(
     () =>
@@ -39,21 +49,26 @@ export function EntityListPage({ entity }: { entity: string }) {
     [schema.data],
   );
 
-  const page = useInfiniteQuery(
-    orpc.entities.rows.infiniteOptions({
-      input: (skip: number | undefined) => ({
-        entity, spec: listSpec.spec, top: 100,
-        ...(skip ? { skip } : { count: true }),
-      }),
-      initialPageParam: undefined as number | undefined,
-      getNextPageParam: (last) => last.nextSkip,
-      // Both gates matter: no schema means no column names to compile against, and an unapplied
-      // view would fire one render's worth of requests carrying the previous entity's fields.
-      enabled: !!schema.data && listSpec.ready,
-      retry: false,
-      placeholderData: keepPreviousData,
-    }),
-  );
+  const rowsOptions = portal
+    ? orpc.portal.docs.rows.infiniteOptions({
+        input: (skip: number | undefined) => ({ entity, spec: listSpec.spec, top: 100, ...(skip ? { skip } : { count: true }) }),
+        initialPageParam: undefined as number | undefined,
+        getNextPageParam: (last) => last.nextSkip,
+      })
+    : orpc.entities.rows.infiniteOptions({
+        input: (skip: number | undefined) => ({ entity, spec: listSpec.spec, top: 100, ...(skip ? { skip } : { count: true }) }),
+        initialPageParam: undefined as number | undefined,
+        getNextPageParam: (last) => last.nextSkip,
+      });
+
+  const page = useInfiniteQuery({
+    ...rowsOptions,
+    // Both gates matter: no schema means no column names to compile against, and an unapplied
+    // view would fire one render's worth of requests carrying the previous entity's fields.
+    enabled: !!schema.data && listSpec.ready,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
 
   const rows = useMemo(() => (page.data?.pages ?? []).flatMap((p) => p.rows), [page.data]);
   const keyField = schema.data?.keys[0] ?? "";
@@ -74,28 +89,31 @@ export function EntityListPage({ entity }: { entity: string }) {
       hasMore={page.hasNextPage && !page.isFetchingNextPage}
       onLoadMore={() => { if (!page.isFetchingNextPage) void page.fetchNextPage(); }}
       selectionActions={(rows) =>
-        // Printing is a one-document action: enabled on exactly one selected row.
-        rows.length === 1 ? <PrintActions entity={entity} docEntry={Number(rows[0]!.DocEntry)} /> : null
+        rows.length === 1 ? <PrintActions entity={entity} docEntry={Number(rows[0]!.DocEntry)} scope={scope} /> : null
       }
       onRowClick={(row) => {
         const keys = schema.data!.keys;
         // A composite key travels as JSON so one route param can carry both halves.
         const key = keys.length === 1 ? String(row[keys[0]!] ?? "") : JSON.stringify(Object.fromEntries(keys.map((k) => [k, row[k]])));
-        if (key) navigate({ to: "/b1/$entity/$key", params: { entity, key } });
+        if (!key) return;
+        if (portal) navigate({ to: "/portal/docs/$entity/$key", params: { entity, key } });
+        else navigate({ to: "/b1/$entity/$key", params: { entity, key } });
       }}
       noData={noData}
       actions={
-        <Toolbar design="Transparent">
-          {/* refetch() alone would return the same cached row — the re-read has to be asked for. */}
-          <ToolbarButton icon="refresh" text="Refresh schema" disabled={refreshing}
-            onClick={async () => {
-              setRefreshing(true);
-              try {
-                const fresh = await client.entities.schema({ entity, refresh: true });
-                qc.setQueryData(orpc.entities.schema.key({ input: { entity }, type: "query" }), fresh);
-              } finally { setRefreshing(false); }
-            }} />
-        </Toolbar>
+        portal ? undefined : (
+          <Toolbar design="Transparent">
+            {/* refetch() alone would return the same cached row — the re-read has to be asked for. */}
+            <ToolbarButton icon="refresh" text="Refresh schema" disabled={refreshing}
+              onClick={async () => {
+                setRefreshing(true);
+                try {
+                  const fresh = await client.entities.schema({ entity, refresh: true });
+                  qc.setQueryData(orpc.entities.schema.key({ input: { entity }, type: "query" }), fresh);
+                } finally { setRefreshing(false); }
+              }} />
+          </Toolbar>
+        )
       }
     />
   );

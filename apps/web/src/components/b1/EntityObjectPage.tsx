@@ -42,14 +42,30 @@ function subtitleOf(fields: B1Field[], keys: string[], row: Record<string, unkno
   return picked.map((f) => formatCell(row[f.name], f.edmType)).filter(Boolean).join(" · ");
 }
 
-export function EntityObjectPage({ entity, entityKey }: { entity: string; entityKey: string }) {
+export function EntityObjectPage({
+  entity, entityKey, scope = "internal",
+}: { entity: string; entityKey: string; scope?: "internal" | "portal" }) {
   const navigate = useNavigate();
   const parsed = useMemo(() => parseKeyParam(entityKey), [entityKey]);
+  const portal = scope === "portal";
 
-  const schema = useQuery({ ...orpc.entities.schema.queryOptions({ input: { entity } }), retry: false, staleTime: 60 * 60_000 });
+  const schema = useQuery({
+    ...(portal
+      ? orpc.portal.docs.schema.queryOptions({ input: { entity } })
+      : orpc.entities.schema.queryOptions({ input: { entity } })),
+    retry: false,
+    staleTime: 60 * 60_000,
+  });
   const key = useMemo(() => (schema.data ? coerceKey(schema.data, parsed) : parsed), [schema.data, parsed]);
-  const meta = useQuery({ ...orpc.entities.profile.queryOptions({ input: { entity } }), staleTime: Infinity });
-  const one = useQuery({ ...orpc.entities.one.queryOptions({ input: { entity, key } }), enabled: !!schema.data, retry: false });
+  // No profile fetch on the portal: nothing there is editable and entities.profile is admin-only.
+  const meta = useQuery({ ...orpc.entities.profile.queryOptions({ input: { entity } }), staleTime: Infinity, enabled: !portal });
+  const one = useQuery({
+    ...(portal
+      ? orpc.portal.docs.one.queryOptions({ input: { entity, key: key as string | number } })
+      : orpc.entities.one.queryOptions({ input: { entity, key } })),
+    enabled: !!schema.data,
+    retry: false,
+  });
 
   const [draft, setDraft] = useState<Record<string, Val | undefined> | null>(null);
 
@@ -94,19 +110,21 @@ export function EntityObjectPage({ entity, entityKey }: { entity: string; entity
           subHeader={<span>{subtitleOf(scalars, keys, row, profile?.subtitleFields)}</span>}
           actionsBar={
             <Toolbar design="Transparent">
-              {profile && !editing ? (
+              {profile && !editing && !portal ? (
                 <ToolbarButton design="Emphasized" icon="edit" text="Edit"
                   // No ETag means B1 gave us nothing to guard the write with; refuse rather than
                   // send a blind PATCH.
                   disabled={!etag} onClick={() => setDraft({})} />
               ) : null}
-              <PrintActions entity={entity} docEntry={Number(row.DocEntry)} disabled={editing} />
+              <PrintActions entity={entity} docEntry={Number(row.DocEntry)} scope={scope} disabled={editing} />
               {(meta.data?.flows ?? []).map((f) => (
                 <ToolbarButton key={f.target} icon="copy" text={f.label} disabled={copy.isPending || editing}
                   onClick={() => copy.mutate({ sourceEntity: entity, targetEntity: f.target, docEntry: Number(row.DocEntry) })} />
               ))}
               <ToolbarButton icon="nav-back" text="Back to list"
-                onClick={() => navigate({ to: "/b1/$entity", params: { entity } })} />
+                onClick={() => (portal
+                  ? navigate({ to: "/portal/docs/$entity", params: { entity } })
+                  : navigate({ to: "/b1/$entity", params: { entity } }))} />
             </Toolbar>
           }>
           {statusState ? (
@@ -137,7 +155,7 @@ export function EntityObjectPage({ entity, entityKey }: { entity: string; entity
           <>
             {update.error ? <MessageStrip design="Negative" hideCloseButton>{update.error.message}</MessageStrip> : null}
             {copy.error ? <MessageStrip design="Negative" hideCloseButton>{copy.error.message}</MessageStrip> : null}
-            {!profile && !editing ? (
+            {!profile && !editing && !portal ? (
               <MessageStrip design="Information" hideCloseButton>
                 {`${schema.data!.label} is read-only in HERA.`}
               </MessageStrip>
