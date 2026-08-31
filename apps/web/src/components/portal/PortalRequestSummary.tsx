@@ -45,10 +45,12 @@ type TimelineEntry = {
   doc?: { entity: keyof typeof DOC_UI; docEntry: number; docNum: number };
 };
 
-export function PortalRequestSummary({ project, model, latestRun, onWithdraw, onReopen, busy }: {
-  project: { id: string; name: string; status: PortalStatus; rejectionNote: string | null; events: Ev[] };
+export function PortalRequestSummary({ project, model, onWithdraw, onReopen, busy }: {
+  project: {
+    id: string; name: string; status: PortalStatus; rejectionNote: string | null; events: Ev[];
+    entries: Entries; candidates: PortalCandidate[]; selection: Sel[] | null;
+  };
   model: { name: string; definition: ModelDef };
-  latestRun: { entries: Entries; candidates: PortalCandidate[]; selection: Sel[] | null } | null;
   onWithdraw: () => void;
   onReopen: () => void;
   busy: boolean;
@@ -84,14 +86,14 @@ export function PortalRequestSummary({ project, model, latestRun, onWithdraw, on
     [project.events, chain.data],
   );
   const st = portalStatusUi[project.status];
-  const keys = latestRun ? openKeys(model.definition, latestRun.entries, latestRun.candidates) : [];
+  const keys = openKeys(model.definition, project.entries, project.candidates);
 
-  // Pre-quote lines come from the sanitized run + stored selection; final prices from quotedResult.
+  // Pre-quote lines come from the sanitized candidates + stored selection; final prices from quotedResult.
   const lines =
     project.status === "quoted"
       ? (quoted.data?.lines ?? []).map((l) => ({ label: candidateLabel(keys, l.assignment), ...l }))
-      : (latestRun?.selection ?? []).map((s) => {
-          const c = latestRun!.candidates[s.candidateIdx]!;
+      : (project.selection ?? []).map((s) => {
+          const c = project.candidates[s.candidateIdx]!;
           const b = c.perBatch.find((x) => x.batchQty === s.batchQty)!;
           return { label: candidateLabel(keys, c.assignment), batchQty: s.batchQty, unitPrice: b.unitPrice, total: b.total };
         });

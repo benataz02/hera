@@ -19,15 +19,6 @@ bun run dev:agent                       # the on-prem agent, from apps/agent/age
 bun run kill                            # scripts/kill-dev.ps1 — frees the dev ports on Windows
 ```
 
-Tests are `bun:test`. A bare `bun test` also picks up the vendored `b1-mcp-server/`, whose own
-suite fails (its deps are not installed) — always scope:
-
-```bash
-bun test apps packages                  # the whole suite
-bun test apps/server/test/lookups.test.ts
-bun test packages/b1 -t "login"         # filter by test name
-```
-
 There is no lint step. Type-checking is the gate, and it is **per project** — there is no root
 tsconfig that covers everything, so a change can typecheck in one package and break another:
 
@@ -47,10 +38,6 @@ bun run seed:agent <slug> http://localhost:4000 <secret>   # secret must match a
 bun run e2e <slug>                      # cloud -> agent -> Service Layer smoke test
 bun run migrate:queries [--write]       # one-way queryTables path -> structured query migration
 ```
-
-Server tests hit a **real Postgres** through `apps/server/test/harness.ts` and skip when
-`DATABASE_URL` is unset. Web tests are **pure logic only** — never DOM — because `apps/web/src/orpc.ts`
-touches `window` at module scope, so anything importing it cannot be unit-tested under Bun.
 
 ## The three processes
 
@@ -102,9 +89,13 @@ saves cannot produce a parse/unknown-ref error at runtime.
 tenant `config_table` rows and live B1 reads are all resolved to the same shape by
 `apps/server/src/lookups.ts` before the engine runs.
 
-**Every run is frozen**: `config_run` stores `modelSnapshot` + `lookupSnapshot` + `entries` +
-`candidates`, so an old quote can always be re-explained. One configuration = one run (unique
-index); a quoted project is locked by `assertConfigMutable`.
+**Nothing is snapshotted.** One configuration is one row: `config_project` carries its own
+`entries` + `candidates` + `selection`, and a recalculate overwrites them in place. Model and
+lookups are resolved *live* on every read (`liveEngine` in `orpc/routers/configs.ts`), so a
+quoted configuration is re-priced against what SAP says now rather than what it said then —
+`quotedValue`/`quotedCost` are the only frozen numbers, captured for the dashboard. `status ===
+"calculated"` is the invariant that ties the two together: every writer of `entries`/`batches`
+also resets the status to `draft`. A quoted project is locked by `assertConfigMutable`.
 
 ## `packages/b1` — the SAP connector
 
@@ -153,8 +144,10 @@ file records the three verified 400s that prove it. The `DocEntry` equality **is
   is enforced in `orpc/routers/entities.ts`, not by which buttons a page draws. Everything else B1
   exposes is read-only.
 - **Idempotent quote write-back.** `configDocumentCommandId()` (SHA-256 over
-  `tenant|project|run|canonicalJson(selection)`, keys sorted because Postgres reorders jsonb) is
-  written to `U_HERA_DedupKey` and checked before create. `config_run.b1DocEntry` covers a double
+  `tenant|project|canonicalJson(selected assignments)`, keys sorted because Postgres reorders
+  jsonb) is written to `U_HERA_DedupKey` and checked before create. It hashes the selected
+  *assignments*, not their indices — an index only means something against the candidate list that
+  produced it, and a recalculate replaces that list. `config_project.b1DocEntry` covers a double
   click; the UDF covers the case where B1 created the document and the response never arrived.
   A missing UDF **refuses to run** rather than risk a double-post — see `docs/sap-b1-durable-writes.md`.
 - **Document copy** (`doc-copy.ts`): target lines carry `BaseType`/`BaseEntry`/`BaseLine` — that is

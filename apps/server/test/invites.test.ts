@@ -36,7 +36,7 @@ describe("spec test 4 — invites", () => {
     await connect(tenantId);
     const admin = await makeUser("admin", tenantId);
     const visitor = await makeUser(); // session, no membership
-    const { token } = await invite(slug, admin.cookie, "client@acme.test");
+    const { token } = await invite(slug, admin.cookie, visitor.email);
 
     const vctx = { context: { headers: tenantHeaders(slug, visitor.cookie) } };
     await call(router.portal.acceptInvite, { token }, vctx);
@@ -50,7 +50,7 @@ describe("spec test 4 — invites", () => {
     const admin = await makeUser("admin", tenantId);
     const a = await makeUser();
     const b = await makeUser();
-    const { token } = await invite(slug, admin.cookie, "one@acme.test");
+    const { token } = await invite(slug, admin.cookie, a.email);
     await call(router.portal.acceptInvite, { token }, { context: { headers: tenantHeaders(slug, a.cookie) } });
     expect(await code(call(router.portal.acceptInvite, { token },
       { context: { headers: tenantHeaders(slug, b.cookie) } }))).toBe("BAD_REQUEST");
@@ -95,21 +95,16 @@ describe("spec test 4 — invites", () => {
     await connect(tenantId);
     const admin = await makeUser("admin", tenantId);
     const a = await makeUser();
-    const b = await makeUser();
-    const { token } = await invite(slug, admin.cookie, "race@acme.test");
+    const { token } = await invite(slug, admin.cookie, a.email);
+    const ctx = { context: { headers: tenantHeaders(slug, a.cookie) } };
 
     const [ra, rb] = await Promise.allSettled([
-      call(router.portal.acceptInvite, { token }, { context: { headers: tenantHeaders(slug, a.cookie) } }),
-      call(router.portal.acceptInvite, { token }, { context: { headers: tenantHeaders(slug, b.cookie) } }),
+      call(router.portal.acceptInvite, { token }, ctx),
+      call(router.portal.acceptInvite, { token }, ctx),
     ]);
     const outcomes = [ra, rb].map((r) => r.status);
     expect(outcomes.filter((s) => s === "fulfilled")).toHaveLength(1);
     expect(outcomes.filter((s) => s === "rejected")).toHaveLength(1);
-
-    // The loser must not be left as an orphaned member with no clientProcedure access.
-    const loserCookie = ra.status === "rejected" ? a.cookie : b.cookie;
-    expect(await code(call(router.portal.models.list, undefined,
-      { context: { headers: tenantHeaders(slug, loserCookie) } }))).toBe("FORBIDDEN");
   });
 
   test("revoke of an active client removes portal access", async () => {
@@ -117,7 +112,7 @@ describe("spec test 4 — invites", () => {
     await connect(tenantId);
     const admin = await makeUser("admin", tenantId);
     const v = await makeUser();
-    const { token } = await invite(slug, admin.cookie, "gone@acme.test");
+    const { token } = await invite(slug, admin.cookie, v.email);
     const vctx = { context: { headers: tenantHeaders(slug, v.cookie) } };
     await call(router.portal.acceptInvite, { token }, vctx);
     const actx = { context: { headers: tenantHeaders(slug, admin.cookie) } };
@@ -143,5 +138,43 @@ describe("spec test 4 — invites", () => {
     await invite(slug, admin.cookie, "real@acme.test");
     const [row] = await db.select().from(portalClient).where(eq(portalClient.email, "real@acme.test"));
     expect(row!.cardName).toBe("Acme Client SL");
+  });
+
+  test("peekInvite reports the invite email, not the caller's session email", async () => {
+    const { tenantId, slug } = await makeTenant();
+    await connect(tenantId);
+    const admin = await makeUser("admin", tenantId);
+    const { token } = await invite(slug, admin.cookie, "client@acme.test");
+
+    // Cookie is the admin who minted the link — the invitee has no session yet.
+    const peek = await call(router.portal.peekInvite, { token }, {
+      context: { headers: tenantHeaders(slug, admin.cookie) },
+    });
+    expect(peek).toEqual({ email: "client@acme.test", userExists: false });
+  });
+
+  test("peekInvite.userExists is keyed on the invite email, not the session user", async () => {
+    const { tenantId, slug } = await makeTenant();
+    await connect(tenantId);
+    const admin = await makeUser("admin", tenantId);
+    const invitee = await makeUser();
+    const { token } = await invite(slug, admin.cookie, invitee.email);
+
+    const peek = await call(router.portal.peekInvite, { token }, {
+      context: { headers: tenantHeaders(slug, admin.cookie) },
+    });
+    expect(peek).toEqual({ email: invitee.email, userExists: true });
+  });
+
+  test("acceptInvite refuses a session whose email is not the invite's", async () => {
+    const { tenantId, slug } = await makeTenant();
+    await connect(tenantId);
+    const admin = await makeUser("admin", tenantId);
+    const stranger = await makeUser();
+    const { token } = await invite(slug, admin.cookie, "client@acme.test");
+    expect(await code(call(router.portal.acceptInvite, { token },
+      { context: { headers: tenantHeaders(slug, stranger.cookie) } }))).toBe("BAD_REQUEST");
+    expect(await code(call(router.portal.acceptInvite, { token },
+      { context: { headers: tenantHeaders(slug, admin.cookie) } }))).toBe("BAD_REQUEST");
   });
 });

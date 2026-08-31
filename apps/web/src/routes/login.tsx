@@ -8,16 +8,20 @@ import { SocialButtons } from "../components/SocialButtons.tsx";
 import { apexUrl, hardRedirect, isApex, safeRedirect } from "../lib/tenant.ts";
 
 export const Route = createFileRoute("/login")({
-  validateSearch: (s: Record<string, unknown>): { redirect?: string } => ({
+  validateSearch: (s: Record<string, unknown>): { redirect?: string; email?: string } => ({
     redirect: typeof s.redirect === "string" ? s.redirect : undefined,
+    email: typeof s.email === "string" ? s.email : undefined,
   }),
   // Auth lives on the apex only. Already signed in? Hand off to the apex dispatcher (`/`),
   // or straight back to `redirect` (e.g. an invite accept link) when it's safe to do so.
   beforeLoad: async ({ context, search }) => {
-    if (!isApex())
-      return hardRedirect(
-        apexUrl(`/login${search.redirect ? `?redirect=${encodeURIComponent(search.redirect)}` : ""}`),
-      );
+    if (!isApex()) {
+      const q = new URLSearchParams();
+      if (search.redirect) q.set("redirect", search.redirect);
+      if (search.email) q.set("email", search.email);
+      const qs = q.toString();
+      return hardRedirect(apexUrl(`/login${qs ? `?${qs}` : ""}`));
+    }
     const data = await context.queryClient.ensureQueryData(sessionQuery);
     if (data?.session) {
       const to = safeRedirect(search.redirect);
@@ -30,8 +34,8 @@ export const Route = createFileRoute("/login")({
 
 function Login() {
   const navigate = useNavigate();
-  const { redirect: redirectTo } = Route.useSearch();
-  const [email, setEmail] = useState("");
+  const { redirect: redirectTo, email: emailFromInvite } = Route.useSearch();
+  const [email, setEmail] = useState(emailFromInvite ?? "");
   const [password, setPassword] = useState("");
 
   const queryClient = useQueryClient();
@@ -83,7 +87,7 @@ function Login() {
       <div className="auth-or">or</div>
       <SocialButtons />
       <p className="auth-alt">
-        New to HERA? <Link to="/signup" search={{ redirect: redirectTo }}>Create an account</Link>
+        New to HERA? <Link to="/signup" search={{ redirect: redirectTo, email: emailFromInvite }}>Create an account</Link>
       </p>
     </AuthLayout>
   );

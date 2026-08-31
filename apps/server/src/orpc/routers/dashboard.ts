@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { db, configProject, configRun, dashboardSnapshot } from "@hera/db";
+import { db, configProject, dashboardSnapshot } from "@hera/db";
 import { userProcedure } from "../base.ts";
 import { buildOverview, type ProjectRow } from "../../dashboard.ts";
 import { tenantConnector, viaB1 } from "../../b1.ts";
@@ -12,11 +12,10 @@ async function loadProjects(tenantId: string): Promise<ProjectRow[]> {
       id: configProject.id, name: configProject.name, status: configProject.status,
       source: configProject.source, createdBy: configProject.createdBy,
       createdAt: configProject.createdAt, customer: configProject.customer,
-      quotedAt: configRun.quotedAt, b1DocEntry: configRun.b1DocEntry,
-      quotedValue: configRun.quotedValue, quotedCost: configRun.quotedCost,
+      quotedAt: configProject.quotedAt, b1DocEntry: configProject.b1DocEntry,
+      quotedValue: configProject.quotedValue, quotedCost: configProject.quotedCost,
     })
     .from(configProject)
-    .leftJoin(configRun, eq(configRun.projectId, configProject.id))
     .where(eq(configProject.tenantId, tenantId));
   return rows.map((r) => ({
     id: r.id, name: r.name, status: r.status, source: r.source,

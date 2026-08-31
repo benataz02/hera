@@ -1,8 +1,8 @@
 import { boolean, index, jsonb, integer, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { Entries, ModelDef, OutputOverrides, Outputs, ResolvedLookups, Val } from "@hera/config-engine";
+import type { Entries, ModelDef, OutputOverrides, Outputs, Val } from "@hera/config-engine";
 
-// Configurator persistence: mutable model + immutable snapshot-on-run (model + lookups + computed
-// outputs frozen per engine run). Spec: docs/superpowers/specs/2026-07-03-configurator-design.md.
+// Configurator persistence: a mutable model, and one configuration document that carries its own
+// latest calculation. Spec: docs/superpowers/specs/2026-07-03-configurator-design.md.
 
 // The whole model is one jsonb document (ModelDef), loaded/saved whole like ui_variant.definition.
 export const configModel = pgTable(
@@ -49,7 +49,20 @@ export type ProjectEvent = {
   note?: string;
 };
 
-// The "Configurations" document: customer + model + entries + batches; runs hang off it.
+// One enumerated configuration, priced per batch quantity, and the user's pick of one.
+export type ConfigCandidate = { assignment: Entries; perBatch: { batchQty: number; outputs: Outputs }[] };
+export type ConfigSelection = { candidateIdx: number; batchQty: number; overrides?: OutputOverrides };
+
+// The "Configurations" document: customer + model + entries + batches, plus the single calculation
+// those entries produced. There is no run history and no id but this one — a recalculate overwrites
+// `candidates` in place.
+//
+// `candidates` are the entries in this same row, enumerated: there is no second copy of `entries`
+// because every writer of `entries`/`batches` also sets `status = 'draft'` (configs.update,
+// portal.projects.update), so `status === 'calculated'` already means "these entries produced
+// these candidates".
+// ponytail: that invariant is enforced by convention, not a constraint — a trigger only if a
+//           third writer ever appears.
 export const configProject = pgTable(
   "config_project",
   {
@@ -64,6 +77,20 @@ export const configProject = pgTable(
     events: jsonb("events").$type<ProjectEvent[]>().notNull().default([]),
     entries: jsonb("entries").$type<Entries>().notNull().default({}),
     batches: jsonb("batches").$type<number[]>().notNull().default([]),
+    candidates: jsonb("candidates").$type<ConfigCandidate[]>().notNull().default([]),
+    selection: jsonb("selection").$type<ConfigSelection[]>(),
+    // When `candidates` was computed. Compared against config_model.updatedAt to decide whether a
+    // recalculate can be skipped — cheaper than the ModelDef deep-compare it replaces.
+    calculatedAt: timestamp("calculated_at", { withTimezone: true }),
+    b1DocEntry: integer("b1_doc_entry"),
+    quotedAt: timestamp("quoted_at", { withTimezone: true }),
+    // Engineered value/cost of the selected candidates, captured once when the quotation is
+    // confirmed. Stored rather than recomputed: recomputing resolves the model's live lookups,
+    // which means one SAP round trip per row for a 12-month dashboard window.
+    // ponytail: no backfill — configurations quoted before this shipped stay null and are excluded
+    //           from the margin roll-up rather than counted as zero margin.
+    quotedValue: numeric("quoted_value", { precision: 18, scale: 4 }),
+    quotedCost: numeric("quoted_cost", { precision: 18, scale: 4 }),
     createdBy: text("created_by").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -71,41 +98,7 @@ export const configProject = pgTable(
   (t) => [index("config_project_tenant_status_idx").on(t.tenantId, t.status)],
 );
 
-export type RunCandidate = { assignment: Entries; perBatch: { batchQty: number; outputs: Outputs }[] };
-export type RunSelection = { candidateIdx: number; batchQty: number; overrides?: OutputOverrides };
-
-// One configuration = one run: the project's single saved calculation, deleted and re-inserted
-// wholesale by executeRunFromSnapshot. The unique index below is what enforces that. A quoted
-// project is locked by assertConfigMutable, so the run that reached SAP is never replaced.
-// b1DocEntry/quotedAt are written by configs.createQuote origin completion (sync.ack).
-export const configRun = pgTable(
-  "config_run",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    tenantId: text("tenant_id").notNull(),
-    projectId: uuid("project_id").notNull(),
-    modelSnapshot: jsonb("model_snapshot").$type<ModelDef>().notNull(),
-    lookupSnapshot: jsonb("lookup_snapshot").$type<ResolvedLookups>().notNull(),
-    entries: jsonb("entries").$type<Entries>().notNull(),
-    candidates: jsonb("candidates").$type<RunCandidate[]>().notNull(),
-    selection: jsonb("selection").$type<RunSelection[]>(),
-    b1DocEntry: integer("b1_doc_entry"),
-    quotedAt: timestamp("quoted_at", { withTimezone: true }),
-    // Engineered value/cost of the selected candidates, captured once when the quotation is
-    // confirmed. Stored rather than recomputed: recomputing needs modelSnapshot + lookupSnapshot
-    // per run, which is megabytes of jsonb for a 12-month dashboard window.
-    // ponytail: no backfill — runs quoted before this shipped stay null and are excluded from
-    //           the margin roll-up rather than counted as zero margin.
-    quotedValue: numeric("quoted_value", { precision: 18, scale: 4 }),
-    quotedCost: numeric("quoted_cost", { precision: 18, scale: 4 }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  // Unique, not plain: one configuration = one run. Covers the same lookups as the old index.
-  (t) => [uniqueIndex("config_run_project_uq").on(t.tenantId, t.projectId)],
-);
-
 export type ConfigProject = typeof configProject.$inferSelect;
-export type ConfigRun = typeof configRun.$inferSelect;
 
 // Historic configuration rows pulled from the model's history query; wholesale-replaced per sync.
 // ponytail: jsonb row per record, ~tens of thousands of rows per model; real columns/pgvector if

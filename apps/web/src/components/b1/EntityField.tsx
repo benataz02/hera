@@ -4,7 +4,7 @@ import {
 import { decodeBool, encodeBool, type B1Field } from "@hera/b1";
 import type { Val } from "@hera/config-engine";
 import { formatCell } from "../../listSpec.ts";
-import { EntityValueHelp } from "./EntityValueHelp.tsx";
+import { EntityValueHelp } from "../ValueHelp.tsx";
 
 // One B1 field, one control.
 //

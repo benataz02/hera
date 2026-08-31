@@ -85,7 +85,7 @@ export function StepCreateQuote({ projectId }: { projectId: string }) {
       <div>
         <Button design="Emphasized" disabled={create.isPending || !lines.length}
           onClick={() => create.mutate({
-            projectId, runId: d.runId, commandId: d.commandId,
+            projectId, commandId: d.commandId,
             ...(comments.trim() ? { comments: comments.trim() } : {}),
             ...(/^\d{4}-\d{2}-\d{2}$/.test(docDueDate) ? { docDueDate } : {}),
           })}>

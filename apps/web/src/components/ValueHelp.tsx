@@ -10,6 +10,7 @@ import {
   type DomainOption, type LookupRef, type ModelDef, type ResolvedTable, type Val,
 } from "@hera/config-engine";
 import { orpc } from "../orpc.ts";
+import { EMPTY_SPEC, type FilterCond } from "../listSpec.ts";
 import { resolveEntry } from "./configurator/formHelpers.ts";
 
 // Kill the dialog's default content padding so the table (and its sticky header) sit flush.
@@ -20,8 +21,8 @@ if (typeof document !== "undefined") {
   el.textContent = `.hera-vh-dialog::part(content){padding:0;overflow:hidden;}`;
 }
 
-/** Remote-search plumbing, shared with EntityValueHelp: pull page 1 on the first open/keystroke,
- *  then one round trip per 250ms pause instead of one per keystroke. */
+/** Remote-search plumbing: pull page 1 on the first open/keystroke, then one round trip per
+ *  250ms pause instead of one per keystroke. */
 export function useRemoteSearch(onSearch?: (q: string) => void) {
   const primed = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -402,5 +403,84 @@ export function QueryValueHelp({
       loading={search !== null && !page.isError && (!page.data || (page.isFetching && !page.isFetchingNextPage))}
       hasMore={page.hasNextPage && !page.isFetchingNextPage}
       onLoadMore={() => { if (!page.isFetchingNextPage) void page.fetchNextPage(); }} />
+  );
+}
+
+/** Value help over a B1 entity set via `entities.rows`. Same dialog as QueryValueHelp; the
+ *  query is a ListVariantDef compiled server-side (the browser never sends a $filter string). */
+export function EntityValueHelp({
+  entitySet, keyField, value, onChange, headerText, disabled, readonly, select, filter,
+}: {
+  entitySet: string;
+  keyField: string;
+  value: Val | undefined;
+  onChange: (v: Val | undefined) => void;
+  headerText: string;
+  disabled?: boolean;
+  readonly?: boolean;
+  /** $select; omitted = every scalar */
+  select?: string[];
+  /** $filter, AND-combined */
+  filter?: FilterCond[];
+}) {
+  const [search, setSearch] = useState<string | null>(null); // null = untouched: don't fetch yet
+
+  const page = useInfiniteQuery(
+    orpc.entities.rows.infiniteOptions({
+      input: (skip: number | undefined) => ({
+        entity: entitySet,
+        spec: {
+          ...EMPTY_SPEC,
+          select: select ?? EMPTY_SPEC.select,
+          filter: filter ?? EMPTY_SPEC.filter,
+          search: (search ?? "").trim(),
+        },
+        top: 50,
+        ...(skip ? { skip } : {}),
+      }),
+      initialPageParam: undefined as number | undefined,
+      getNextPageParam: (last) => last.nextSkip,
+      enabled: search !== null,
+      retry: false,
+      placeholderData: keepPreviousData,
+      staleTime: 5 * 60_000,
+    }),
+  );
+
+  const rows = useMemo(() => (page.data?.pages ?? []).flatMap((p) => p.rows), [page.data]);
+  // Pinned select wins so headers exist before the first page; otherwise the key plus whatever
+  // the first row's other scalar fields are — B1's own column order.
+  const columns = useMemo(() => {
+    if (select?.length) return [keyField, ...select.filter((c) => c !== keyField)];
+    const first = rows[0];
+    if (!first) return [keyField];
+    const rest = Object.keys(first).filter((k) => k !== keyField && /^[A-Za-z_][A-Za-z0-9_]*$/.test(k));
+    return [keyField, ...rest.slice(0, 4)];
+  }, [rows, keyField, select]);
+
+  const table = useMemo<ResolvedTable>(
+    () => ({
+      columns,
+      rows: rows.map((r) => columns.map((c) => (r as Record<string, unknown>)[c] as Val)),
+    }),
+    [rows, columns],
+  );
+
+  const options = useMemo<DomainOption[]>(
+    () => table.rows.map((r) => ({ value: r[0] ?? null, label: String(r[1] ?? r[0] ?? "") })),
+    [table],
+  );
+
+  return (
+    <ValueHelp
+      options={options} value={value} onChange={onChange} headerText={headerText}
+      table={table} valueCol={columns[0]!} columns={columns.slice(1)}
+      onSearch={setSearch} onOpen={() => setSearch("")}
+      disabled={disabled} readonly={readonly}
+      valueState={page.error ? "Negative" : undefined}
+      loading={search !== null && !page.isError && (!page.data || (page.isFetching && !page.isFetchingNextPage))}
+      hasMore={page.hasNextPage && !page.isFetchingNextPage}
+      onLoadMore={() => { if (!page.isFetchingNextPage) void page.fetchNextPage(); }}
+    />
   );
 }

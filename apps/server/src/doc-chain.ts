@@ -1,6 +1,6 @@
 import type { B1Transport, CrossJoinSpec } from "@hera/b1";
 
-// The forward document walk: from the quotation HERA wrote (config_run.b1DocEntry — the only B1
+// The forward document walk: from the quotation HERA wrote (config_project.b1DocEntry — the only B1
 // link HERA stores) to whatever SAP has since made of it. Written in the same style as
 // doc-history.ts and reusing the same machinery, for the same reason: B1's $filter has no lambda
 // operators, so a document cannot be filtered by its lines except through $crossjoin.
@@ -72,7 +72,7 @@ export function flattenChain(entity: ChainEntity, json: unknown): ChainDoc[] {
  * needs the previous hop's DocEntries to filter on, so they cannot be parallelised.
  * A hop whose source set is empty is skipped entirely rather than sent as `BaseEntry eq ()`.
  *
- * // ponytail: 3 sequential crossjoins per open project; cache the result on config_run if it
+ * // ponytail: 3 sequential crossjoins per open project; cache the result on config_project if it
  * //           ever shows up in a trace.
  */
 export async function documentChain(b1: B1Transport, quotationDocEntry: number): Promise<ChainDoc[]> {

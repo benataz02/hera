@@ -7,9 +7,9 @@ import { bestByBatch, candidateLabel, fmt, isSelected, openKeys, type PricedCand
 // The signature view: rows = candidates (labeled by their open-parameter values), columns =
 // batch quantities, every price cell IS the selection control. One pressed cell = one future
 // quotation line. Green marks the lowest price per column.
-export function CandidatesMatrix({ model, runEntries, candidates, selection, onToggle, capped, widest, onRowClick }: {
+export function CandidatesMatrix({ model, entries, candidates, selection, onToggle, capped, widest, onRowClick }: {
   model: ModelDef;
-  runEntries: Entries;
+  entries: Entries;
   candidates: PricedCandidate[];
   selection: Sel[];
   onToggle: (candidateIdx: number, batchQty: number) => void;
@@ -17,7 +17,7 @@ export function CandidatesMatrix({ model, runEntries, candidates, selection, onT
   widest?: { key: string; size: number };
   onRowClick?: (idx: number) => void;
 }) {
-  const keys = openKeys(model, runEntries, candidates);
+  const keys = openKeys(model, entries, candidates);
   const best = bestByBatch(candidates);
   const batches = candidates[0]?.perBatch.map((b) => b.batchQty) ?? [];
 

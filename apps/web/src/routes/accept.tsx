@@ -9,8 +9,7 @@ import { apexUrl, hardRedirect } from "../lib/tenant.ts";
 
 // Portal-invite landing page: `https://<slug>.<base>/accept?token=…`. Top-level (not
 // under `_authed`) because the invitee has no membership yet — `_authed`'s beforeLoad
-// would bounce them to /select before acceptInvite ever runs. Works both signed-out
-// (bounces to apex login and back here) and signed-in (accepts immediately).
+// would bounce them to /select before acceptInvite ever runs.
 export const Route = createFileRoute("/accept")({
   validateSearch: (s: Record<string, unknown>) => ({ token: typeof s.token === "string" ? s.token : "" }),
   component: Accept,
@@ -20,14 +19,24 @@ function Accept() {
   const { token } = Route.useSearch();
   const accept = useMutation({
     mutationFn: async () => {
+      // Invite email is the source of truth — never the browser session. An admin
+      // opening their own copy-link would otherwise look like "this user exists".
+      const { email, userExists } = await client.portal.peekInvite({ token });
       const { data } = await authClient.getSession();
-      if (!data?.session)
-        return hardRedirect(apexUrl(`/login?redirect=${encodeURIComponent(window.location.href)}`));
-      await client.portal.acceptInvite({ token });
-      // Hard navigation (not router `navigate`) so `_authed`'s beforeLoad re-reads
-      // membership + role from scratch — the invitee just gained a new org membership
-      // that the router's cached session/role query data doesn't know about yet.
-      return hardRedirect("/portal");
+      if (data?.user?.email?.toLowerCase() === email) {
+        await client.portal.acceptInvite({ token });
+        // Hard navigation (not router `navigate`) so `_authed`'s beforeLoad re-reads
+        // membership + role from scratch — the invitee just gained a new org membership
+        // that the router's cached session/role query data doesn't know about yet.
+        return hardRedirect("/portal");
+      }
+      if (data?.session) await authClient.signOut();
+      const path = userExists ? "/login" : "/signup";
+      const q = new URLSearchParams({
+        redirect: window.location.href,
+        email,
+      });
+      return hardRedirect(apexUrl(`${path}?${q}`));
     },
   });
   // eslint-disable-next-line react-hooks/exhaustive-deps

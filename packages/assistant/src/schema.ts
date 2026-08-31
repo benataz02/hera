@@ -67,7 +67,7 @@ export const assistantTurn = pgTable(
     executedToolCallCount: integer("executed_tool_call_count").notNull().default(0),
     providerCallCount: integer("provider_call_count").notNull().default(0),
     wrapUpAttempted: boolean("wrap_up_attempted").notNull().default(false),
-    calculatedRunId: uuid("calculated_run_id"), // set once calculate succeeds → WORKING_FROZEN
+    calculated: boolean("calculated").notNull().default(false), // set once calculate succeeds → WORKING_FROZEN
     leaseToken: uuid("lease_token"),
     leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
     status: text("status").$type<TurnStatus>().notNull().default("running"),
@@ -126,7 +126,6 @@ export const assistantToolExecution = pgTable(
     errorCode: text("error_code"),
     observedProjectVersion: timestamp("observed_project_version", { withTimezone: true }),
     affectedProjectVersion: timestamp("affected_project_version", { withTimezone: true }),
-    runId: uuid("run_id"),
     durationMs: integer("duration_ms"),
     replayCount: integer("replay_count").notNull().default(0),
     attempts: integer("attempts").notNull().default(1),

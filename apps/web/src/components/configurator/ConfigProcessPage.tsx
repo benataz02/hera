@@ -92,12 +92,12 @@ export function ConfigProcessPage({ id }: { id: string }) {
 
   const project = q.data?.project;
   const model = q.data?.model;
-  const latestRun = q.data?.latestRun;
   const createdByEmail = q.data?.createdByEmail;
   const entries = entriesOverride ?? project?.entries ?? {};
   const batches = batchesOverride ?? project?.batches ?? [];
-  const selection = selOverride ?? latestRun?.selection ?? [];
-  const runReady = !!latestRun && project?.status !== "draft";
+  const candidates = project?.candidates ?? [];
+  const selection = selOverride ?? project?.selection ?? [];
+  const runReady = candidates.length > 0 && project?.status !== "draft";
   const lk = lookups.data ? mergeQueryPicks(lookups.data, picks) : undefined;
   const prop = model && lk ? propagate(model.definition, lk, entries) : null;
   const conflicted = !!prop && prop.conflicts.length > 0;
@@ -180,9 +180,9 @@ export function ConfigProcessPage({ id }: { id: string }) {
   };
 
   const saveSelection = () => {
-    if (!latestRun || selection.length === 0) return;
+    if (!candidates.length || selection.length === 0) return;
     select.mutate({
-      runId: latestRun.id,
+      projectId: id,
       selection: selection.map((s) => ({
         candidateIdx: s.candidateIdx, batchQty: s.batchQty, overrides: cleanOverrides(s.overrides),
       })),
@@ -321,13 +321,13 @@ export function ConfigProcessPage({ id }: { id: string }) {
         ))}
       </ObjectPageSection>
       <ObjectPageSection id="candidates" titleText="Candidates" hideTitleText>
-        {latestRun ? (
-          <StepCandidatesReview model={latestRun.modelSnapshot} lookups={latestRun.lookupSnapshot}
-            runEntries={latestRun.entries} candidates={latestRun.candidates}
+        {candidates.length > 0 && model && lk ? (
+          <StepCandidatesReview model={model.definition} lookups={lk}
+            entries={project!.entries} candidates={candidates}
             selection={selection}
             onToggle={(i, b) => { if (select.isSuccess) select.reset(); setSel(toggleSelection(selection, i, b)); }}
             onChange={(next) => { if (select.isSuccess) select.reset(); setSel(next); }}
-            capped={runMeta?.capped ?? latestRun.candidates.length >= 200}
+            capped={runMeta?.capped ?? candidates.length >= 200}
             widest={runMeta?.widest}
             error={select.error?.message ?? null} saved={select.isSuccess} />
         ) : (
@@ -335,7 +335,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
         )}
       </ObjectPageSection>
       <ObjectPageSection id="quote" titleText="Create quote" hideTitleText>
-        {latestRun?.selection?.length || select.isSuccess ? (
+        {project?.selection?.length || select.isSuccess ? (
           <StepCreateQuote projectId={id} />
         ) : (
           <Text>Save a candidate selection to continue.</Text>

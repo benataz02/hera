@@ -22,7 +22,7 @@ export type ChatMsg = {
   text: string;
   changes?: ChatChange[];
   results?: { tool: string; resultId: string; data: unknown }[];
-  candidates?: { runId: string; projectVersion: string; candidateCount: number; top: unknown[] };
+  candidates?: { projectVersion: string; candidateCount: number; top: unknown[] };
   suggestions?: string[];
   fileName?: string;
   streaming?: boolean;
@@ -183,7 +183,6 @@ export function applyEvent(
         ...msg,
         streaming: true,
         candidates: {
-          runId: e.runId,
           projectVersion: e.projectVersion,
           candidateCount: e.candidateCount,
           top: e.top,

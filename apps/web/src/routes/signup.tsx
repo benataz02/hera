@@ -8,14 +8,18 @@ import { SocialButtons } from "../components/SocialButtons.tsx";
 import { apexUrl, hardRedirect, isApex, safeRedirect } from "../lib/tenant.ts";
 
 export const Route = createFileRoute("/signup")({
-  validateSearch: (s: Record<string, unknown>): { redirect?: string } => ({
+  validateSearch: (s: Record<string, unknown>): { redirect?: string; email?: string } => ({
     redirect: typeof s.redirect === "string" ? s.redirect : undefined,
+    email: typeof s.email === "string" ? s.email : undefined,
   }),
   beforeLoad: async ({ context, search }) => {
-    if (!isApex())
-      return hardRedirect(
-        apexUrl(`/signup${search.redirect ? `?redirect=${encodeURIComponent(search.redirect)}` : ""}`),
-      );
+    if (!isApex()) {
+      const q = new URLSearchParams();
+      if (search.redirect) q.set("redirect", search.redirect);
+      if (search.email) q.set("email", search.email);
+      const qs = q.toString();
+      return hardRedirect(apexUrl(`/signup${qs ? `?${qs}` : ""}`));
+    }
     const data = await context.queryClient.ensureQueryData(sessionQuery);
     if (data?.session) {
       const to = safeRedirect(search.redirect);
@@ -28,9 +32,9 @@ export const Route = createFileRoute("/signup")({
 
 function Signup() {
   const navigate = useNavigate();
-  const { redirect: redirectTo } = Route.useSearch();
+  const { redirect: redirectTo, email: emailFromInvite } = Route.useSearch();
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(emailFromInvite ?? "");
   const [password, setPassword] = useState("");
 
   const queryClient = useQueryClient();
@@ -85,7 +89,7 @@ function Signup() {
       <div className="auth-or">or</div>
       <SocialButtons callbackURL="/onboarding" />
       <p className="auth-alt">
-        Already have an account? <Link to="/login" search={{ redirect: redirectTo }}>Sign in</Link>
+        Already have an account? <Link to="/login" search={{ redirect: redirectTo, email: emailFromInvite }}>Sign in</Link>
       </p>
     </AuthLayout>
   );

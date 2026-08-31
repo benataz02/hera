@@ -14,10 +14,10 @@ import { CandidatesMatrix } from "./CandidatesMatrix.tsx";
 // output panel below. Two computeOutputs passes per panel: the display pass ignores remove
 // flags (removed rows stay visible, struck through) and the totals pass applies everything —
 // the numbers shown are exactly what the server will recompute and store on Save selection.
-export function StepCandidatesReview({ model, lookups, runEntries, candidates, selection, onToggle, onChange, capped, widest, error, saved }: {
+export function StepCandidatesReview({ model, lookups, entries, candidates, selection, onToggle, onChange, capped, widest, error, saved }: {
   model: ModelDef;
   lookups: ResolvedLookups;
-  runEntries: Entries;
+  entries: Entries;
   candidates: Candidate[];
   selection: Sel[];
   onToggle: (candidateIdx: number, batchQty: number) => void;
@@ -27,7 +27,7 @@ export function StepCandidatesReview({ model, lookups, runEntries, candidates, s
   error: string | null;
   saved: boolean;
 }) {
-  const keys = openKeys(model, runEntries, candidates);
+  const keys = openKeys(model, entries, candidates);
   const setOv = (i: number, ov: OutputOverrides) =>
     onChange(selection.map((s, j) => (j === i ? { ...s, overrides: ov } : s)));
 
@@ -197,7 +197,7 @@ export function StepCandidatesReview({ model, lookups, runEntries, candidates, s
         quotation line and can be adjusted below. Totals recompute as you type; saving stores the
         selection and the server recomputes every number from the run snapshot.
       </Text>
-      <CandidatesMatrix model={model} runEntries={runEntries} candidates={candidates.map(toPriced)}
+      <CandidatesMatrix model={model} entries={entries} candidates={candidates.map(toPriced)}
         selection={selection} onToggle={onToggle} capped={capped} widest={widest} />
       {error ? <MessageStrip design="Negative" hideCloseButton>{error}</MessageStrip> : null}
       {saved ? <MessageStrip design="Positive" hideCloseButton>Selection saved — totals recomputed on the server.</MessageStrip> : null}

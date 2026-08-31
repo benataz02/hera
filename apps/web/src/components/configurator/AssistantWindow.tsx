@@ -187,8 +187,8 @@ export function AssistantWindow({
   model: ModelDef; lookups?: ResolvedLookups;
   entries: Entries; batches: number[];
   onApply: (changes: ChatChange[]) => void; // page applies values + aiMarks
-  onCandidates: (e: { runId: string; projectVersion: string }) => void;
-  onSelection: (e: { runId: string }) => void;
+  onCandidates: (e: { projectVersion: string }) => void;
+  onSelection: () => void;
   onBusyChange: (busy: boolean) => void;
   chat?: (input: AssistChatInput, opts: { signal: AbortSignal }) => Promise<AsyncIterable<AssistantEvent>>;
 }) {
@@ -498,7 +498,7 @@ function ChatLog({
   messages: LogMsg[]; model: ModelDef; lookups?: ResolvedLookups;
   onRevert: (msg: ChatMsg, key: string) => void; onRevertAll: (msg: ChatMsg) => void;
   onSuggestion: (text: string) => void;
-  onOpenCandidates: (e: { runId: string; projectVersion: string }) => void;
+  onOpenCandidates: (e: { projectVersion: string }) => void;
   onRetry: (turnId: string) => void; canRetry: (turnId: string) => boolean;
   hydratedCursor: string | null; hydrating: boolean; onLoadOlder: () => void;
 }) {
@@ -542,7 +542,7 @@ function Bubble({
   msg: LogMsg; model: ModelDef; lookups?: ResolvedLookups;
   onRevert?: (key: string) => void; onRevertAll?: () => void;
   showSuggestions: boolean; onSuggestion: (text: string) => void;
-  onOpenCandidates: (e: { runId: string; projectVersion: string }) => void;
+  onOpenCandidates: (e: { projectVersion: string }) => void;
   onRetry: () => void; canRetry: boolean;
 }) {
   const isUser = msg.role === "user";

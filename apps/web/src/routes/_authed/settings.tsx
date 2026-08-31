@@ -7,9 +7,12 @@ import {
   Text, Toast,
 } from "@ui5/webcomponents-react";
 import { orpc } from "../../orpc.ts";
-import { EntityValueHelp } from "../../components/b1/EntityValueHelp.tsx";
+import { EntityValueHelp } from "../../components/ValueHelp.tsx";
 
 export const Route = createFileRoute("/_authed/settings")({ component: Settings });
+
+const CUSTOMER_SELECT = ["CardCode", "CardName"];
+const CUSTOMER_FILTER = [{ field: "CardType", op: "eq" as const, value: "cCustomer" }];
 
 function Settings() {
   const qc = useQueryClient();
@@ -107,6 +110,8 @@ function Settings() {
             <EntityValueHelp
               entitySet="BusinessPartners"
               keyField="CardCode"
+              select={CUSTOMER_SELECT}
+              filter={CUSTOMER_FILTER}
               value={invCardCode}
               onChange={(v) => setInvCardCode(v == null ? "" : String(v))}
               headerText="Select a customer"

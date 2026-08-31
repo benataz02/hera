@@ -29,15 +29,17 @@ double-post.
 
 ## How the key is derived
 
-`configDocumentCommandId()` — SHA-256 over `tenant | project | run | canonicalJson(selection)`.
-Same picks, retried, yield the same key; a changed selection yields a new one. Object keys are
-sorted before hashing because Postgres reorders `jsonb` on the way back out.
+`configDocumentCommandId()` — SHA-256 over `tenant | project | canonicalJson(selected
+assignments)`. Same picks, retried, yield the same key; a changed selection yields a new one. It
+hashes each pick's assignment rather than its `candidateIdx`, because an index only means
+something against the candidate list that produced it and a recalculate replaces that list.
+Object keys are sorted before hashing because Postgres reorders `jsonb` on the way back out.
 
 Two layers guard the write, and they cover different failures:
 
 | Failure | Caught by |
 | --- | --- |
-| The user clicks twice; the response arrived | `config_run.b1_doc_entry` — HERA already knows the DocEntry |
+| The user clicks twice; the response arrived | `config_project.b1_doc_entry` — HERA already knows the DocEntry |
 | We POSTed, B1 created it, our response never arrived | the dedup UDF lookup, on the next attempt |
 
 Only the second one needs SAP's help, which is why the UDF exists.

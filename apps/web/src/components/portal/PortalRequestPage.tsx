@@ -57,12 +57,12 @@ export function PortalRequestPage({ id }: { id: string }) {
   if (q.isPending) return <BusyIndicator active delay={0} style={{ width: "100%", marginTop: "4rem" }} />;
   if (q.error)
     return <MessageStrip design="Negative" hideCloseButton style={{ margin: "1rem" }}>{q.error.message}</MessageStrip>;
-  const { project, model, latestRun } = q.data;
+  const { project, model } = q.data;
   const status = project.status as PortalStatus;
 
   if (status !== "draft" && status !== "calculated") {
     return (
-      <PortalRequestSummary project={{ ...project, status }} model={model} latestRun={latestRun}
+      <PortalRequestSummary project={{ ...project, status }} model={model}
         onWithdraw={() => withdraw.mutate({ projectId: id })}
         onReopen={() => reopen.mutate({ projectId: id })}
         busy={withdraw.isPending || reopen.isPending} />
@@ -71,8 +71,8 @@ export function PortalRequestPage({ id }: { id: string }) {
 
   const entries = entriesOverride ?? project.entries;
   const batches = batchesOverride ?? project.batches;
-  const selection = selOverride ?? (latestRun?.selection as Sel[] | null) ?? [];
-  const runReady = !!latestRun && status === "calculated";
+  const selection = selOverride ?? (project.selection as Sel[] | null) ?? [];
+  const runReady = project.candidates.length > 0 && status === "calculated";
   const step = stepOverride ?? (status === "draft" ? 0 : 2);
 
   const lk = lookups.data ? mergeQueryPicks(lookups.data, picks) : undefined;
@@ -92,9 +92,9 @@ export function PortalRequestPage({ id }: { id: string }) {
     } catch { /* update.error renders in StepBatches */ }
   };
 
-  const keys = latestRun ? openKeys(model.definition, latestRun.entries, latestRun.candidates) : [];
+  const keys = openKeys(model.definition, project.entries, project.candidates);
   const chosen = selection.map((s) => {
-    const c = latestRun!.candidates[s.candidateIdx]!;
+    const c = project.candidates[s.candidateIdx]!;
     const b = c.perBatch.find((x) => x.batchQty === s.batchQty)!;
     return { label: candidateLabel(keys, c.assignment), batchQty: s.batchQty, unitPrice: b.unitPrice, total: b.total };
   });
@@ -125,18 +125,18 @@ export function PortalRequestPage({ id }: { id: string }) {
           <StepBatches batches={batches} onChange={setBatches} onCalculate={() => void calculate()}
             running={update.isPending || run.isPending}
             error={update.error?.message ?? run.error?.message ?? null}
-            staleRun={!!latestRun && (status === "draft" || entriesDirty || batchesDirty)} />
+            staleRun={project.candidates.length > 0 && (status === "draft" || entriesDirty || batchesDirty)} />
         </WizardStep>
         <WizardStep titleText="Prices" icon="grid" data-idx="2" selected={step === 2} disabled={!runReady}>
-          {runReady && latestRun ? (
-            <StepCandidates model={model.definition} runEntries={latestRun.entries}
-              candidates={latestRun.candidates} selection={selection}
+          {runReady ? (
+            <StepCandidates model={model.definition} entries={project.entries}
+              candidates={project.candidates} selection={selection}
               onToggle={(i, b) => setSel(toggleSelection(selection, i, b))}
               onNext={() => goto(3)} nextLabel="Review request"
-              capped={runMeta?.capped ?? latestRun.candidates.length >= 200} widest={runMeta?.widest}
+              capped={runMeta?.capped ?? project.candidates.length >= 200} widest={runMeta?.widest}
               renderDetail={(i, label) => (
                 <PortalCandidateDetail label={label} model={model.definition}
-                  candidate={latestRun.candidates[i]!} candidateIdx={i} selection={selection} />
+                  candidate={project.candidates[i]!} candidateIdx={i} selection={selection} />
               )} />
           ) : null}
         </WizardStep>
