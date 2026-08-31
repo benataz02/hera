@@ -148,3 +148,45 @@ export async function ensureEntityVariants(tenantId: string, userId: string, for
     await ensureStandardVariants(tenantId, userId, b1VariantKey(entity), entityVariantDefs(entity), force);
   }
 }
+
+// --- Portal document views ---------------------------------------------------------------------
+// The client's four document lists. Same machinery as the B1 entity views, a different key
+// namespace, and a much shorter field list: no CardCode/CardName (the client IS the card), no
+// cost, margin or salesperson. The PORTAL_DOC/PORTAL_LINE allowlist in the portal router means
+// adding one of those to a variant by hand still would not fetch it.
+
+/** The `entity` key a portal document page saves its views under. Must match the web side's
+ *  `portal:${entity}` and the `startsWith("portal:")` test that makes those views read-only. */
+export const portalVariantKey = (entity: string) => `portal:${entity}`;
+
+const PORTAL_DOC_ENTITIES = ["Quotations", "Orders", "DeliveryNotes", "Invoices"];
+const PORTAL_LIST_FIELDS = ["DocNum", "DocDate", "DocDueDate", "NumAtCard", "DocumentStatus", "DocTotal"];
+const PORTAL_OBJECT_FIELDS = [
+  "DocNum", "DocDate", "DocDueDate", "DocumentStatus", "DocTotal", "DocCurrency", "NumAtCard", "Comments",
+];
+const PORTAL_LINE_FIELDS = ["ItemCode", "ItemDescription", "Quantity", "UnitPrice", "LineTotal"];
+
+/** Standard list + object views for the four portal document entities. Idempotent. */
+export async function ensurePortalVariants(tenantId: string, userId: string, force = false) {
+  for (const entity of PORTAL_DOC_ENTITIES) {
+    await ensureStandardVariants(
+      tenantId,
+      userId,
+      portalVariantKey(entity),
+      {
+        list: {
+          select: PORTAL_LIST_FIELDS,
+          filter: [],
+          // Newest first — DocEntry, not DocNum, which restarts per series.
+          orderby: [{ field: "DocEntry", dir: "desc" as const }],
+          filterBar: PORTAL_LIST_FIELDS,
+        },
+        object: {
+          header: shown(PORTAL_OBJECT_FIELDS),
+          sections: [{ id: "DocumentLines", visible: true, fields: shown(PORTAL_LINE_FIELDS) }],
+        },
+      },
+      force,
+    );
+  }
+}

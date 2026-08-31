@@ -3,7 +3,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { organization } from "better-auth/plugins";
 import { db } from "@hera/db/client";
 import * as schema from "@hera/db/schema";
-import { ensureConfiguratorVariants, ensureEntityVariants } from "./seed-variants.ts";
+import { ensureConfiguratorVariants, ensureEntityVariants, ensurePortalVariants } from "./seed-variants.ts";
 
 const baseDomain = process.env.APP_BASE_DOMAIN ?? "lvh.me";
 
@@ -34,6 +34,7 @@ export const auth = betterAuth({
         afterCreateOrganization: async ({ organization: org, user }) => {
           await ensureConfiguratorVariants(org.id, user.id);
           await ensureEntityVariants(org.id, user.id);
+          await ensurePortalVariants(org.id, user.id);
         },
       },
     }),

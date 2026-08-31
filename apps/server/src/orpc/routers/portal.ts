@@ -3,7 +3,7 @@ import { z } from "zod";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import {
-  db, configModel, configProject, configRun, ListVariantDefZ, member, organization, portalClient, user,
+  db, configModel, configProject, configRun, ListVariantDefZ, member, organization, portalClient, uiVariant, user,
   type ProjectEvent, type RunCandidate,
 } from "@hera/db";
 import { EntriesZ, type Entries, type ModelDef } from "@hera/config-engine";
@@ -406,6 +406,39 @@ export const portalRouter = {
         return printDocument(context.tenantId, input.entity, input.docEntry);
       }),
   },
+
+  /** The seeded `portal:` views, read-only. variants.list is userProcedure (it fences clients
+   *  out), so this is the client's door to the same rows: shared ones only, never personal ones,
+   *  and never writable — there is no portal counterpart to variants.save. */
+  variants: clientProcedure
+    .input(z.object({ page: z.enum(["list", "object"]), entity: z.string() }))
+    .handler(async ({ input, context }) => {
+      if (!input.entity.startsWith("portal:"))
+        throw new ORPCError("FORBIDDEN", { message: "Not a portal view" });
+      const rows = await db
+        .select({
+          id: uiVariant.id,
+          name: uiVariant.name,
+          shared: uiVariant.shared,
+          isDefault: uiVariant.isDefault,
+          isStandard: uiVariant.isStandard,
+          definition: uiVariant.definition,
+        })
+        .from(uiVariant)
+        .where(and(
+          eq(uiVariant.tenantId, context.tenantId),
+          eq(uiVariant.page, input.page),
+          eq(uiVariant.entity, input.entity),
+          eq(uiVariant.shared, true),
+        ));
+      // Same field set as variants.list so the web hook's two branches stay one type. userId and
+      // author are blanked rather than joined: the internal user who seeded the view is not the
+      // client's business.
+      return {
+        variants: rows.map((r) => ({ ...r, userId: "", author: "", canManage: false })),
+        isAdmin: false,
+      };
+    }),
 
   // calculated → requested. Selection is validated against the latest run and stored on it;
   // never ack a submit without the guarded UPDATE landing.

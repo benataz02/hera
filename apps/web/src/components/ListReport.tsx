@@ -63,7 +63,7 @@ export function ListReport({
   listSpec, title, columns: cols, keyField, rows, total,
   loading, error, hasMore, onLoadMore, onRowClick, actions, onDelete, selectionActions, noData,
 }: ListReportProps) {
-  const { entity, spec, setSpec, variants, selectedName, setSelectedName, applyVariant, dirty, isAdmin, save, remove, setWidths } = listSpec;
+  const { entity, spec, setSpec, variants, selectedName, setSelectedName, applyVariant, dirty, isAdmin, readOnly, save, remove, setWidths } = listSpec;
 
   const [selected, setSelected] = useState(NO_SELECTION);
   const [deleting, setDeleting] = useState(false);
@@ -174,6 +174,8 @@ export function ListReport({
       if (!widths || sameDef(widths, lastWidthsRef.current)) return;
       lastWidthsRef.current = widths;
       setSpec((s) => ({ ...s, widths }));
+      // variants.setWidths is userProcedure; a portal client would only ever get a FORBIDDEN.
+      if (readOnly) return;
       const row = variants.find((v) => v.name === selectedName);
       if (!row) return;
       clearTimeout(widthsSaveTimer.current);
@@ -227,6 +229,10 @@ export function ListReport({
       ))}
     </VariantManagement>
   );
+
+  // No save, no Save As, no Manage Views for a user who cannot own a view — a variant switcher
+  // with one entry and every action disabled is worse than a plain title.
+  const heading = readOnly ? <Title level="H4">{title}</Title> : variantManagement;
 
   // One FilterGroupItem per column. Text/key columns are shown in the bar; the rest live in the
   // "Adapt Filters" dialog (hiddenInFilterBar) so the bar isn't a wall of inputs.
@@ -312,8 +318,8 @@ export function ListReport({
       // title padding (0.5rem→0.25rem). // ponytail: private theme vars, revisit if they get renamed.
       titleArea={
         <DynamicPageTitle
-          heading={variantManagement}
-          snappedHeading={variantManagement}
+          heading={heading}
+          snappedHeading={heading}
           actionsBar={actions}
           style={{ "--_ui5_dynamic_page_title_padding_top": "0.25rem", "--_ui5_dynamic_page_title_padding_bottom": "0.25rem" } as CSSProperties}
         />

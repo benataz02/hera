@@ -6,13 +6,13 @@
  * New tenants get these from auth.ts's afterCreateOrganization hook — this is the one-shot
  * catch-up for orgs created before that existed. Idempotent: safe to re-run.
  *
- * Seeds, per org: models / configs Standard (+ the shared "Requested" view on configs), and the
- * Standard list + object views for the curated SAP B1 entities. A Standard view an admin has
- * already shaped is left alone unless --force.
+ * Seeds, per org: models / configs Standard (+ the shared "Requested" view on configs), the
+ * Standard list + object views for the curated SAP B1 entities, and the portal document views. A
+ * Standard view an admin has already shaped is left alone unless --force.
  */
 import { eq } from "drizzle-orm";
 import { db, pool, organization, member } from "@hera/db";
-import { ensureConfiguratorVariants, ensureEntityVariants } from "../apps/server/src/seed-variants.ts";
+import { ensureConfiguratorVariants, ensureEntityVariants, ensurePortalVariants } from "../apps/server/src/seed-variants.ts";
 
 const args = process.argv.slice(2);
 const force = args.includes("--force");
@@ -38,7 +38,8 @@ async function main(): Promise<void> {
 
     await ensureConfiguratorVariants(org.id, owner.userId);
     await ensureEntityVariants(org.id, owner.userId, force);
-    console.log(`- ${org.slug}: models, configs, B1 entities${force ? " (forced)" : ""}`);
+    await ensurePortalVariants(org.id, owner.userId, force);
+    console.log(`- ${org.slug}: models, configs, B1 entities, portal documents${force ? " (forced)" : ""}`);
   }
   console.log(`Seeded ${targets.length} organization(s).`);
 }

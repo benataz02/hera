@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { ListVariantDefZ, ObjectVariantDefZ } from "@hera/db";
-import { b1VariantKey, entityVariantDefs } from "../src/seed-variants.ts";
+import { and, eq } from "drizzle-orm";
+import { db, uiVariant, ListVariantDefZ, ObjectVariantDefZ } from "@hera/db";
+import { b1VariantKey, entityVariantDefs, ensurePortalVariants } from "../src/seed-variants.ts";
 import { ENTITY_PROFILES } from "../src/entity-profiles.ts";
+import { makeTenant, makeUser } from "./harness.ts";
 
 // The seeded definitions are written by hand and go straight into jsonb — the variants router
 // would reject a malformed one on save, but nothing validates the seed itself.
@@ -37,5 +39,32 @@ describe("entityVariantDefs", () => {
     const { list, object } = entityVariantDefs("BusinessPartners");
     expect(list.select).toEqual(["CardName", "CardCode", "CardType"]);
     expect(object.sections).toEqual([]);
+  });
+});
+
+// Real Postgres, like the rest of the integration suites — skipped when DATABASE_URL is unset.
+describe.skipIf(!process.env.DATABASE_URL)("ensurePortalVariants", () => {
+  test("portal document views are seeded, shared and read-only-shaped", async () => {
+    const { tenantId } = await makeTenant();
+    const user = await makeUser("owner", tenantId);
+    await ensurePortalVariants(tenantId, user.userId);
+
+    const rows = await db.select().from(uiVariant)
+      .where(and(eq(uiVariant.tenantId, tenantId), eq(uiVariant.entity, "portal:Invoices")));
+    expect(rows.map((r) => r.page).sort()).toEqual(["list", "object"]);
+    const list = rows.find((r) => r.page === "list")!;
+    expect(list.shared).toBe(true);
+    expect(list.isStandard).toBe(true);
+    const def = list.definition as { select: string[] };
+    expect(def.select).toContain("DocNum");
+    // The client IS the card: no CardCode/CardName, and no cost or margin fields.
+    for (const banned of ["CardCode", "CardName", "GrossProfit", "SalesPersonCode"])
+      expect(def.select).not.toContain(banned);
+
+    // Idempotent.
+    await ensurePortalVariants(tenantId, user.userId);
+    const again = await db.select().from(uiVariant)
+      .where(and(eq(uiVariant.tenantId, tenantId), eq(uiVariant.entity, "portal:Invoices")));
+    expect(again).toHaveLength(2);
   });
 });
