@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { IllustratedMessage, Button, ObjectStatus, Text, Toolbar, ToolbarButton } from "@ui5/webcomponents-react";
+import { IllustratedMessage, ObjectStatus, Text, Toolbar, ToolbarButton } from "@ui5/webcomponents-react";
 import "@ui5/webcomponents-fiori/dist/illustrations/NoEntries.js";
 import { orpc } from "../../../orpc.ts";
 import { applySpec, useListSpec, type ListColumn } from "../../../variants.ts";
