@@ -3,13 +3,18 @@ import { z } from "zod";
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import {
-  db, configModel, configProject, configRun, member, organization, portalClient, user,
+  db, configModel, configProject, configRun, ListVariantDefZ, member, organization, portalClient, user,
   type ProjectEvent, type RunCandidate,
 } from "@hera/db";
 import { EntriesZ, type Entries, type ModelDef } from "@hera/config-engine";
+import { escapeLiteral, type B1EntitySchema } from "@hera/b1";
 import { adminProcedure, baseDomain, clientProcedure, sessionProcedure } from "../base.ts";
 import { hashToken } from "../../crypto.ts";
 import { tenantSlugFromHost } from "../../tenant.ts";
+import { tenantConnector, viaB1 } from "../../b1.ts";
+import { entitySchema } from "../../entity-meta.ts";
+import { bad, readOne, readRows } from "../../entity-read.ts";
+import { printDocument } from "../../print.ts";
 import {
   applySelection, cachedLookups, executeRun, loadModel, modelRunner, pushEvent,
   QueryPageZ, queryTablePage,
@@ -125,6 +130,73 @@ async function loadOwnProject(id: string, ctx: { tenantId: string; cardCode: str
   if (!p) throw new ORPCError("NOT_FOUND");
   return p;
 }
+
+// --- The client's own SAP documents ------------------------------------------------------------
+// Four entity sets, read-only, always fenced to the caller's CardCode.
+//
+// The fence is this list, not the seeded variant. A variant is UI; this is the boundary.
+export const PORTAL_ENTITIES = new Set(["Quotations", "Orders", "DeliveryNotes", "Invoices"]);
+
+// DocumentLines is on the header list because it is a field of the document; its own columns are
+// PORTAL_LINE. CardCode is deliberately absent: the client IS the card, and leaving it out of the
+// schema is what makes it impossible for a client to filter, sort or select on it.
+export const PORTAL_DOC = [
+  "DocEntry", "DocNum", "DocDate", "DocDueDate", "DocumentStatus",
+  "DocTotal", "DocCurrency", "NumAtCard", "Comments", "DocumentLines",
+] as const;
+export const PORTAL_LINE = [
+  "LineNum", "ItemCode", "ItemDescription", "Quantity", "UnitPrice", "LineTotal",
+] as const;
+
+/**
+ * The client's view of a sales document, as a schema.
+ *
+ * Making the allowlist *be* the schema means compileList's existing rules do the fencing and
+ * there is no second policy to keep in step: a `select` naming a hidden field is silently
+ * dropped (a saved view outliving a field should still open), a `filter` naming one throws
+ * (dropping it would show MORE rows than were asked for), and free-text search only reaches
+ * allowed string columns.
+ */
+export function portalSchema(schema: B1EntitySchema): B1EntitySchema {
+  const doc = new Set<string>(PORTAL_DOC);
+  const line = new Set<string>(PORTAL_LINE);
+  return {
+    ...schema,
+    fields: schema.fields
+      .filter((f) => doc.has(f.name))
+      .map((f) => (f.kind === "collection" && f.fields ? { ...f, fields: f.fields.filter((x) => line.has(x.name)) } : f)),
+  };
+}
+
+/** Explicit allow-list projection of one document. Mirrors portalSchema for the response body:
+ *  a read that came back wide (readEntity takes no $select here — see docs.one) still leaves
+ *  narrow. A new B1 field defaults to excluded, not leaked. */
+function projectDoc(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of PORTAL_DOC) {
+    if (!(k in row)) continue;
+    if (k === "DocumentLines" && Array.isArray(row[k])) {
+      out[k] = (row[k] as Record<string, unknown>[]).map((l) =>
+        Object.fromEntries(PORTAL_LINE.filter((f) => f in l).map((f) => [f, l[f]])));
+    } else {
+      out[k] = row[k];
+    }
+  }
+  return out;
+}
+
+const PortalEntityZ = z.string().refine((e) => PORTAL_ENTITIES.has(e), "Not a portal document");
+
+/** Transport + the filtered schema for one portal entity. */
+async function portalEntity(tenantId: string, entity: string) {
+  const { b1 } = await tenantConnector(tenantId);
+  const full = await viaB1(() => entitySchema(tenantId, b1, entity)).catch(bad);
+  return { b1, schema: portalSchema(full) };
+}
+
+/** `CardCode eq '…'`, appended to the COMPILED filter. Not to the spec: CardCode is not in the
+ *  portal schema, so a client cannot name it, and compileList never sees this clause. */
+const cardFence = (cardCode: string) => `CardCode eq '${escapeLiteral(cardCode)}'`;
 
 // --- Client side ---
 export const portalRouter = {
@@ -288,6 +360,51 @@ export const portalRouter = {
       });
       return { ok: true };
     }),
+  },
+
+  // Read-only SAP documents for this client's business partner. Every procedure here is
+  // clientProcedure + the CardCode fence + the PORTAL_DOC/PORTAL_LINE allowlist; the underlying
+  // reads are literally the same functions entities.* uses.
+  docs: {
+    /** One entity's fields, already narrowed to what a client may see. Same $metadata cache as
+     *  entities.schema — the filtering happens after the cache, not inside it. */
+    schema: clientProcedure
+      .input(z.object({ entity: PortalEntityZ }))
+      .handler(async ({ input, context }) => (await portalEntity(context.tenantId, input.entity)).schema),
+
+    rows: clientProcedure
+      .input(z.object({
+        entity: PortalEntityZ,
+        spec: ListVariantDefZ,
+        top: z.number().int().min(1).max(200).default(50),
+        skip: z.number().int().min(0).optional(),
+        count: z.boolean().optional(),
+      }))
+      .handler(async ({ input, context }) => {
+        const { b1, schema } = await portalEntity(context.tenantId, input.entity);
+        return readRows(b1, schema, input.entity, input, cardFence(context.cardCode));
+      }),
+
+    /** One document. Read wide and projected here rather than $select-ed: a complex collection in
+     *  $select is a shape B1 has no need to accept, and the allowlist is the same either way. */
+    one: clientProcedure
+      .input(z.object({ entity: PortalEntityZ, key: z.union([z.string(), z.number()]) }))
+      .handler(async ({ input, context }) => {
+        const { b1, schema } = await portalEntity(context.tenantId, input.entity);
+        const { row } = await readOne(b1, schema, input.entity, input.key);
+        if (row.CardCode !== context.cardCode) throw new ORPCError("NOT_FOUND");
+        // No ETag: nothing on the portal writes to SAP, and an ETag is only useful to a writer.
+        return { row: projectDoc(row), etag: null as string | null };
+      }),
+
+    print: clientProcedure
+      .input(z.object({ entity: PortalEntityZ, docEntry: z.number().int() }))
+      .handler(async ({ input, context }) => {
+        const { b1, schema } = await portalEntity(context.tenantId, input.entity);
+        const { row } = await readOne(b1, schema, input.entity, input.docEntry);
+        if (row.CardCode !== context.cardCode) throw new ORPCError("NOT_FOUND");
+        return printDocument(context.tenantId, input.entity, input.docEntry);
+      }),
   },
 
   // calculated → requested. Selection is validated against the latest run and stored on it;
