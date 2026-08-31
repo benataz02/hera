@@ -9,6 +9,7 @@ import { assertEntity, entityList, entitySchema } from "../../entity-meta.ts";
 import { compileList } from "../../entity-list.ts";
 import { missingRequired, pickEditable, profileOf } from "../../entity-profiles.ts";
 import { buildCopy, COPY_SELECT, findFlow, flowsFrom } from "../../doc-copy.ts";
+import { printDocument } from "../../print.ts";
 
 // The B1 entity surface: list what B1 exposes, read a schema, page rows, open one row — for any
 // entity set. Writing is different: update/create/copy work only on the curated entities in
@@ -200,6 +201,12 @@ export const entitiesRouter = {
       const row = res.data as Record<string, unknown>;
       return { entity: flow.target, docEntry: Number(row.DocEntry), docNum: row.DocNum ?? null, row };
     }),
+
+  /** The document's own SAP print layout, rendered by the API Gateway on-prem and returned as
+   *  base64. `/b1` is admin-only already; PRINTABLE is the second gate and the one that travels. */
+  print: adminProcedure
+    .input(z.object({ entity: EntityZ, docEntry: z.number().int() }))
+    .handler(({ input, context }) => printDocument(context.tenantId, input.entity, input.docEntry)),
 
   /** Entity sets this admin pinned onto the SAP sidenav group. Empty until the first pin. */
   navPins: adminProcedure.handler(async ({ context }) => ({

@@ -85,6 +85,15 @@ export function startMockAgent(store: MockStore = {}): MockAgent {
           Object.assign(found, body.data, { "@odata.etag": `W/"${nextEtag++}"` });
           return Response.json({ status: 204, data: null });
         }
+        case "/print": {
+          if (!["Quotations", "Orders", "DeliveryNotes", "Invoices"].includes(body.entity))
+            return fail(400, null, `No print layout configured for '${body.entity}'`);
+          return Response.json({
+            // "%PDF-1.4\n" — enough for a caller to prove it decoded the base64 it was given.
+            pdf: Buffer.from(`%PDF-1.4\n${body.entity}:${body.docEntry}`).toString("base64"),
+            fileName: `${body.entity}-${body.docEntry}.pdf`,
+          });
+        }
         case "/metadata":
           return Response.json({ status: 200, data: metadata.xml });
         default:

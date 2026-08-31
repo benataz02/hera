@@ -1,7 +1,7 @@
 import { ORPCError } from "@orpc/server";
 import { eq } from "drizzle-orm";
 import { db, sapConnection } from "@hera/db";
-import { B1Error, RemoteTransport, readPages, rowsOrThrow, type B1Transport, type Connector } from "@hera/b1";
+import { B1Error, RemoteTransport, readPages, rowsOrThrow, type AgentTarget, type B1Transport, type Connector } from "@hera/b1";
 import { decryptSecret } from "./crypto.ts";
 import { DEFAULT_PAGE, type QueryRunner } from "./lookups.ts";
 
@@ -9,20 +9,29 @@ export const SAP_UNAVAILABLE = "SAP is not connected.";
 
 export type { Connector };
 
-/** The tenant's on-prem agent, as a pair of transports. One PK select per call — the
- *  transports hold nothing but config, so there is nothing worth caching. */
-export async function tenantConnector(tenantId: string): Promise<Connector> {
+export type TenantAgent = AgentTarget & { beasEnabled: boolean };
+
+/** The tenant's agent, as plain config. One PK select — nothing here is worth caching. Printing
+ *  needs this without a transport, so the row->config mapping lives here rather than inline. */
+export async function agentTarget(tenantId: string): Promise<TenantAgent> {
   const [row] = await db.select().from(sapConnection).where(eq(sapConnection.tenantId, tenantId)).limit(1);
   if (!row) throw new ORPCError("SERVICE_UNAVAILABLE", { message: SAP_UNAVAILABLE });
-  const common = {
+  return {
     agentUrl: row.agentUrl,
     secret: decryptSecret(row.secret),
     accessClientId: row.accessClientId,
     accessClientSecret: row.accessClientSecret,
+    beasEnabled: row.beasEnabled,
   };
+}
+
+/** The tenant's on-prem agent, as a pair of transports. The transports hold nothing but config,
+ *  so there is nothing worth caching. */
+export async function tenantConnector(tenantId: string): Promise<Connector> {
+  const a = await agentTarget(tenantId);
   return {
-    b1: new RemoteTransport({ ...common, target: "b1" }),
-    beas: row.beasEnabled ? new RemoteTransport({ ...common, target: "beas" }) : null,
+    b1: new RemoteTransport({ ...a, target: "b1" }),
+    beas: a.beasEnabled ? new RemoteTransport({ ...a, target: "beas" }) : null,
   };
 }
 
