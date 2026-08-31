@@ -34,6 +34,10 @@ export type ListReportProps = {
   actions?: UI5WCSlotsNode;
   /** enables the bulk Delete button in the count bar. Return false to keep the selection (cancel). */
   onDelete?: (rows: Row[]) => Promise<boolean | void> | boolean | void;
+  /** Extra count-bar actions driven by the current selection. Rendered left of Delete; return
+   *  null to draw nothing. ListReport never learns what these actions are.
+   *  This cashes in the old `// ponytail: one bulk action; swap for a render-prop slot`. */
+  selectionActions?: (rows: Row[]) => ReactNode;
   /** must be a stable reference */
   noData?: (reason: "Empty" | "Filtered") => ReactNode;
 };
@@ -57,7 +61,7 @@ const tableStyle: CSSProperties = {
 // processing (manualSortBy/manualFilters), so both sources behave identically.
 export function ListReport({
   listSpec, title, columns: cols, keyField, rows, total,
-  loading, error, hasMore, onLoadMore, onRowClick, actions, onDelete, noData,
+  loading, error, hasMore, onLoadMore, onRowClick, actions, onDelete, selectionActions, noData,
 }: ListReportProps) {
   const { entity, spec, setSpec, variants, selectedName, setSelectedName, applyVariant, dirty, isAdmin, save, remove, setWidths } = listSpec;
 
@@ -288,6 +292,7 @@ export function ListReport({
       startContent={<Title level="H5">{title} ({selected.rows.length}/{total})</Title>}
       endContent={
         <>
+          {selectionActions?.(selected.rows)}
           {onDelete ? (
             <Button icon="delete" design="Transparent" disabled={!selected.rows.length || deleting} onClick={runDelete}>
               Delete

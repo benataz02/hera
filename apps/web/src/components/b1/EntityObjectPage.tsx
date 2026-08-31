@@ -12,6 +12,7 @@ import { formatCell } from "../../listSpec.ts";
 import { orpc } from "../../orpc.ts";
 import { toast } from "../toast.ts";
 import { EntityField } from "./EntityField.tsx";
+import { PrintActions } from "./PrintActions.tsx";
 
 // One B1 row as a Fiori ObjectPage: scalar fields in the header section, each complex collection
 // as its own section.
@@ -99,6 +100,7 @@ export function EntityObjectPage({ entity, entityKey }: { entity: string; entity
                   // send a blind PATCH.
                   disabled={!etag} onClick={() => setDraft({})} />
               ) : null}
+              <PrintActions entity={entity} docEntry={Number(row.DocEntry)} disabled={editing} />
               {(meta.data?.flows ?? []).map((f) => (
                 <ToolbarButton key={f.target} icon="copy" text={f.label} disabled={copy.isPending || editing}
                   onClick={() => copy.mutate({ sourceEntity: entity, targetEntity: f.target, docEntry: Number(row.DocEntry) })} />

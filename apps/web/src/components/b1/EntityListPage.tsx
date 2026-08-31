@@ -6,6 +6,7 @@ import "@ui5/webcomponents-fiori/dist/illustrations/NoEntries.js";
 import { client, orpc } from "../../orpc.ts";
 import { useListSpec, type ListColumn } from "../../variants.ts";
 import { ListReport } from "../ListReport.tsx";
+import { PrintActions } from "./PrintActions.tsx";
 
 // Any B1 entity set as a list report. The saved view IS the query: the server compiles the same
 // ListVariantDef into OData, so a variant behaves here exactly as it does on a local list.
@@ -72,6 +73,10 @@ export function EntityListPage({ entity }: { entity: string }) {
       error={page.error}
       hasMore={page.hasNextPage && !page.isFetchingNextPage}
       onLoadMore={() => { if (!page.isFetchingNextPage) void page.fetchNextPage(); }}
+      selectionActions={(rows) =>
+        // Printing is a one-document action: enabled on exactly one selected row.
+        rows.length === 1 ? <PrintActions entity={entity} docEntry={Number(rows[0]!.DocEntry)} /> : null
+      }
       onRowClick={(row) => {
         const keys = schema.data!.keys;
         // A composite key travels as JSON so one route param can carry both halves.
