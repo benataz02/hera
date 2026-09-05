@@ -5,17 +5,17 @@
   "exports": {
     ".": "./src/index.ts",
     "./schema": "./src/schema/index.ts",
-    "./client": "./src/client.ts",
-    "./listener": "./src/listener.ts"
+    "./client": "./src/client.ts"
   },
   "dependencies": {
+    "@hera/b1": "workspace:*",
     "@hera/config-engine": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "pg": "^8.22.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.14",
+    "@types/bun": "^1.4.0",
     "@types/pg": "^8.20.0",
     "drizzle-kit": "^0.31.10"
   }

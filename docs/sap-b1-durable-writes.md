@@ -1,86 +1,84 @@
 # SAP B1 durable writes — operator runbook
 
-Create for document entities requires a **unique** dedup UDF on the company database.
-HERA’s cloud and Service Layer **cannot** inspect index uniqueness. Enabling create is an
-operator assertion that the UDF and unique index exist and were re-verified after upgrades.
+Quotation write-back is idempotent through a **dedup UDF** on the company database. HERA writes a
+deterministic key into it on create and looks the key up before creating, so a retried request —
+or a request whose response never came back — finds the document it already posted instead of
+posting a second one.
 
-## Prerequisites per document table
+HERA's cloud and the Service Layer **cannot** inspect index uniqueness. The unique index is an
+operator assertion, re-verified after every upgrade.
 
-For each Service Layer entity set you enable for create, provision on the matching header
-table:
+## Prerequisite: one UDF per document table you write to
 
-| Entity set (example) | SAP table (example) | UDF | Unique index |
+| Entity set | SAP table | UDF | Unique index |
 | --- | --- | --- | --- |
-| `Quotations` | OQUT | `U_HERA_DedupKey` (string) | Unique on `U_HERA_DedupKey` |
-| `Orders` | ORDR | `U_HERA_DedupKey` (string) | Unique on `U_HERA_DedupKey` |
-| Other sales/purchase documents with a HERA create profile | Matching `O*` header | Same UDF name as the profile (`U_HERA_DedupKey`) | Unique on that UDF |
+| `Quotations` | OQUT | `U_HERA_DedupKey` — alphanumeric, length 64 | Unique on `U_HERA_DedupKey` |
 
-Use the same UDF name the entity profile expects (`create.dedupField`). Do not enable create
-in the agent config until the unique index is in place on that company DB.
+The UDF name is `DEDUP_UDF` in `apps/server/src/config-quote.ts`. Only Quotations needs it today:
+that is the one entity HERA creates on its own initiative. Curated create/copy
+(`entities.create`, `entities.copy`) are user-initiated from a page and are not retried on the
+user's behalf, so they do not carry a dedup key.
 
-## Agent configuration
+Without the UDF, quote write-back **refuses to run** and says so:
 
-On the on-prem agent (`.env` or WinSW `hera-agent-service.xml`):
+> Cannot check for an existing quotation: `U_HERA_DedupKey` is missing from Sales Quotation in
+> SAP. Create it (alphanumeric, length 64) and try again.
 
-```text
-B1_CREATE_CAPABILITIES=Quotations:U_HERA_DedupKey,Orders:U_HERA_DedupKey
-```
+That is deliberate. Falling back to "create anyway" would trade a clear setup error for a silent
+double-post.
 
-Syntax: comma-separated `EntitySet:UdfName` pairs. Malformed pairs are ignored. At startup
-and after each metadata refresh the agent:
+## How the key is derived
 
-1. Parses the env value.
-2. Confirms each entity and UDF exist in Service Layer `$metadata`.
-3. Reports **only valid** pairs via authenticated `sync.heartbeat`.
-4. Logs rejected pairs (missing entity, missing UDF, duplicates).
+`configDocumentCommandId()` — SHA-256 over `tenant | project | canonicalJson(selected
+assignments)`. Same picks, retried, yield the same key; a changed selection yields a new one. It
+hashes each pick's assignment rather than its `candidateIdx`, because an index only means
+something against the candidate list that produced it and a recalculate replaces that list.
+Object keys are sorted before hashing because Postgres reorders `jsonb` on the way back out.
 
-On **each successful pull**, the agent re-sends that last validated list (no EDMX hop) so
-`write_capabilities_checked_at` stays within the ~90s freshness window while the agent is
-actively pulling. A one-shot startup report alone would self-disable create after ~90s.
+Two layers guard the write, and they cover different failures:
 
-The cloud stores the report in `tenant_integration.write_capabilities` and
-`write_capabilities_checked_at`. `entities.capabilities` exposes create/edit gates; a stale
-or offline report **disables create** but **does not** disable display or safe updates.
+| Failure | Caught by |
+| --- | --- |
+| The user clicks twice; the response arrived | `config_project.b1_doc_entry` — HERA already knows the DocEntry |
+| We POSTed, B1 created it, our response never arrived | the dedup UDF lookup, on the next attempt |
 
-## Cloud DB columns (operator SQL)
-
-`packages/db/drizzle/` is local/gitignored. Apply these nullable columns on
-`tenant_integration` if missing (idempotent check recommended before run):
-
-```sql
-ALTER TABLE "tenant_integration" ADD COLUMN IF NOT EXISTS "write_capabilities" jsonb;
-ALTER TABLE "tenant_integration" ADD COLUMN IF NOT EXISTS "write_capabilities_checked_at" timestamptz;
-```
-
-Or generate/apply via the usual Drizzle migrate path when you have a local
-`packages/db/drizzle/*write-capabilities*.sql` (same two `ALTER TABLE` statements
-without `IF NOT EXISTS`). Do **not** recreate `tenant_integration`.
+Only the second one needs SAP's help, which is why the UDF exists.
 
 ## Duplicate-key smoke check (test company only)
 
 In a **designated test company DB** (never production first):
 
-1. Create a document through HERA (or Service Layer) with a known `U_HERA_DedupKey` value.
-2. Attempt a second POST with the **same** dedup value.
-3. Expect a unique-constraint / conflict failure from B1 — not a second document.
-4. Confirm GET-by-UDF returns the first document only.
+1. Create a quotation through HERA and note the `U_HERA_DedupKey` value.
+2. Attempt a second POST with the **same** dedup value, through the Service Layer directly.
+3. Expect a unique-constraint failure from B1 — not a second document.
+4. Confirm `GET Quotations?$filter=U_HERA_DedupKey eq '<key>'` returns exactly one document.
 
-If step 3 inserts a second row, the unique index is missing or wrong — fix before enabling
-create for that entity in any real company.
+If step 3 inserts a second row, the unique index is missing or wrong. HERA's check-then-create
+still prevents the common case, but the index is what makes it airtight under a genuine race.
 
 ## Post-upgrade re-verification (mandatory)
 
 After any SAP B1 upgrade, company restore, or UDF/index change:
 
-1. Confirm the UDF still exists on each enabled header table.
+1. Confirm the UDF still exists on OQUT.
 2. Confirm the unique index still exists and is unique (DBA / HANA or SQL tooling — **not**
    Service Layer).
-3. Restart the agent so it re-validates EDMX and re-heartbeats.
-4. Confirm `entities.capabilities` shows `canCreate: true` for each intended entity.
-5. Re-run the duplicate-key smoke check in the test company.
+3. Re-run the duplicate-key smoke check in the test company.
+4. Run `bun --env-file=.env scripts/e2e.ts <slug>` to confirm the agent still reaches B1.
+
+## Concurrent edits (curated update)
+
+Updates go out with `If-Match` set to the `@odata.etag` read back with the row. A row changed by
+someone else in the meantime comes back as a 412, which HERA surfaces as a conflict:
+
+> The SAP document changed since it was read.
+
+There is no "force" path. Re-open the row and redo the edit — that is the only safe answer, and it
+is the single clearest reason the B1 MCP server's write layer is not in this path: it has no ETag
+handling anywhere, so its updates are last-write-wins.
 
 ## Explicit limitation
 
-**Service Layer cannot inspect index uniqueness.** HERA only checks that the UDF appears in
-`$metadata`. Unique-index provisioning and verification remain an operator checklist item;
-the UI must not claim otherwise.
+**Service Layer cannot inspect index uniqueness.** HERA only checks that a filter on the UDF is
+accepted. Unique-index provisioning and verification remain an operator checklist item; the UI
+must not claim otherwise.

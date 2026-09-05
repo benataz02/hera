@@ -1,8 +1,7 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Form, FormGroup, FormItem, Input, Label, MessageStrip, Option, Select } from "@ui5/webcomponents-react";
+import { Form, FormGroup, FormItem, Input, Label, Option, Select } from "@ui5/webcomponents-react";
 import { orpc } from "../../orpc.ts";
-import { ValueHelp } from "../ValueHelp.tsx";
 
 export type ConfigCustomer = { cardCode: string; cardName: string };
 
@@ -12,10 +11,6 @@ export function missingGeneral(p: { name: string; customer: ConfigCustomer | nul
 }
 
 // The configuration's own attributes — name, model, customer — as the first subsection of Configure.
-// There is no create dialog and no Save button: a new configuration is an empty draft and each field
-// commits on change/blur, exactly like every other field on this page. All three are mandatory; the
-// caller gates Calculate on `missingGeneral` over the *persisted* values, so a half-typed name can't
-// slip through.
 export function ConfigGeneral({ name, modelId, customer, onChange, disabled }: {
   name: string;
   modelId: string;
@@ -23,34 +18,28 @@ export function ConfigGeneral({ name, modelId, customer, onChange, disabled }: {
   onChange: (patch: { name?: string; modelId?: string; customer?: ConfigCustomer | null }) => void;
   disabled?: boolean;
 }) {
-  // Local while typing so the field doesn't fight the server value between keystrokes; `null` = show
-  // what is persisted. UI5's `change` fires on blur/Enter, which is when we commit.
   const [draftName, setDraftName] = useState<string | null>(null);
-  const [bpQuery, setBpQuery] = useState("");
+  const [draftCode, setDraftCode] = useState<string | null>(null);
+  const [draftCardName, setDraftCardName] = useState<string | null>(null);
   const models = useQuery(orpc.configs.models.queryOptions());
-
-  // Business partner picker: the same generic entities.list the settings invite dialog uses
-  // (BusinessPartners must be enabled). ponytail: one page of 50 and the value-help dialog filters
-  // what was fetched — push the search server-side if a tenant's BP list outgrows that.
-  const bps = useQuery({
-    ...orpc.entities.list.queryOptions({
-      input: { entity: "BusinessPartners", q: bpQuery, top: 50, skip: 0, select: ["CardCode", "CardName"] },
-    }),
-    retry: false,
-  });
-  const bpOptions = useMemo(
-    () => (bps.data?.rows ?? []).map((r) => ({ value: String(r.CardCode), label: String(r.CardName ?? r.CardCode) })),
-    [bps.data],
-  );
-
   const shownName = draftName ?? name;
+  const shownCode = draftCode ?? customer?.cardCode ?? "";
+  const shownCardName = draftCardName ?? customer?.cardName ?? "";
+
+  const commitCustomer = (cardCode: string, cardName: string) => {
+    const code = cardCode.trim();
+    const label = cardName.trim();
+    if (!code && !label) {
+      if (customer) onChange({ customer: null });
+      return;
+    }
+    if (!code || !label) return;
+    if (customer?.cardCode === code && customer.cardName === label) return;
+    onChange({ customer: { cardCode: code, cardName: label } });
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", width: "100%" }}>
-      {bps.error ? <MessageStrip design="Critical" hideCloseButton>{bps.error.message}</MessageStrip> : null}
-      {/* Labels on top, same column count as the model's own sections: the Form grid — not per-field
-          styling — is what makes every field the same width. Standalone FormItems are deprecated
-          since 2.23, hence the group. */}
       <Form labelSpan="S12 M12 L12 XL12" layout="S1 M2 L2 XL2">
         <FormGroup>
           <FormItem labelContent={<Label for="cfg-name" required>Name</Label>}>
@@ -59,13 +48,11 @@ export function ConfigGeneral({ name, modelId, customer, onChange, disabled }: {
               onInput={(e) => setDraftName(e.target.value ?? "")}
               onChange={(e) => {
                 const v = (e.target.value ?? "").trim();
-                setDraftName(null); // snap back to the persisted name if the edit is rejected
+                setDraftName(null);
                 if (v && v !== name) onChange({ name: v });
               }} />
           </FormItem>
           <FormItem labelContent={<Label required>Model</Label>}>
-            {/* Switching the model throws the entries away (params belong to a model) — the server
-                resets entries/batches and the page drops back to draft. */}
             <Select value={modelId} style={{ width: "100%" }} disabled={disabled}
               onChange={(e) => {
                 const v = e.detail.selectedOption.value ?? "";
@@ -76,17 +63,27 @@ export function ConfigGeneral({ name, modelId, customer, onChange, disabled }: {
               ))}
             </Select>
           </FormItem>
-          <FormItem labelContent={<Label for="cfg-bp" required>Business partner</Label>}>
-            <ValueHelp id="cfg-bp" headerText="Business partner" options={bpOptions} disabled={disabled}
-              value={customer?.cardCode} onSearch={setBpQuery} placeholder="Search by name or code…"
-              valueState={customer ? "None" : "Negative"}
-              onChange={(v) =>
-                onChange({
-                  customer: v === undefined || v === null
-                    ? null
-                    : { cardCode: String(v), cardName: bpOptions.find((o) => o.value === v)?.label ?? String(v) },
-                })
-              } />
+          <FormItem labelContent={<Label for="cfg-bp-code" required>Customer code</Label>}>
+            <Input id="cfg-bp-code" value={shownCode} style={{ width: "100%" }} disabled={disabled}
+              valueState={shownCode.trim() ? "None" : "Negative"}
+              placeholder="CardCode"
+              onInput={(e) => setDraftCode(e.target.value ?? "")}
+              onChange={(e) => {
+                const v = e.target.value ?? "";
+                setDraftCode(null);
+                commitCustomer(v, shownCardName);
+              }} />
+          </FormItem>
+          <FormItem labelContent={<Label for="cfg-bp-name" required>Customer name</Label>}>
+            <Input id="cfg-bp-name" value={shownCardName} style={{ width: "100%" }} disabled={disabled}
+              valueState={shownCardName.trim() ? "None" : "Negative"}
+              placeholder="Customer name"
+              onInput={(e) => setDraftCardName(e.target.value ?? "")}
+              onChange={(e) => {
+                const v = e.target.value ?? "";
+                setDraftCardName(null);
+                commitCustomer(shownCode, v);
+              }} />
           </FormItem>
         </FormGroup>
       </Form>

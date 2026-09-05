@@ -65,8 +65,10 @@ The whole design rests on keeping these apart:
 | **Tenant boundary** | `organization` plugin | `tenant_integration` row |
 | **Session lifetime** | normal web session | ~30 min idle, auto-refreshed |
 
-Better Auth never sees SAP. SAP never sees your users. The only bridge between
-them is `session.activeOrganizationId`.
+Better Auth never sees SAP. SAP never sees your users. The bridge between them
+is the request subdomain, resolved to an org through the caller's membership
+(`membershipFromHost` in `apps/server/src/orpc/base.ts`). *Superseded: this
+originally read `session.activeOrganizationId` — see `CLAUDE.md`.*
 
 ### Layer 1 — Identity (Better Auth)
 
@@ -74,9 +76,10 @@ them is `session.activeOrganizationId`.
   All three are plain login; **no enterprise SSO / SAML**.
 - **Organization = Tenant** — one org per customer company. Provided by the
   `organization` plugin (members, roles, invitations all built in).
-- **Active organization** — the tenant a user is currently acting as, stored on
-  the session as `activeOrganizationId`. This is the key that selects which
-  SAP config to use.
+- **Active tenant** — the tenant a user is currently acting as, carried by the
+  request subdomain (`<slug>.<baseDomain>`), not by the session. This is the key
+  that selects which SAP config to use. *Superseded: `session.activeOrganizationId`
+  is left unused — one session value can't serve two tenant tabs at once.*
 - **Membership** — users join a tenant via invitation; a user can belong to
   more than one.
 

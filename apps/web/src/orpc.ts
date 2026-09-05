@@ -9,6 +9,13 @@ const link = new RPCLink({ url: `${window.location.origin}/rpc` });
 export const client: RouterClient<AppRouter> = createORPCClient(link);
 export const orpc = createTanstackQueryUtils(client);
 
+/**
+ * Identity on the current tenant subdomain: session + membership + role in one call.
+ * `_authed`'s beforeLoad primes it and re-runs on every navigation, so it is cached for the
+ * page session — see the note there about why the role is deliberately not revalidated.
+ */
+export const meQuery = orpc.me.queryOptions({ staleTime: Infinity });
+
 export type RouterOutputs = {
   dashboard: { overview: Awaited<ReturnType<typeof client.dashboard.overview>> };
 };

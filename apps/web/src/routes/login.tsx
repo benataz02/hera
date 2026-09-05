@@ -2,26 +2,27 @@ import { createFileRoute, redirect, useNavigate, Link } from "@tanstack/react-ro
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Input, Button, MessageStrip } from "@ui5/webcomponents-react";
-import { authClient } from "../auth-client.ts";
+import { authClient, sessionQuery } from "../auth-client.ts";
 import { AuthLayout } from "../components/AuthLayout.tsx";
 import { SocialButtons } from "../components/SocialButtons.tsx";
 import { apexUrl, hardRedirect, isApex, safeRedirect } from "../lib/tenant.ts";
 
 export const Route = createFileRoute("/login")({
-  validateSearch: (s: Record<string, unknown>): { redirect?: string } => ({
+  validateSearch: (s: Record<string, unknown>): { redirect?: string; email?: string } => ({
     redirect: typeof s.redirect === "string" ? s.redirect : undefined,
+    email: typeof s.email === "string" ? s.email : undefined,
   }),
   // Auth lives on the apex only. Already signed in? Hand off to the apex dispatcher (`/`),
   // or straight back to `redirect` (e.g. an invite accept link) when it's safe to do so.
   beforeLoad: async ({ context, search }) => {
-    if (!isApex())
-      return hardRedirect(
-        apexUrl(`/login${search.redirect ? `?redirect=${encodeURIComponent(search.redirect)}` : ""}`),
-      );
-    const data = await context.queryClient.ensureQueryData({
-      queryKey: ["session"],
-      queryFn: async () => (await authClient.getSession()).data ?? null,
-    });
+    if (!isApex()) {
+      const q = new URLSearchParams();
+      if (search.redirect) q.set("redirect", search.redirect);
+      if (search.email) q.set("email", search.email);
+      const qs = q.toString();
+      return hardRedirect(apexUrl(`/login${qs ? `?${qs}` : ""}`));
+    }
+    const data = await context.queryClient.ensureQueryData(sessionQuery);
     if (data?.session) {
       const to = safeRedirect(search.redirect);
       if (to) return hardRedirect(to);
@@ -33,8 +34,8 @@ export const Route = createFileRoute("/login")({
 
 function Login() {
   const navigate = useNavigate();
-  const { redirect: redirectTo } = Route.useSearch();
-  const [email, setEmail] = useState("");
+  const { redirect: redirectTo, email: emailFromInvite } = Route.useSearch();
+  const [email, setEmail] = useState(emailFromInvite ?? "");
   const [password, setPassword] = useState("");
 
   const queryClient = useQueryClient();
@@ -51,11 +52,9 @@ function Login() {
     onSuccess: async () => {
       // Invalidate the cached null session and re-fetch with the newly-set cookie
       // so _authed's beforeLoad → ensureQueryData sees the real session.
-      await queryClient.fetchQuery({
-        queryKey: ["session"],
-        queryFn: async () => (await authClient.getSession()).data ?? null,
-        staleTime: 0, // bypass the 5-min default — we need a real fetch after sign-in
-      });
+      // staleTime:0 is load-bearing: a cached `null` counts as a cache hit, so ensureQueryData
+      // would never refetch after sign-in.
+      await queryClient.fetchQuery({ ...sessionQuery, staleTime: 0 });
       const to = safeRedirect(redirectTo);
       if (to) return void hardRedirect(to);
       navigate({ to: "/" });
@@ -88,7 +87,7 @@ function Login() {
       <div className="auth-or">or</div>
       <SocialButtons />
       <p className="auth-alt">
-        New to HERA? <Link to="/signup" search={{ redirect: redirectTo }}>Create an account</Link>
+        New to HERA? <Link to="/signup" search={{ redirect: redirectTo, email: emailFromInvite }}>Create an account</Link>
       </p>
     </AuthLayout>
   );

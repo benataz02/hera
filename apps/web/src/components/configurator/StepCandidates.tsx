@@ -5,9 +5,9 @@ import { candidateLabel, openKeys, type PricedCandidate, type Sel } from "./runV
 import { CandidatesMatrix } from "./CandidatesMatrix.tsx";
 
 // Portal wizard "Prices" step: the candidates matrix plus a read-only row-click detail.
-export function StepCandidates({ model, runEntries, candidates, selection, onToggle, onNext, capped, widest, renderDetail, nextLabel }: {
+export function StepCandidates({ model, entries, candidates, selection, onToggle, onNext, capped, widest, renderDetail, nextLabel }: {
   model: ModelDef;
-  runEntries: Entries;
+  entries: Entries;
   candidates: PricedCandidate[];
   selection: Sel[];
   onToggle: (candidateIdx: number, batchQty: number) => void;
@@ -18,7 +18,7 @@ export function StepCandidates({ model, runEntries, candidates, selection, onTog
   nextLabel?: string;
 }) {
   const [detailIdx, setDetailIdx] = useState<number | null>(null);
-  const keys = openKeys(model, runEntries, candidates);
+  const keys = openKeys(model, entries, candidates);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
@@ -27,7 +27,7 @@ export function StepCandidates({ model, runEntries, candidates, selection, onTog
         Unit prices per batch quantity. Pick one or more cells to take into review — each picked
         cell becomes one quotation line. The green price is the lowest in its column.
       </Text>
-      <CandidatesMatrix model={model} runEntries={runEntries} candidates={candidates}
+      <CandidatesMatrix model={model} entries={entries} candidates={candidates}
         selection={selection} onToggle={onToggle} capped={capped} widest={widest}
         onRowClick={(i) => setDetailIdx(i === detailIdx ? null : i)} />
       {detailIdx !== null && candidates[detailIdx]

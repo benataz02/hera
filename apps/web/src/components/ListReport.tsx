@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   DynamicPage, DynamicPageHeader, DynamicPageTitle,
   FilterBar, FilterGroupItem, VariantManagement, VariantItem,
@@ -9,8 +9,8 @@ import {
 } from "@ui5/webcomponents-react";
 import type { AnalyticalTableInstance, UI5WCSlotsNode } from "@ui5/webcomponents-react";
 import {
-  sameDef, truthy, visibleColumns, formatCell, isTextType,
-  type ListColumn, type ListSpec, type ListVariantDef,
+  sameDef, truthy, visibleColumns, formatCell, isTextType, boolFilterState, nextBoolFilter,
+  type FilterCond, type FilterOp, type ListColumn, type ListSpec, type ListVariantDef,
 } from "../variants.ts";
 
 type Row = Record<string, unknown>;
@@ -34,6 +34,10 @@ export type ListReportProps = {
   actions?: UI5WCSlotsNode;
   /** enables the bulk Delete button in the count bar. Return false to keep the selection (cancel). */
   onDelete?: (rows: Row[]) => Promise<boolean | void> | boolean | void;
+  /** Extra count-bar actions driven by the current selection. Rendered left of Delete; return
+   *  null to draw nothing. ListReport never learns what these actions are.
+   *  This cashes in the old `// ponytail: one bulk action; swap for a render-prop slot`. */
+  selectionActions?: (rows: Row[]) => ReactNode;
   /** must be a stable reference */
   noData?: (reason: "Empty" | "Filtered") => ReactNode;
 };
@@ -57,19 +61,42 @@ const tableStyle: CSSProperties = {
 // processing (manualSortBy/manualFilters), so both sources behave identically.
 export function ListReport({
   listSpec, title, columns: cols, keyField, rows, total,
-  loading, error, hasMore, onLoadMore, onRowClick, actions, onDelete, noData,
+  loading, error, hasMore, onLoadMore, onRowClick, actions, onDelete, selectionActions, noData,
 }: ListReportProps) {
-  const { entity, spec, setSpec, setCond, variants, selectedName, setSelectedName, applyVariant, dirty, isAdmin, save, remove, setWidths } = listSpec;
+  const { entity, spec, setSpec, variants, selectedName, setSelectedName, applyVariant, dirty, isAdmin, readOnly, save, remove, setWidths } = listSpec;
 
   const [selected, setSelected] = useState(NO_SELECTION);
   const [deleting, setDeleting] = useState(false);
   const [colsOpen, setColsOpen] = useState(false);
+  // FilterBar has no liveMode: values live here until Go. spec.filter/search stay the applied query.
+  const [filterDraft, setFilterDraft] = useState<{ filter: FilterCond[]; search: string }>(
+    () => ({ filter: spec.filter, search: spec.search ?? "" }),
+  );
+  const filterDraftRef = useRef(filterDraft);
+  filterDraftRef.current = filterDraft;
   // Column-picker draft: checkbox/drag/rename mutate ONLY this; Confirm commits it to spec once.
   const [draft, setDraft] = useState<{ name: string; visible: boolean; label: string }[] | null>(null);
   // Column widths live in react-table's internal reducer; read back on pointer release (see below).
   const tableInstanceRef = useRef<AnalyticalTableInstance | null>(null);
   const lastWidthsRef = useRef<Record<string, number>>({});
   const widthsSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // Variant / Restore rewrite spec.filter|search; copy that into the bar so the fields match the query.
+  useEffect(() => {
+    setFilterDraft({ filter: spec.filter, search: spec.search ?? "" });
+  }, [spec.filter, spec.search]);
+
+  const setDraftCond = (field: string, op: FilterOp, value: FilterCond["value"] | "") =>
+    setFilterDraft((d) => {
+      const rest = d.filter.filter((c) => c.field !== field);
+      const empty = value === "" || value == null;
+      return { ...d, filter: empty ? rest : [...rest, { field, op, value }] };
+    });
+
+  const applyFilters = (over: Partial<ListVariantDef> = {}) => {
+    const { filter, search } = filterDraftRef.current;
+    setSpec((s) => ({ ...s, filter, search, ...over }));
+  };
 
   const visibleCols = useMemo(() => visibleColumns(spec, cols), [spec, cols]);
 
@@ -147,6 +174,8 @@ export function ListReport({
       if (!widths || sameDef(widths, lastWidthsRef.current)) return;
       lastWidthsRef.current = widths;
       setSpec((s) => ({ ...s, widths }));
+      // variants.setWidths is userProcedure; a portal client would only ever get a FORBIDDEN.
+      if (readOnly) return;
       const row = variants.find((v) => v.name === selectedName);
       if (!row) return;
       clearTimeout(widthsSaveTimer.current);
@@ -201,10 +230,14 @@ export function ListReport({
     </VariantManagement>
   );
 
+  // No save, no Save As, no Manage Views for a user who cannot own a view — a variant switcher
+  // with one entry and every action disabled is worse than a plain title.
+  const heading = readOnly ? <Title level="H4">{title}</Title> : variantManagement;
+
   // One FilterGroupItem per column. Text/key columns are shown in the bar; the rest live in the
   // "Adapt Filters" dialog (hiddenInFilterBar) so the bar isn't a wall of inputs.
   const filterItems = cols.map((c) => {
-    const cond = spec.filter.find((f) => f.field === c.name);
+    const cond = filterDraft.filter.find((f) => f.field === c.name);
     const isBool = /bool/i.test(c.type);
     const isDate = /date|time/i.test(c.type);
     const isNum = /int|double|decimal|single|byte|number/i.test(c.type);
@@ -219,7 +252,7 @@ export function ListReport({
           value={cond ? String(cond.value) : NO_FILTER}
           onChange={(e) => {
             const v = e.detail.selectedOption.value ?? "";
-            setCond(c.name, "eq", v === NO_FILTER ? "" : v);
+            setDraftCond(c.name, "eq", v === NO_FILTER ? "" : v);
           }}
         >
           <Option value={NO_FILTER}>All</Option>
@@ -229,28 +262,27 @@ export function ListReport({
         </Select>
       );
     } else if (isBool) {
+      // A boolean is a checkbox here too, not a dropdown — but a filter has a third state the
+      // field doesn't: unfiltered. Hence indeterminate, cycling Any -> Yes -> No, with the text
+      // saying which one you are on.
+      const on = boolFilterState(cond);
       control = (
-        <Select
-          value={cond ? String(cond.value) : NO_FILTER}
-          onChange={(e) => {
-            const v = e.detail.selectedOption.value ?? "";
-            setCond(c.name, "eq", v === NO_FILTER ? "" : v === "true");
-          }}
-        >
-          <Option value={NO_FILTER}>Any</Option>
-          <Option value="true">Yes</Option>
-          <Option value="false">No</Option>
-        </Select>
+        <CheckBox
+          checked={on === true}
+          indeterminate={on === undefined}
+          text={on === undefined ? "Any" : on ? "Yes" : "No"}
+          onChange={() => setDraftCond(c.name, "eq", nextBoolFilter(on))}
+        />
       );
     } else if (isDate) {
       // ISO so the server-side OData $filter literal is valid (B1 dates are unquoted ISO).
-      control = <DatePicker displayFormat="yyyy-MM-dd" value={cond ? String(cond.value) : ""} onChange={(e) => setCond(c.name, "eq", e.detail.value)} />;
+      control = <DatePicker displayFormat="yyyy-MM-dd" value={cond ? String(cond.value) : ""} onChange={(e) => setDraftCond(c.name, "eq", e.detail.value)} />;
     } else {
       control = (
         <Input
           type={isNum ? "Number" : "Text"}
           value={cond ? String(cond.value) : ""}
-          onChange={(e) => setCond(c.name, isNum ? "eq" : "contains", isNum ? Number(e.target.value) : e.target.value)}
+          onInput={(e) => setDraftCond(c.name, isNum ? "eq" : "contains", isNum ? Number(e.target.value) : e.target.value)}
         />
       );
     }
@@ -266,6 +298,7 @@ export function ListReport({
       startContent={<Title level="H5">{title} ({selected.rows.length}/{total})</Title>}
       endContent={
         <>
+          {selectionActions?.(selected.rows)}
           {onDelete ? (
             <Button icon="delete" design="Transparent" disabled={!selected.rows.length || deleting} onClick={runDelete}>
               Delete
@@ -285,8 +318,8 @@ export function ListReport({
       // title padding (0.5rem→0.25rem). // ponytail: private theme vars, revisit if they get renamed.
       titleArea={
         <DynamicPageTitle
-          heading={variantManagement}
-          snappedHeading={variantManagement}
+          heading={heading}
+          snappedHeading={heading}
           actionsBar={actions}
           style={{ "--_ui5_dynamic_page_title_padding_top": "0.25rem", "--_ui5_dynamic_page_title_padding_bottom": "0.25rem" } as CSSProperties}
         />
@@ -298,16 +331,16 @@ export function ListReport({
             enableReordering
             showGoOnFB
             showClearOnFB
-            onClear={() => setSpec((s) => ({ ...s, filter: [], search: "" }))}
-            // Adapt Filters: the visible-filter set is part of the view, so persist it into spec
-            // (which makes it tracked + dirty). Filter VALUES edited in the dialog flow via onChange.
+            onGo={() => applyFilters()}
+            onClear={() => setFilterDraft({ filter: [], search: "" })}
+            // Adapt Filters Go: persist which filters are in the bar, and apply values like the bar Go.
             onFiltersDialogSave={(e) => {
               const keys = e.detail.selectedFilterKeys;
-              if (Array.isArray(keys)) setSpec((s) => ({ ...s, filterBar: keys as string[] }));
+              applyFilters(Array.isArray(keys) ? { filterBar: keys as string[] } : {});
             }}
             // Restore = discard unsaved changes, revert to the selected view.
             onRestore={() => applyVariant(selectedName)}
-            search={<Input placeholder="Search" value={spec.search ?? ""} onChange={(e) => setSpec((s) => ({ ...s, search: e.target.value }))} />}
+            search={<Input placeholder="Search" value={filterDraft.search} onInput={(e) => setFilterDraft((d) => ({ ...d, search: e.target.value }))} />}
           >
             {filterItems}
           </FilterBar>

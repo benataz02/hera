@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { ORPCError, withEventMeta } from "@orpc/server";
 import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
-import { db, configProject, configRun } from "@hera/db";
+import { db, configProject } from "@hera/db";
 import {
   domainOf, propagate,
   type Entries, type ModelDef, type ResolvedLookups, type Val,
@@ -15,7 +15,7 @@ import {
   type AssistantEvent, type AssistChatInput, type ChangeRow, type Evidence, type ExtractFile,
   type MessageContent, type Provider, type ToolName, type UiChange,
 } from "@hera/assistant";
-import { loadModel, cachedLookups } from "../orpc/routers/configs.ts";
+import { loadModel, enrichedLookups } from "../orpc/routers/configs.ts";
 import { buildAssistPrompt } from "./prompt.ts";
 import { ProviderApiError, resolveProvider } from "./provider.ts";
 import { createExecutors, type ExecutorCtx, type Working } from "./executors.ts";
@@ -28,8 +28,7 @@ import {
   renewLease, runToolOperation, updateWorking,
   LEASE_RENEW_MS, type TurnRow,
 } from "./turns.ts";
-import { enrichLookups } from "../lookups.ts";
-import { agentFetcher } from "../orpc/routers/models.ts";
+
 
 // The turn engine. Everything it needs is imported directly — `db`, the project/model loaders,
 // the executors, the provider adapter, policy and audit. There is no injected `AssistantDeps`
@@ -77,17 +76,16 @@ async function loadProject(tenantId: string, projectId: string) {
   return p ?? null;
 }
 
-/** The frozen run a prior attempt of this turn already computed (by `assistantTurn.calculatedRunId`).
- *  Re-hydrates `state.lastRun` on resume so the prompt's candidate count stays accurate and
- *  `selectCandidates` evidence keeps resolving — the durable freeze itself comes from the
- *  `calculatedRunId` column, not this lookup. */
-async function loadRun(tenantId: string, runId: string) {
+/** The candidates a prior attempt of this turn already computed. Re-hydrates `state.lastRun` on
+ *  resume so the prompt's candidate count stays accurate and `selectCandidates` evidence keeps
+ *  resolving — the durable freeze itself comes from `assistantTurn.calculated`, not this lookup. */
+async function loadCandidates(tenantId: string, projectId: string) {
   const [r] = await db
-    .select({ id: configRun.id, candidates: configRun.candidates })
-    .from(configRun)
-    .where(and(eq(configRun.id, runId), eq(configRun.tenantId, tenantId)))
+    .select({ candidates: configProject.candidates })
+    .from(configProject)
+    .where(and(eq(configProject.id, projectId), eq(configProject.tenantId, tenantId)))
     .limit(1);
-  return r ? { runId: r.id, candidates: r.candidates } : null;
+  return r ? { candidates: r.candidates } : null;
 }
 
 // ---- Small named helpers (per the brief) ----
@@ -118,18 +116,18 @@ function classifyTurnError(e: unknown): string {
 }
 
 /** `name:sha256(args):relevant` — relevant is the fencing dimension a tool's own input doesn't
- *  already capture: the attachment hash for extraction, the run for selections, the observed
- *  project version for the two agent-backed read tools, and the working revision otherwise
+ *  already capture: the attachment hash for extraction, the observed project version for the two
+ *  agent-backed read tools and for selections (a recalculate moves that version, which is exactly
+ *  when a candidateId stops meaning what it meant), and the working revision otherwise
  *  (setValues/previewCandidates/calculate/suggestFollowUps all read/write the working copy). */
 function operationKeyFor(
   name: ToolName, args: unknown, workingRevision: number, projectVersion: string,
-  runId: string | undefined, attachmentSha256: string | undefined,
+  attachmentSha256: string | undefined,
 ): string {
   const argsHash = sha256Hex(canonicalJson(args));
   const relevant =
     name === "extractFromDrawing" ? `file:${attachmentSha256 ?? "none"}`
-    : name === "selectCandidates" ? `run:${runId ?? "none"}`
-    : (name === "getDocHistory" || name === "searchSimilar") ? `pv:${projectVersion}`
+    : (name === "selectCandidates" || name === "getDocHistory" || name === "searchSimilar") ? `pv:${projectVersion}`
     : `rev:${workingRevision}`;
   return `${name}:${argsHash}:${relevant}`;
 }
@@ -257,9 +255,9 @@ function domainEventFor(name: ToolName, turnId: string, seq: number, out: Record
     case "searchSimilar": case "getDocHistory": case "previewCandidates":
       return { type: "result", turnId, seq, tool: name, resultId: out.resultId as string, observedProjectVersion: out.observedProjectVersion as string, data: out };
     case "calculate":
-      return { type: "candidates", turnId, seq, runId: out.runId as string, projectVersion: out.projectVersion as string, candidateCount: out.candidateCount as number, top: out.top as { candidateId: string; label: string; keyFigure?: string }[] };
+      return { type: "candidates", turnId, seq, projectVersion: out.projectVersion as string, candidateCount: out.candidateCount as number, top: out.top as { candidateId: string; label: string; keyFigure?: string }[] };
     case "selectCandidates":
-      return { type: "selection", turnId, seq, runId: out.runId as string, selections: out.selections as { candidateId: string; batchQty: number }[] };
+      return { type: "selection", turnId, seq, selections: out.selections as { candidateId: string; batchQty: number }[] };
     default:
       return null; // extractFromDrawing (fed back to the model only) / suggestFollowUps (stashed for `done`)
   }
@@ -341,11 +339,9 @@ export async function* runTurn(
   }
 
   const model = await loadModel(tenantId, project.modelId);
-  const lookups = await enrichLookups(
-    model.definition, input.entries as Entries, await cachedLookups(tenantId, model), agentFetcher(tenantId),
-  );
+  const lookups = await enrichedLookups(tenantId, model, input.entries as Entries);
   validateEntries(model.definition, lookups, input.entries as Entries);
-  mark("prep"); // project + conversation + turn peek + model + lookups (agent/B1 hop on a cache miss)
+  mark("prep"); // project + conversation + turn peek + model + lookups
 
   // ============ STEP 2: claim ============
   const attachment = attachmentOf(input.file as ExtractFile | undefined);
@@ -466,14 +462,14 @@ export async function* runTurn(
           changed = true;
         }
         // Divergence-from-"that run's snapshot" check: `AssistantDeps` has no accessor for a
-        // `configRun` row, so this reads the turn's own `workingEntries`/`workingBatches` AT CLAIM
+        // stored calculation, so this reads the turn's own `workingEntries`/`workingBatches` AT CLAIM
         // TIME as already BEING the frozen run's snapshot — `calculate` sets `state.frozen = true`,
         // blocking any further `setValues`, so nothing else can move those columns once
-        // `calculatedRunId` is set. Divergence is therefore just: the resume overlay would actually
-        // change entries/batches while `calculatedRunId` is set (see loop.ts:325-328 and the
+        // `calculated` is set. Divergence is therefore just: the resume overlay would actually
+        // change entries/batches while `calculated` is set (see loop.ts:325-328 and the
         // report's judgment call #2 for the same reasoning applied to provider-on-resume). The
         // leading snapshot was already yielded above, so this branch only needs the error event.
-        if (turn.calculatedRunId && changed) {
+        if (turn.calculated && changed) {
           const s = await allocSeq(db, turn.id, leaseToken, 1);
           yield eventFor({ type: "error", turnId: turn.id, seq: s, code: "STATE_CHANGED", message: "The project changed since this turn started; start a new message", retryable: false });
           finalStatus = "partial"; finalErrorCode = "STATE_CHANGED";
@@ -500,14 +496,14 @@ export async function* runTurn(
     const executors = createExecutors(execCtx);
 
     // (1) Restore the frozen state if a prior attempt of this turn already ran `calculate`. The
-    // durable source of truth is the `calculatedRunId` column (persisted in its own committed
-    // update the moment calculate succeeded), so this holds even on a hard crash with no assistant
+    // durable source of truth is the `calculated` column (persisted in its own committed update
+    // the moment calculate succeeded), so this holds even on a hard crash with no assistant
     // message. Without it, `makeExecutors` hands back `frozen: false` and a resumed model could run
     // setValues again — advancing `workingRevision` off the value the original `calculate`'s
-    // operationKey was computed from, which would let a genuinely NEW config_run row be inserted.
-    if (turn.calculatedRunId) {
+    // operationKey was computed from, which would let a genuinely new calculation be written.
+    if (turn.calculated) {
       executors.state.frozen = true;
-      const run = await loadRun(tenantId, turn.calculatedRunId);
+      const run = await loadCandidates(tenantId, input.projectId);
       if (run) executors.state.lastRun = run;
     }
 
@@ -656,8 +652,7 @@ export async function* runTurn(
             continue;
           }
 
-          const runIdArg = (parsedArgs.data as { runId?: string }).runId;
-          const opKey = operationKeyFor(name, parsedArgs.data, execCtx.working.workingRevision, execCtx.working.projectVersion, runIdArg, attachment?.sha256);
+          const opKey = operationKeyFor(name, parsedArgs.data, execCtx.working.workingRevision, execCtx.working.projectVersion, attachment?.sha256);
           const toolTimeoutMs = name === "extractFromDrawing" ? EXTRACTION_TIMEOUT_MS : TOOL_TIMEOUT_MS;
           const opSignal = AbortSignal.any([turnAbort.signal, AbortSignal.timeout(toolTimeoutMs)]);
 
@@ -666,7 +661,7 @@ export async function* runTurn(
             turnId: turn.id, leaseToken, toolCallId: chunk.id, name, operationKey: opKey, input: parsedArgs.data,
             // Executors manage their own persistence (module-level `db`, or their own
             // `db.transaction` for selectCandidates), so `runToolOperation`'s tx isn't threaded
-            // in — see the reuse/CAS reasoning on `executeRunFromSnapshot` and
+            // in — see the reuse reasoning on `calculateProject` and
             // `selectCandidates`. `opSignal` is honored best-effort: the agent-backed reads take
             // no AbortSignal, so a call that has already started can't be cancelled; the turn's
             // 120s watchdog is the hard backstop.
@@ -675,9 +670,8 @@ export async function* runTurn(
               const run = executors[name] as (i: unknown) => Promise<unknown>;
               const result = await run(parsedArgs.data);
               const r = result as Record<string, unknown>;
-              const runId = typeof r.runId === "string" ? r.runId : undefined;
               const affectedProjectVersion = typeof r.projectVersion === "string" ? new Date(r.projectVersion) : undefined;
-              return { result, runId, affectedProjectVersion, eventSeq: domainSeq };
+              return { result, affectedProjectVersion, eventSeq: domainSeq };
             },
           });
           const effectiveSeq = opResult.eventSeq ?? domainSeq;
@@ -700,7 +694,7 @@ export async function* runTurn(
             } else if (name === "calculate" && out.ok === true && out.stale !== true) {
               await updateWorking(db, turn.id, leaseToken, {
                 entries: execCtx.working.entries, batches: execCtx.working.batches, revision: execCtx.working.workingRevision,
-                latestProjectVersion: new Date(execCtx.working.projectVersion), calculatedRunId: out.runId as string,
+                latestProjectVersion: new Date(execCtx.working.projectVersion), calculated: true,
               });
             }
           }

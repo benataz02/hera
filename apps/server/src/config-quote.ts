@@ -1,37 +1,44 @@
 import { createHash } from "node:crypto";
 import { ORPCError } from "@orpc/server";
-import { and, eq, inArray, sql } from "drizzle-orm";
-import {
-  db,
-  agentRequest,
-  configProject,
-  configRun,
-  type RunCandidate,
-  type RunSelection,
-} from "@hera/db";
-import { computeOutputs, DslError } from "@hera/config-engine";
-import type { WritePayload } from "./writes.ts";
+import { and, eq } from "drizzle-orm";
+import { db, configProject, type ConfigCandidate, type ConfigSelection } from "@hera/db";
+import { computeOutputs, DslError, type ModelDef, type ResolvedLookups } from "@hera/config-engine";
 
 export type ConfigProjectRow = typeof configProject.$inferSelect;
-export type ConfigRunRow = typeof configRun.$inferSelect;
+
+/** UDF on OQUT carrying configDocumentCommandId, so a retried createQuote finds the quotation it
+ *  already posted instead of posting a second one. Must exist in the customer's B1 — the install
+ *  step is one alphanumeric UDF of length 64 on Sales Quotation (Title). */
+export const DEDUP_UDF = "U_HERA_DedupKey";
 
 /** Deterministic create command id / SAP dedup UDF value for a project's current selection.
- *  Keyed on the selection itself, not a version counter: the same picks retried yield the same id
- *  (a retry must never create a second SAP document), a changed selection yields a new one. */
+ *  Keyed on what is being quoted, not a version counter: the same picks retried yield the same id
+ *  (a retry must never create a second SAP document), a changed selection yields a new one.
+ *
+ *  It hashes each pick's *assignment*, not its `candidateIdx`. Indices are only meaningful against
+ *  the candidate list that produced them, and a recalculate replaces that list — so hashing the
+ *  index would let "candidate 0" of a fresh calculation collide with a quotation posted for a
+ *  different configuration whose response never arrived. */
 export function configDocumentCommandId(input: {
   tenantId: string;
   projectId: string;
-  runId: string;
-  selection: RunSelection[];
+  candidates: ConfigCandidate[];
+  selection: ConfigSelection[];
 }): string {
   // Sorted so a pure reorder of the same picks keeps the same id.
-  const sel = [...input.selection].sort((a, b) => a.candidateIdx - b.candidateIdx || a.batchQty - b.batchQty);
-  const raw = `${input.tenantId}|${input.projectId}|${input.runId}|${canonicalJson(sel)}`;
+  const sel = [...input.selection]
+    .sort((a, b) => a.candidateIdx - b.candidateIdx || a.batchQty - b.batchQty)
+    .map((s) => ({
+      assignment: input.candidates[s.candidateIdx]?.assignment ?? null,
+      batchQty: s.batchQty,
+      overrides: s.overrides,
+    }));
+  const raw = `${input.tenantId}|${input.projectId}|${canonicalJson(sel)}`;
   return createHash("sha256").update(raw).digest("hex");
 }
 
 /** JSON with object keys sorted. Plain JSON.stringify will not do: Postgres reorders jsonb object
- *  keys, so a selection read back from config_run would hash differently from the one written. */
+ *  keys, so a selection read back from config_project would hash differently from the one written. */
 function canonicalJson(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
   if (v && typeof v === "object") {
@@ -43,29 +50,26 @@ function canonicalJson(v: unknown): string {
   return JSON.stringify(v ?? null);
 }
 
-/** Canonical Quotations draft from persisted project + run snapshot (server recomputes prices). */
-export function buildQuoteSeed(project: ConfigProjectRow, run: ConfigRunRow): Record<string, unknown> {
+/** Canonical Quotations draft from the persisted project and the model's live lookups (the server
+ *  recomputes every price; the browser's figures are never trusted). */
+export function buildQuoteSeed(
+  project: ConfigProjectRow, model: ModelDef, lookups: ResolvedLookups,
+): Record<string, unknown> {
   if (!project.customer) {
     throw new ORPCError("BAD_REQUEST", { message: "Customer is required before quoting" });
   }
-  if (!run.selection?.length) {
+  if (!project.selection?.length) {
     throw new ORPCError("BAD_REQUEST", { message: "Select at least one candidate before quoting" });
   }
 
-  const lines = run.selection.map((s) => {
-    const cand = run.candidates[s.candidateIdx];
+  const lines = project.selection.map((s) => {
+    const cand = project.candidates[s.candidateIdx];
     if (!cand) {
       throw new ORPCError("BAD_REQUEST", { message: `No candidate at index ${s.candidateIdx}` });
     }
     let unitPrice: number;
     try {
-      unitPrice = computeOutputs(
-        run.modelSnapshot,
-        run.lookupSnapshot,
-        cand.assignment,
-        s.batchQty,
-        s.overrides,
-      ).unitPrice;
+      unitPrice = computeOutputs(model, lookups, cand.assignment, s.batchQty, s.overrides).unitPrice;
     } catch (e) {
       if (e instanceof DslError || e instanceof RangeError) {
         throw new ORPCError("BAD_REQUEST", { message: e.message });
@@ -78,11 +82,10 @@ export function buildQuoteSeed(project: ConfigProjectRow, run: ConfigRunRow): Re
         .map(([k, v]) => `${k}: ${v}`)
         .join(", ") || "Configuration";
     return {
-      ItemCode: run.modelSnapshot.pricing.quoteItemCode,
+      ItemCode: model.pricing.quoteItemCode,
       ItemDescription: desc,
       Quantity: s.batchQty,
       UnitPrice: unitPrice,
-      priceSource: "config",
     };
   });
 
@@ -91,34 +94,37 @@ export function buildQuoteSeed(project: ConfigProjectRow, run: ConfigRunRow): Re
     CardName: project.customer.cardName,
     DocumentLines: lines,
   };
-  const currency = run.modelSnapshot.pricing.currency;
+  const currency = model.pricing.currency;
   if (currency) seed.DocCurrency = currency;
   return seed;
 }
 
 /** Engineered value and cost of the selected candidates, using the same computation
  *  buildQuoteSeed prices from — so the stored margin matches the quotation that was sent. */
-export function quotedTotals(run: ConfigRunRow): { value: number; cost: number } {
+export function quotedTotals(
+  model: ModelDef, lookups: ResolvedLookups,
+  candidates: ConfigCandidate[], selection: ConfigSelection[] | null,
+): { value: number; cost: number } {
   let value = 0;
   let cost = 0;
-  for (const s of run.selection ?? []) {
-    const cand = run.candidates[s.candidateIdx];
+  for (const s of selection ?? []) {
+    const cand = candidates[s.candidateIdx];
     if (!cand) continue;
-    const out = computeOutputs(run.modelSnapshot, run.lookupSnapshot, cand.assignment, s.batchQty, s.overrides);
+    const out = computeOutputs(model, lookups, cand.assignment, s.batchQty, s.overrides);
     value += out.unitPrice * s.batchQty;
     cost += out.unitCost * s.batchQty;
   }
   return { value, cost };
 }
 
-/** Selection pairs must exist on the run and must not duplicate. */
+/** Selection pairs must exist in the calculation and must not duplicate. */
 export function validateSelectionPairs(
-  run: { candidates: RunCandidate[] },
-  selection: RunSelection[],
+  candidates: ConfigCandidate[],
+  selection: ConfigSelection[],
 ): void {
   const seen = new Set<string>();
   for (const s of selection) {
-    const cand = run.candidates[s.candidateIdx];
+    const cand = candidates[s.candidateIdx];
     if (!cand || !cand.perBatch.some((b) => b.batchQty === s.batchQty)) {
       throw new ORPCError("BAD_REQUEST", {
         message: "Selection does not match the calculated candidate/batch options",
@@ -135,7 +141,7 @@ export function validateSelectionPairs(
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DbOrTx = typeof db | Tx;
 
-/** Reject update/run/select/createQuote while quoted or while a config-document write is pending/in-flight. */
+/** Reject update/calculate/select while quoted. */
 export async function assertConfigMutable(
   tenantId: string,
   projectId: string,
@@ -150,108 +156,4 @@ export async function assertConfigMutable(
   if (project.status === "quoted") {
     throw new ORPCError("CONFLICT", { message: "Configuration is quoted and locked" });
   }
-  const [pending] = await client
-    .select({ id: agentRequest.id })
-    .from(agentRequest)
-    .where(
-      and(
-        eq(agentRequest.tenantId, tenantId),
-        eq(agentRequest.kind, "write"),
-        inArray(agentRequest.status, ["pending", "in_flight"]),
-        sql`${agentRequest.payload}->'origin'->>'kind' = 'config-document'`,
-        sql`${agentRequest.payload}->'origin'->>'projectId' = ${projectId}`,
-      ),
-    )
-    .limit(1);
-  if (pending) {
-    throw new ORPCError("CONFLICT", {
-      message: "A quotation write is already in progress for this configuration",
-    });
-  }
-}
-
-/**
- * Configurator side effects inside the attempt-fenced ack transaction.
- * On run/version mismatch: leave the write done but record origin-conflict; do not mutate another selection.
- */
-export async function completeWriteOrigin(
-  tx: Tx,
-  tenantId: string,
-  requestId: string,
-  payload: WritePayload,
-  confirmed: { docEntry?: string | null; result?: unknown },
-): Promise<void> {
-  const origin = payload.origin;
-  if (!origin || origin.kind !== "config-document") return;
-
-  const [run] = await tx
-    .select()
-    .from(configRun)
-    .where(and(eq(configRun.id, origin.runId), eq(configRun.tenantId, tenantId)))
-    .for("update");
-
-  // The run row is replaced wholesale on every recalculate, so a surviving id with a matching
-  // project is proof this is still the selection that was enqueued.
-  const mismatch = !run || run.projectId !== origin.projectId;
-
-  if (mismatch) {
-    await tx
-      .update(agentRequest)
-      .set({ lastError: "origin-conflict", updatedAt: new Date() })
-      .where(and(eq(agentRequest.id, requestId), eq(agentRequest.tenantId, tenantId)));
-    return;
-  }
-
-  // Idempotent: already completed for this run.
-  if (run.b1DocEntry != null) return;
-
-  const docEntryRaw = confirmed.docEntry ?? extractDocEntry(confirmed.result);
-  const docEntry = docEntryRaw != null ? Number(docEntryRaw) : NaN;
-  if (!Number.isFinite(docEntry)) {
-    await tx
-      .update(agentRequest)
-      .set({ lastError: "origin-conflict: missing DocEntry", updatedAt: new Date() })
-      .where(and(eq(agentRequest.id, requestId), eq(agentRequest.tenantId, tenantId)));
-    return;
-  }
-
-  let totals = { value: 0, cost: 0 };
-  try {
-    totals = quotedTotals(run);
-  } catch {
-    // ponytail: margin is reporting-only — never fail a confirmed SAP write over it.
-    //           Nulls here just exclude the run from the margin roll-up.
-  }
-  await tx
-    .update(configRun)
-    .set({
-      b1DocEntry: docEntry,
-      quotedAt: new Date(),
-      quotedValue: totals.value ? String(totals.value) : null,
-      quotedCost: totals.cost ? String(totals.cost) : null,
-    })
-    .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, tenantId)));
-
-  await tx
-    .update(configProject)
-    .set({
-      status: "quoted",
-      events: sql`${configProject.events} || ${JSON.stringify([{ at: new Date().toISOString(), kind: "quoted" }])}::jsonb`,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(configProject.id, origin.projectId),
-        eq(configProject.tenantId, tenantId),
-        inArray(configProject.status, ["calculated", "requested"]),
-      ),
-    );
-}
-
-function extractDocEntry(result: unknown): string | undefined {
-  if (!result || typeof result !== "object") return undefined;
-  const r = result as { key?: unknown; record?: Record<string, unknown> };
-  if (r.key != null) return String(r.key);
-  if (r.record?.DocEntry != null) return String(r.record.DocEntry);
-  return undefined;
 }

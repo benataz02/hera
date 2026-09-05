@@ -213,17 +213,17 @@ export async function bumpCounters(db: Db, turnId: string, leaseToken: string, d
 
 /** Fenced UPDATE of the working entries/batches/revision, plus the optional side effects of a
  *  successful tool call (`latestProjectVersion` after a mutating executor observes fresher B1
- *  state, `calculatedRunId` once `calculate` succeeds and freezes further `setValues`). */
+ *  state, `calculated` once `calculate` succeeds and freezes further `setValues`). */
 export async function updateWorking(
   db: Db, turnId: string, leaseToken: string,
-  working: { entries: Entries; batches: number[]; revision: number; latestProjectVersion?: Date; calculatedRunId?: string },
+  working: { entries: Entries; batches: number[]; revision: number; latestProjectVersion?: Date; calculated?: boolean },
 ): Promise<boolean> {
   const set: Record<string, unknown> = {
     workingEntries: working.entries, workingBatches: working.batches, workingRevision: working.revision,
     updatedAt: new Date(),
   };
   if (working.latestProjectVersion !== undefined) set.latestProjectVersion = working.latestProjectVersion;
-  if (working.calculatedRunId !== undefined) set.calculatedRunId = working.calculatedRunId;
+  if (working.calculated !== undefined) set.calculated = working.calculated;
 
   const updated = await db.update(assistantTurn).set(set)
     .where(and(eq(assistantTurn.id, turnId), eq(assistantTurn.leaseToken, leaseToken)))
@@ -240,7 +240,7 @@ export type RunToolOperationParams = {
   name: string;
   operationKey: string;
   input: unknown;
-  exec: (tx: Db) => Promise<{ result: unknown; runId?: string; affectedProjectVersion?: Date; eventSeq?: number }>;
+  exec: (tx: Db) => Promise<{ result: unknown; affectedProjectVersion?: Date; eventSeq?: number }>;
 };
 
 type ClaimStep =
@@ -328,7 +328,7 @@ export async function runToolOperation(db: Db, p: RunToolOperationParams): Promi
       const out = await p.exec(tx);
       const [row] = await tx.update(assistantToolExecution)
         .set({
-          status: "complete", result: out.result as object, runId: out.runId ?? null,
+          status: "complete", result: out.result as object,
           affectedProjectVersion: out.affectedProjectVersion ?? null, eventSeq: out.eventSeq ?? null,
           durationMs: Date.now() - startedAt, completedAt: new Date(),
         })

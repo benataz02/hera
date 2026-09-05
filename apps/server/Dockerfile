@@ -1,4 +1,4 @@
-FROM oven/bun:1.3
+FROM oven/bun:1.4
 WORKDIR /app
 
 # Install deps against the committed lockfile, then build the SPA the server will serve.

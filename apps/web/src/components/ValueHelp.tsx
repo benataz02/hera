@@ -10,6 +10,7 @@ import {
   type DomainOption, type LookupRef, type ModelDef, type ResolvedTable, type Val,
 } from "@hera/config-engine";
 import { orpc } from "../orpc.ts";
+import { EMPTY_SPEC, type FilterCond } from "../listSpec.ts";
 import { resolveEntry } from "./configurator/formHelpers.ts";
 
 // Kill the dialog's default content padding so the table (and its sticky header) sit flush.
@@ -20,8 +21,8 @@ if (typeof document !== "undefined") {
   el.textContent = `.hera-vh-dialog::part(content){padding:0;overflow:hidden;}`;
 }
 
-/** Remote-search plumbing, shared with EntityValueHelp: pull page 1 on the first open/keystroke,
- *  then one round trip per 250ms pause instead of one per keystroke. */
+/** Remote-search plumbing: pull page 1 on the first open/keystroke, then one round trip per
+ *  250ms pause instead of one per keystroke. */
 export function useRemoteSearch(onSearch?: (q: string) => void) {
   const primed = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -48,7 +49,7 @@ export function useRemoteSearch(onSearch?: (q: string) => void) {
 // `table`); the local filter then just narrows what came back.
 export function ValueHelpDialog({
   open, headerText, table, valueCol, columns, hiddenValues, onSelect, onClose,
-  onSearch, loading, hasMore, onLoadMore,
+  onSearch, loading, hasMore, onLoadMore, columnLabels, hidden,
 }: {
   open: boolean;
   headerText: string;
@@ -66,12 +67,17 @@ export function ValueHelpDialog({
   /** another page is available — growing loads it when the table is scrolled to the end */
   hasMore?: boolean;
   onLoadMore?: () => void;
+  /** dialog headers; missing/blank → the key */
+  columnLabels?: Record<string, string>;
+  /** keys omitted from the dialog (and local search). Still on the row for derived values. */
+  hidden?: string[];
 }) {
   const [q, setQ] = useState("");
   const [range, setRange] = useState({ first: 0, last: 20 });
   const virtRef = useRef<TableVirtualizerDomRef>(null);
   const remote = useRemoteSearch(onSearch);
-  const shown = [valueCol, ...columns];
+  const visible = [valueCol, ...columns].filter((c) => !hidden?.includes(c));
+  const shown = visible.length ? visible : [valueCol];
   const idx = shown.map((c) => table.columns.indexOf(c));
   const vi = table.columns.indexOf(valueCol);
 
@@ -82,7 +88,7 @@ export function ValueHelpDialog({
       return !needle || idx.some((i) => i >= 0 && String(r[i] ?? "").toLowerCase().includes(needle));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [table, q, hiddenValues]);
+  }, [table, q, hiddenValues, hidden]);
 
   useEffect(() => {
     setRange({ first: 0, last: 20 });
@@ -131,7 +137,7 @@ export function ValueHelpDialog({
           }}
           headerRow={
             <TableHeaderRow sticky>
-              {shown.map((c) => <TableHeaderCell key={c}><span>{c}</span></TableHeaderCell>)}
+              {shown.map((c) => <TableHeaderCell key={c}><span>{columnLabels?.[c] || c}</span></TableHeaderCell>)}
             </TableHeaderRow>
           }>
           {rows.slice(start, end).map((r, j) => {
@@ -156,7 +162,7 @@ export function ValueHelpDialog({
 // rejected on blur/Enter and the field snaps back to the committed option.
 export function ValueHelp({
   options, value, onChange, headerText, table, valueCol, columns, onSearch, disabled, readonly,
-  placeholder, id, valueState, loading, hasMore, onLoadMore, onOpen,
+  placeholder, id, valueState, loading, hasMore, onLoadMore, onOpen, columnLabels, hidden,
 }: {
   options: DomainOption[];
   value: Val | undefined;
@@ -181,6 +187,8 @@ export function ValueHelp({
   onLoadMore?: () => void;
   /** query value help resets its outer search before opening; generic value helps keep prime-once */
   onOpen?: () => void;
+  columnLabels?: Record<string, string>;
+  hidden?: string[];
 }) {
   const [typed, setTyped] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -232,7 +240,7 @@ export function ValueHelp({
           },
     [table, valueCol, columns, options],
   );
-  const hidden = useMemo(
+  const eliminated = useMemo(
     () => new Set(options.filter((o) => o.eliminatedBy).map((o) => o.value)),
     [options],
   );
@@ -260,7 +268,7 @@ export function ValueHelp({
       </Input>
       {open && !pending ? (
         <ValueHelpDialog open headerText={headerText} table={dlg.table} valueCol={dlg.valueCol} columns={dlg.columns}
-          hiddenValues={hidden} onSelect={(v, row) => {
+          columnLabels={columnLabels} hidden={hidden} hiddenValues={eliminated} onSelect={(v, row) => {
             const i = row ? dlg.table.rows.indexOf(row) : -1;
             pick(v, row, i < 0 ? undefined : options[i]?.label);
           }} onClose={() => setOpen(false)}
@@ -271,19 +279,19 @@ export function ValueHelp({
 }
 
 /** Value help over a model's queryTable. Empty search starts from the canonical lookup page, then
- *  follows its @odata.nextLink on scroll; non-empty search starts a separate remote page chain so a
+ *  pages by row offset on scroll; non-empty search starts a separate remote page chain so a
  *  match past page 1 is still findable. */
-/** Which endpoint pages this table. The builder preview edits an *unsaved* draft, so it posts the
- *  raw OData path (admin-only); wizard and portal name a saved model's query table instead, and the
- *  server takes the path from the stored model. */
-export type QuerySource = { kind: "draft" } | { kind: "project" | "portal"; modelId: string };
+/** Which endpoint pages this table. Both name a masterdata row and let the server resolve the
+ *  query from it — the builder preview included, now that a query is tenant masterdata and not
+ *  part of the draft being edited. */
+export type QuerySource = { kind: "project" | "portal"; modelId: string };
 
 export function QueryValueHelp({
-  source, queryTable: qt, canonicalTable, lookupRef, value, onChange, onPick, headerText, disabled, readonly,
+  source, canonicalTable, lookupRef, value, onChange, onPick, headerText, disabled, readonly,
 }: {
   source: QuerySource;
-  queryTable: ModelDef["queryTables"][number] | undefined;
-  /** canonical first page already resolved with the form's other lookups */
+  /** canonical first page already resolved with the form's other lookups; carries the masterdata
+   *  row's own column list and value-help labels */
   canonicalTable?: ResolvedTable;
   lookupRef: LookupRef;
   value: Val | undefined;
@@ -296,101 +304,166 @@ export function QueryValueHelp({
 }) {
   const [search, setSearch] = useState<string | null>(null); // null = untouched; show canonical data without fetching
   const queryClient = useQueryClient();
-  // What the server searches: the ref's key/label columns as the model knows them (a query keeps
-  // its columns from Test fetch). The rendered key/label come from the response — see below.
-  const pinned = refKeyCols(lookupRef, qt?.columns);
+  const table = lookupRef.source === "manual" ? "" : lookupRef.table;
+  // What the server searches: the ref's key/label columns as the masterdata row declares them (a
+  // query keeps its columns from Test fetch). The rendered key/label come from the response.
+  const pinned = refKeyCols(lookupRef, canonicalTable?.columns);
   const searchCols = [pinned.valueCol, pinned.labelCol].filter((c): c is string => !!c);
 
   // initialData only seeds a new cache entry. Replace the empty-search entry when the canonical
-  // lookup refreshes so its rows and nextLink cannot remain stale.
+  // lookup refreshes so its rows and its next-page offset cannot remain stale.
   useEffect(() => {
-    if (!canonicalTable || !qt?.path) return;
-    const data = { pages: [canonicalTable], pageParams: [undefined as string | undefined] };
-    const key = source.kind === "draft"
-      ? orpc.models.queryPage.infiniteKey({
-          input: () => ({ target: qt.target, path: qt.path, columns: qt.columns, search: "", searchCols }),
-          initialPageParam: undefined as string | undefined,
-        })
-      : (source.kind === "portal" ? orpc.portal.queryPage : orpc.configs.queryPage).infiniteKey({
-          input: () => ({ modelId: source.modelId, table: qt.name, cursor: undefined, search: "", searchCols }),
-          initialPageParam: undefined as string | undefined,
-        });
+    if (!canonicalTable || !table) return;
+    const data = { pages: [canonicalTable], pageParams: [undefined as number | undefined] };
+    const key = (source.kind === "portal" ? orpc.portal.queryPage : orpc.configs.queryPage).infiniteKey({
+      input: () => ({ modelId: source.modelId, table, cursor: undefined, search: "", searchCols }),
+      initialPageParam: undefined as number | undefined,
+    });
     let current = true;
     void (async () => {
       await queryClient.cancelQueries({ queryKey: key, exact: true });
       if (current) queryClient.setQueryData(key, data);
     })();
     return () => { current = false; };
-  }, [canonicalTable, pinned.labelCol, pinned.valueCol, qt, queryClient, source.kind,
-    source.kind === "draft" ? undefined : source.modelId]);
+  }, [canonicalTable, pinned.labelCol, pinned.valueCol, queryClient, source.kind, source.modelId, table]);
 
-  // The cursor IS the next page's path: B1's nextLink already carries the filter and the skip.
-  // The canonical first page is real cache data (including its nextLink), not placeholder data:
-  // opening F4 or focusing an empty field cannot refetch page 1, and growing starts at page 2.
+  // The cursor is a row offset, and the search rides with it on every page — the server rebuilds
+  // the same query and only moves $skip. (It used to be B1's @odata.nextLink, which forced the
+  // server to re-validate a client-supplied URL on every page.)
+  // The canonical first page is real cache data (offset included), not placeholder data: opening
+  // F4 or focusing an empty field cannot refetch page 1, and growing starts at page 2.
   // keepPreviousData matters beyond the flicker: without it a search refetch empties `rows`, which
   // makes ValueHelp's `pending` true and unmounts the open F4 dialog mid-search (losing what the
   // user just typed into it). The table shows its own `loading` state instead.
   const term = (search ?? "").trim();
   const canonical = term === "" ? canonicalTable : undefined;
   const common = {
-    initialPageParam: undefined as string | undefined,
+    initialPageParam: undefined as number | undefined,
     initialData: canonical
-      ? { pages: [canonical], pageParams: [undefined as string | undefined] }
+      ? { pages: [canonical], pageParams: [undefined as number | undefined] }
       : undefined,
-    enabled: !!qt?.path && search !== null,
+    enabled: !!table && search !== null,
     retry: false,
     staleTime: canonical ? Infinity : 5 * 60_000,
     placeholderData: keepPreviousData,
   } as const;
   const page = useInfiniteQuery(
-    source.kind === "draft"
-      ? orpc.models.queryPage.infiniteOptions({
-          input: (next: string | undefined) => ({
-            target: qt?.target ?? "b1", path: next ?? qt?.path ?? "", columns: qt?.columns,
-            ...(next ? {} : { search: term, searchCols }),
-          }),
-          getNextPageParam: (last) => last.nextLink,
-          ...common,
-        })
-      : (source.kind === "portal" ? orpc.portal.queryPage : orpc.configs.queryPage).infiniteOptions({
-          input: (next: string | undefined) => ({
-            modelId: source.modelId, table: qt?.name ?? "", cursor: next,
-            search: term, searchCols,
-          }),
-          getNextPageParam: (last) => last.nextLink,
-          ...common,
-        }),
+    (source.kind === "portal" ? orpc.portal.queryPage : orpc.configs.queryPage).infiniteOptions({
+      input: (next: number | undefined) => ({ modelId: source.modelId, table, cursor: next, search: term, searchCols }),
+      getNextPageParam: (last) => last.nextSkip,
+      ...common,
+    }),
   );
 
-  const table = useMemo<ResolvedTable>(
+  const resolved = useMemo<ResolvedTable>(
     () => ({
-      columns: page.data?.pages[0]?.columns ?? qt?.columns ?? [],
+      columns: page.data?.pages[0]?.columns ?? canonicalTable?.columns ?? [],
       rows: (page.data?.pages ?? []).flatMap((p) => p.rows as Val[][]),
     }),
-    [page.data, qt?.columns],
+    [page.data, canonicalTable?.columns],
   );
   // Columns come back with the page when the query has none pinned, so resolve key/label against
   // what we actually got.
-  const { valueCol, labelCol } = refKeyCols(lookupRef, table.columns);
+  const { valueCol, labelCol } = refKeyCols(lookupRef, resolved.columns);
   const options = useMemo<DomainOption[]>(() => {
-    const vi = table.columns.indexOf(valueCol);
-    const li = labelCol ? table.columns.indexOf(labelCol) : vi;
-    return vi < 0 ? [] : table.rows.map((r) => ({ value: r[vi] ?? null, label: String(r[li < 0 ? vi : li] ?? "") }));
-  }, [table, valueCol, labelCol]);
+    const vi = resolved.columns.indexOf(valueCol);
+    const li = labelCol ? resolved.columns.indexOf(labelCol) : vi;
+    return vi < 0 ? [] : resolved.rows.map((r) => ({ value: r[vi] ?? null, label: String(r[li < 0 ? vi : li] ?? "") }));
+  }, [resolved, valueCol, labelCol]);
 
   return (
     <ValueHelp options={options} value={value} headerText={headerText}
       onChange={(nv, row) => {
-        if (row) onPick?.({ columns: table.columns, rows: [row] });
+        if (row) onPick?.({ columns: resolved.columns, rows: [row] });
         onChange(nv);
       }}
       disabled={disabled} readonly={readonly} valueState={page.error ? "Negative" : undefined}
-      table={table} valueCol={valueCol} columns={displayColumns(lookupRef, table.columns)}
+      table={resolved} valueCol={valueCol} columns={displayColumns(lookupRef, resolved.columns)}
+      columnLabels={canonicalTable?.labels} hidden={canonicalTable?.hidden}
       onSearch={setSearch} onOpen={() => setSearch("")}
       // Asked and nothing back yet, or a search refetch — but never on a failure, or the field
       // would spin forever and the dialog never open (retry is off; the error shows as valueState).
       loading={search !== null && !page.isError && (!page.data || (page.isFetching && !page.isFetchingNextPage))}
       hasMore={page.hasNextPage && !page.isFetchingNextPage}
       onLoadMore={() => { if (!page.isFetchingNextPage) void page.fetchNextPage(); }} />
+  );
+}
+
+/** Value help over a B1 entity set via `entities.rows`. Same dialog as QueryValueHelp; the
+ *  query is a ListVariantDef compiled server-side (the browser never sends a $filter string). */
+export function EntityValueHelp({
+  entitySet, keyField, value, onChange, headerText, disabled, readonly, select, filter,
+}: {
+  entitySet: string;
+  keyField: string;
+  value: Val | undefined;
+  onChange: (v: Val | undefined) => void;
+  headerText: string;
+  disabled?: boolean;
+  readonly?: boolean;
+  /** $select; omitted = every scalar */
+  select?: string[];
+  /** $filter, AND-combined */
+  filter?: FilterCond[];
+}) {
+  const [search, setSearch] = useState<string | null>(null); // null = untouched: don't fetch yet
+
+  const page = useInfiniteQuery(
+    orpc.entities.rows.infiniteOptions({
+      input: (skip: number | undefined) => ({
+        entity: entitySet,
+        spec: {
+          ...EMPTY_SPEC,
+          select: select ?? EMPTY_SPEC.select,
+          filter: filter ?? EMPTY_SPEC.filter,
+          search: (search ?? "").trim(),
+        },
+        top: 50,
+        ...(skip ? { skip } : {}),
+      }),
+      initialPageParam: undefined as number | undefined,
+      getNextPageParam: (last) => last.nextSkip,
+      enabled: search !== null,
+      retry: false,
+      placeholderData: keepPreviousData,
+      staleTime: 5 * 60_000,
+    }),
+  );
+
+  const rows = useMemo(() => (page.data?.pages ?? []).flatMap((p) => p.rows), [page.data]);
+  // Pinned select wins so headers exist before the first page; otherwise the key plus whatever
+  // the first row's other scalar fields are — B1's own column order.
+  const columns = useMemo(() => {
+    if (select?.length) return [keyField, ...select.filter((c) => c !== keyField)];
+    const first = rows[0];
+    if (!first) return [keyField];
+    const rest = Object.keys(first).filter((k) => k !== keyField && /^[A-Za-z_][A-Za-z0-9_]*$/.test(k));
+    return [keyField, ...rest.slice(0, 4)];
+  }, [rows, keyField, select]);
+
+  const table = useMemo<ResolvedTable>(
+    () => ({
+      columns,
+      rows: rows.map((r) => columns.map((c) => (r as Record<string, unknown>)[c] as Val)),
+    }),
+    [rows, columns],
+  );
+
+  const options = useMemo<DomainOption[]>(
+    () => table.rows.map((r) => ({ value: r[0] ?? null, label: String(r[1] ?? r[0] ?? "") })),
+    [table],
+  );
+
+  return (
+    <ValueHelp
+      options={options} value={value} onChange={onChange} headerText={headerText}
+      table={table} valueCol={columns[0]!} columns={columns.slice(1)}
+      onSearch={setSearch} onOpen={() => setSearch("")}
+      disabled={disabled} readonly={readonly}
+      valueState={page.error ? "Negative" : undefined}
+      loading={search !== null && !page.isError && (!page.data || (page.isFetching && !page.isFetchingNextPage))}
+      hasMore={page.hasNextPage && !page.isFetchingNextPage}
+      onLoadMore={() => { if (!page.isFetchingNextPage) void page.fetchNextPage(); }}
+    />
   );
 }

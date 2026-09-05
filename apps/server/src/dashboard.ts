@@ -1,11 +1,8 @@
 import type { B1Snapshot, Bucket, OpenQuote, ProjectSource, ProjectStatus } from "@hera/db";
 
 export type Window = "month" | "quarter" | "year12";
-export type Scope = "mine" | "tenant";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-/** Matches AGENT_STALE_MS in orpc/routers/entities.ts. */
-const AGENT_STALE_MS = 90_000;
 /** A quoted configuration nobody has moved in this long wants a human. */
 const STALE_QUOTE_DAYS = 7;
 
@@ -16,10 +13,8 @@ export type ProjectRow = {
   quotedValue: number | null; quotedCost: number | null;
 };
 
-export type ExceptionRow = { id: string; kind: string; lastError: string | null; updatedAt: Date };
-
 export type Overview = {
-  window: Window; scope: Scope; currency: string;
+  window: Window; currency: string;
   computedAt: string | null; snapshotError: string | null;
   orderValue: { total: number; hera: number; prevTotal: number };
   conversion: { rate: number; prevRate: number; quotes: number; converted: number };
@@ -29,7 +24,6 @@ export type Overview = {
   pipeline: Array<{ bucket: string; value: number; count: number; docEntries: number[] }>;
   pipelineTruncated: boolean;
   attention: Array<{ id: string; name: string; customer: string | null; docEntry: number | null; reason: string; ageDays: number }>;
-  exceptions: { failed: ExceptionRow[]; agentStale: boolean; agentLastSeen: string | null };
 };
 
 const monthKey = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
@@ -75,7 +69,7 @@ const EMPTY: Bucket = {
   quotes: { count: 0, closed: 0, value: 0 },
 };
 
-/** Sum the cells a (window, scope) selects. rep === null means every rep. */
+/** Sum the cells a window selects. */
 function sumBuckets(months: B1Snapshot["months"], keys: string[], rep: number | null): Bucket {
   const acc: Bucket = structuredClone(EMPTY);
   for (const k of keys) {
@@ -119,19 +113,15 @@ export function ageBuckets(
 }
 
 export function buildOverview(input: {
-  window: Window; scope: Scope; now: Date;
+  window: Window; now: Date;
   snapshot: { payload: B1Snapshot; computedAt: Date; lastError: string | null } | null;
-  salesPersonCode: number | null;
   projects: ProjectRow[];
-  failed: ExceptionRow[];
-  agentLastSeen: Date | null;
 }): Overview {
-  const { window, scope, now, snapshot, salesPersonCode, projects, failed, agentLastSeen } = input;
-  const rep = scope === "mine" ? salesPersonCode : null;
+  const { window, now, snapshot, projects } = input;
   const payload = snapshot?.payload;
   const keys = monthKeys(window, now);
-  const cur = payload ? sumBuckets(payload.months, keys, rep) : structuredClone(EMPTY);
-  const prev = payload ? sumBuckets(payload.months, priorKeys(keys, now, window), rep) : structuredClone(EMPTY);
+  const cur = payload ? sumBuckets(payload.months, keys, null) : structuredClone(EMPTY);
+  const prev = payload ? sumBuckets(payload.months, priorKeys(keys, now, window), null) : structuredClone(EMPTY);
 
   const heraDocEntries = new Set(
     projects.filter((p) => p.b1DocEntry !== null).map((p) => p.b1DocEntry!),
@@ -171,7 +161,7 @@ export function buildOverview(input: {
   const heraOrderValue = withMargin.filter(isOrdered).reduce((s, p) => s + p.quotedValue!, 0);
 
   return {
-    window, scope,
+    window,
     currency: payload?.currency ?? "EUR",
     computedAt: snapshot?.computedAt.toISOString() ?? null,
     snapshotError: snapshot?.lastError ?? null,
@@ -195,10 +185,5 @@ export function buildOverview(input: {
     pipeline: ageBuckets(payload?.openQuotes ?? [], now, heraDocEntries),
     pipelineTruncated: payload?.openQuotesTruncated ?? false,
     attention,
-    exceptions: {
-      failed,
-      agentStale: !agentLastSeen || now.getTime() - agentLastSeen.getTime() > AGENT_STALE_MS,
-      agentLastSeen: agentLastSeen?.toISOString() ?? null,
-    },
   };
 }

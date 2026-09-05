@@ -2,7 +2,7 @@ import type { Entries, ModelDef, OutputOverrides, Outputs } from "@hera/config-e
 import { randomUuid } from "../../uuid.ts";
 
 // Pure view logic for the configuration wizard. Client-side mirrors of the server's
-// RunCandidate/RunSelection jsonb shapes (web doesn't depend on @hera/db; structural match).
+// ConfigCandidate/ConfigSelection jsonb shapes (web doesn't depend on @hera/db; structural match).
 export type Candidate = { assignment: Entries; perBatch: { batchQty: number; outputs: Outputs }[] };
 export type Sel = { candidateIdx: number; batchQty: number; overrides?: OutputOverrides };
 
@@ -25,11 +25,11 @@ export const statusUi = {
   rejected: { state: "Negative", text: "Rejected" },
 } as const;
 
-// Params the run left open (assigned per candidate, not fixed in the run's entries),
+// Params the calculation left open (assigned per candidate, not fixed in the project's entries),
 // in model parameter order so labels are stable across candidates.
-export function openKeys(model: ModelDef, runEntries: Entries, candidates: { assignment: Entries }[]): string[] {
+export function openKeys(model: ModelDef, entries: Entries, candidates: { assignment: Entries }[]): string[] {
   const assigned = new Set<string>();
-  for (const c of candidates) for (const k of Object.keys(c.assignment)) if (!(k in runEntries)) assigned.add(k);
+  for (const c of candidates) for (const k of Object.keys(c.assignment)) if (!(k in entries)) assigned.add(k);
   return model.parameters.map((p) => p.key).filter((k) => assigned.has(k));
 }
 

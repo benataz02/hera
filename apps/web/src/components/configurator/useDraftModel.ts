@@ -2,9 +2,10 @@ import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { checkModel, type Issue, type ModelDef } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
+import type { TableCols } from "./exprHelpers.ts";
 import { toast } from "../toast.ts";
 
-export type TabKey = "params" | "rules" | "bom" | "routing" | "tables" | "history" | "settings";
+export type TabKey = "params" | "rules" | "bom" | "routing" | "history" | "settings";
 
 export const issueFor = (issues: Issue[], path: string) => issues.find((i) => i.path === path);
 
@@ -33,7 +34,7 @@ export function tabOf(path: string): TabKey {
 export function useDraftModel(id: string) {
   const qc = useQueryClient();
   const rec = useQuery(orpc.models.get.queryOptions({ input: { id } }));
-  const tablesQ = useQuery(orpc.models.tables.list.queryOptions());
+  const tablesQ = useQuery(orpc.masterdata.list.queryOptions());
   const [draft, setDraft] = useState<ModelDef | null>(null);
   const [dirty, setDirty] = useState(false);
   const [serverIssues, setServerIssues] = useState<Issue[]>([]);
@@ -49,15 +50,21 @@ export function useDraftModel(id: string) {
   }, [rec.data, portalMeta]);
 
   const tables = tablesQ.data ?? [];
-  const tableCols = useMemo(
-    () => tables.map((t) => ({ name: t.name, columns: colKeys(t.columns) })),
+  // Masterdata is one namespace: a model references a maintained table and a live query the same
+  // way, so both kinds go into checkModel and into the expression suggestions.
+  const tableCols = useMemo<TableCols[]>(
+    () => tables.map((t) => ({
+      name: t.name,
+      kind: t.kind,
+      columns: t.kind === "query" ? (t.query?.columns ?? []) : colKeys(t.columns),
+    })),
     [tables],
   );
   // Commit model: dialogs (ParamDialog, ComboTableDialog) buffer edits and commit on OK; inline
   // editors (RulesTab, SettingsTab, title edits) mutate this draft directly per keystroke. Validation
   // runs against a deferred draft so checkModel lags fast typing instead of blocking every keystroke.
   const deferredDraft = useDeferredValue(draft);
-  const issues = useMemo(
+  const modelIssues = useMemo(
     () => (deferredDraft ? checkModel(deferredDraft, tableCols) : []),
     [deferredDraft, tableCols],
   );
@@ -87,7 +94,7 @@ export function useDraftModel(id: string) {
       setDirty(true);
       setServerIssues([]);
     },
-    issues,
+    issues: modelIssues,
     serverIssues,
     dirty,
     portalMeta,
@@ -95,15 +102,17 @@ export function useDraftModel(id: string) {
       setPortalMetaState(p);
       setDirty(true);
     },
-    save: () => draft && portalMeta && saveMut.mutate({
-      id, definition: draft,
-      portal: portalMeta.portal, portalDescription: portalMeta.portalDescription || null,
-    }),
+    save: () => {
+      if (!draft || !portalMeta) return;
+      saveMut.mutate({
+        id, definition: draft,
+        portal: portalMeta.portal, portalDescription: portalMeta.portalDescription || null,
+      });
+    },
     saving: saveMut.isPending,
     saveError: saveMut.error as Error | null,
     loading: rec.isPending,
     loadError: rec.error as Error | null,
     tableCols,
-    savedQueryTables: rec.data?.definition.queryTables ?? [],
   };
 }

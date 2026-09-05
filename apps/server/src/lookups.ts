@@ -1,29 +1,79 @@
-import { refKeyCols } from "@hera/config-engine";
-import type { Entries, LookupRef, ModelDef, Option, ResolvedLookups, ResolvedTable, Val } from "@hera/config-engine";
+import { refKeyCols, referencedTables } from "@hera/config-engine";
+import type {
+  Entries, LookupRef, ModelDef, ODataQuery, Option, QuerySource, ResolvedLookups, ResolvedTable, Val,
+} from "@hera/config-engine";
+import { andFilter, escapeLiteral } from "@hera/b1";
 import { ORPCError } from "@orpc/server";
 
-// Resolve a model's external references (manual lists, tenant config_tables, agent-backed
-// B1/Beas GETs) into the engine's ResolvedLookups. The agent hop is injected so this stays
-// testable and DB/transport-free; callers wire runRequest(tenantId, "query", ...) in.
+// Resolve a model's external references (manual lists, and the tenant's masterdata — rows
+// maintained here or query-backed B1/Beas reads) into the engine's ResolvedLookups. The read hop
+// is injected so this stays testable and DB/transport-free; production callers pass
+// runnerFor(connector) from b1.ts.
+//
+// Nothing here builds a URL any more: a query is `{ entitySet, filter, orderby, top }` and
+// packages/b1's query.ts is the only place that turns one into a path.
 
-export type QueryFetcher = (target: "b1" | "beas", path: string, opts?: { all?: boolean }) => Promise<unknown>;
-export type TenantTable = { name: string; columns: { key: string }[]; rows: Val[][] };
+/** Rows per value-help page when the model's query does not pin its own `top`. */
+export const DEFAULT_PAGE = 100;
 
-// Service Layer (and our Beas client) return collections as { value: [...] }; accept bare arrays too.
-function rowsOf(json: unknown, target: string, path: string): Record<string, unknown>[] {
-  const v = Array.isArray(json) ? json : (json as { value?: unknown } | null)?.value;
-  if (!Array.isArray(v)) throw new Error(`Lookup ${target} GET ${path} did not return a row array`);
-  return v as Record<string, unknown>[];
-}
+export type QueryPage = {
+  rows: Record<string, unknown>[];
+  /** $skip for the next page; absent = the last page. */
+  nextSkip?: number;
+  /** a multi-page read stopped at its page cap — rows are incomplete. */
+  truncated?: boolean;
+};
+
+/** The injected read hop. One page per call unless `maxPages` says otherwise. */
+export type QueryRunner = (
+  target: "b1" | "beas",
+  query: ODataQuery,
+  columns: string[],
+  opts?: { skip?: number; top?: number; maxPages?: number },
+) => Promise<QueryPage>;
+
+/** A live read plus the two display-only fields the value-help dialog reads. Structurally the
+ *  `query` column of config_masterdata; spelled out here so this module stays DB-free. */
+export type MasterdataQuery = QuerySource & { labels?: Record<string, string>; hidden?: string[] };
+/** One config_masterdata row: values maintained here (`columns`/`rows`) or a live read (`query`). */
+export type MasterdataRow = {
+  name: string;
+  kind: "table" | "query";
+  columns: { key: string }[];
+  rows: Val[][];
+  query?: MasterdataQuery | null;
+};
+export type MasterdataQueryRow = MasterdataRow & { query: MasterdataQuery };
 
 const asVal = (v: unknown): Val =>
   typeof v === "number" || typeof v === "boolean" || v === null || v === undefined ? ((v ?? null) as Val) : String(v);
 
-export function tablesFromTenant(tenantTables: TenantTable[]): Record<string, ResolvedTable> {
+export function tablesFromMasterdata(rows: MasterdataRow[]): Record<string, ResolvedTable> {
   const out: Record<string, ResolvedTable> = {};
-  for (const t of tenantTables) out[t.name] = { columns: t.columns.map((c) => c.key), rows: t.rows };
+  for (const t of rows) if (t.kind === "table") out[t.name] = { columns: t.columns.map((c) => c.key), rows: t.rows };
   return out;
 }
+
+/** The query rows a model actually reads. Masterdata is tenant-wide now, so without this filter
+ *  every model would fetch every tenant query — one SAP hop each, for tables it never names. */
+export function queryRowsFor(model: ModelDef, rows: MasterdataRow[]): MasterdataQueryRow[] {
+  const named = referencedTables(model);
+  return rows.filter((r): r is MasterdataQueryRow => r.kind === "query" && !!r.query && named.has(r.name));
+}
+
+// Bumped whenever a tenant's masterdata changes; configs.ts folds it into its lookup cache key so
+// an edited table shows up at once instead of after the 5-minute TTL.
+// ponytail: per-process, like the cache it feeds — a second server process would need the row's
+// updatedAt in the key instead.
+const versions = new Map<string, number>();
+export const masterdataVersion = (tenantId: string) => versions.get(tenantId) ?? 0;
+export const bumpMasterdata = (tenantId: string) => { versions.set(tenantId, Date.now()); };
+
+/** True when resolving this model needs the tenant's agent. */
+export const needsSap = (model: ModelDef, rows: MasterdataRow[]): boolean => queryRowsFor(model, rows).length > 0;
+
+export const queryRowOf = (rows: MasterdataRow[], name: string): MasterdataQueryRow | undefined =>
+  rows.find((r): r is MasterdataQueryRow => r.name === name && r.kind === "query" && !!r.query);
 
 function project(t: ResolvedTable, name: string, valueCol: string, labelCol?: string): Option[] {
   const vi = t.columns.indexOf(valueCol);
@@ -48,74 +98,58 @@ const fieldsOf = (rows: Record<string, unknown>[]): string[] =>
 
 const IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
-/** AND a `contains(col,'q')` OR-group onto an OData path's $filter (or add one). Pure — the agent
- *  just GETs whatever path it is handed, so search composition belongs here. */
-export function withSearch(path: string, cols: string[], q: string): string {
+/** AND a `contains(col,'q')` OR-group onto a query's $filter. Was regex surgery on a
+ *  URL-encoded `$filter=` group; with a structured query it is string composition. */
+export function withSearch(query: ODataQuery, cols: string[], q: string): ODataQuery {
   const term = q.trim();
-  const ors = cols.filter((c) => IDENT.test(c)).map((c) => `contains(${c},'${term.replace(/'/g, "''")}')`);
-  if (!term || !ors.length) return path;
-  const expr = ors.join(" or ");
-  const existing = /([?&]\$filter=)([^&]*)/.exec(path);
-  if (existing)
-    return path.replace(existing[0], `${existing[1]}${encodeURIComponent(`(${decodeURIComponent(existing[2]!)}) and (${expr})`)}`);
-  return `${path}${path.includes("?") ? "&" : "?"}$filter=${encodeURIComponent(expr)}`;
+  const ors = cols.filter((c) => IDENT.test(c)).map((c) => `contains(${c},'${escapeLiteral(term)}')`);
+  if (!term || !ors.length) return query;
+  return { ...query, filter: andFilter(query.filter, ors.join(" or ")) };
 }
 
-/** Resolve a value-help page request against the model. The OData path always comes from the
- *  model's own queryTables, never from the client; `cursor` may alter only OData paging options. */
-export function queryPagePath(
-  model: ModelDef,
-  input: { table: string; search?: string; searchCols?: string[]; cursor?: string },
-): { target: "b1" | "beas"; path: string; columns?: string[] } {
-  const qt = model.queryTables.find((q) => q.name === input.table);
-  if (!qt) throw new Error(`Unknown query table '${input.table}'`);
+/** AND an exact `col eq <literal>` onto a query's $filter. */
+export function withExact(query: ODataQuery, col: string, value: Val): ODataQuery {
+  const literal = typeof value === "string" ? `'${escapeLiteral(value)}'` : String(value);
+  return { ...query, filter: andFilter(query.filter, `${col} eq ${literal}`) };
+}
+
+/** Resolve a value-help page request. The query always comes from the tenant's masterdata, never
+ *  from the client; `cursor` is a plain `$skip` offset and can express nothing else — which is
+ *  what the old "parse both URLs and compare their searchParams" check was trying to guarantee. */
+export function queryPageSource(
+  rows: MasterdataRow[],
+  input: { table: string; search?: string; searchCols?: string[]; cursor?: number },
+): QuerySource & { skip?: number } {
+  const row = queryRowOf(rows, input.table);
+  if (!row) throw new Error(`Unknown query table '${input.table}'`);
+  const qt = { name: row.name, ...row.query };
   const searchCols = input.searchCols ?? [];
   const unknownCol = searchCols.find((c) => !qt.columns.includes(c));
   if (unknownCol) throw new Error(`Search column '${unknownCol}' is not declared by query table '${qt.name}'`);
-  const canonical = withSearch(qt.path, searchCols, input.search ?? "");
-  let path = canonical;
-  if (input.cursor) {
-    const base = "https://lookup.invalid";
-    const expected = new URL(canonical, base);
-    const cursor = new URL(input.cursor, base);
-    const paging = new Set(["$skip", "$skiptoken"]);
-    const fixed = (u: URL) =>
-      JSON.stringify([...u.searchParams].filter(([key]) => !paging.has(key)).sort());
-    if (
-      !input.cursor.startsWith("/") ||
-      cursor.origin !== expected.origin ||
-      cursor.pathname !== expected.pathname ||
-      fixed(cursor) !== fixed(expected)
-    ) {
-      throw new Error("Cursor does not match this query table");
-    }
-    path = input.cursor;
-  }
+  if (input.cursor !== undefined && (!Number.isInteger(input.cursor) || input.cursor < 0))
+    throw new Error("Cursor must be a non-negative row offset");
   return {
     target: qt.target,
-    path,
+    query: withSearch(qt.query, searchCols, input.search ?? ""),
     columns: qt.columns,
+    ...(input.cursor ? { skip: input.cursor } : {}),
   };
 }
 
-/** GET a query and shape it as a table; columns come from the response unless pinned.
- *  Configurator lookups take one page and retain `nextLink`; history explicitly requests all. */
+/** Read a query and shape it as a table; columns come from the response unless pinned. */
 export async function fetchQueryTable(
-  fetchQuery: QueryFetcher,
+  run: QueryRunner,
   target: "b1" | "beas",
-  path: string,
+  query: ODataQuery,
   columns?: string[],
-  all = false,
+  opts?: { skip?: number; top?: number; maxPages?: number },
 ): Promise<ResolvedTable> {
-  const json = await fetchQuery(target, path, { all });
-  const rows = rowsOf(json, target, path);
-  const cols = columns?.length ? columns : fieldsOf(rows);
-  const envelope = json as { "@odata.nextLink"?: unknown; "odata.nextLink"?: unknown };
-  const nextLink = envelope?.["@odata.nextLink"] ?? envelope?.["odata.nextLink"];
+  const page = await run(target, query, columns ?? [], opts);
+  const cols = columns?.length ? columns : fieldsOf(page.rows);
   return {
     columns: cols,
-    rows: rows.map((r) => cols.map((c) => asVal(r[c]))),
-    ...(typeof nextLink === "string" && nextLink ? { nextLink } : {}),
+    rows: page.rows.map((r) => cols.map((c) => asVal(r[c]))),
+    ...(page.nextSkip === undefined ? {} : { nextSkip: page.nextSkip }),
   };
 }
 
@@ -123,9 +157,10 @@ export async function fetchQueryTable(
  *  canonical first page, and cached lookup objects are never mutated. */
 export async function enrichLookups(
   model: ModelDef,
+  rows: MasterdataRow[],
   entries: Entries,
   canonical: ResolvedLookups,
-  fetchQuery: QueryFetcher,
+  run: QueryRunner,
 ): Promise<ResolvedLookups> {
   let tables = canonical.tables;
   for (const p of model.parameters) {
@@ -133,9 +168,9 @@ export async function enrichLookups(
     const value = entries[p.key];
     if (ref?.source !== "query" || !(p.key in entries) || Array.isArray(value)) continue;
 
-    const query = model.queryTables.find((q) => q.name === ref.table);
-    const valueCol = query && refKeyCols(ref, query.columns).valueCol;
-    if (!query || !valueCol || !IDENT.test(valueCol))
+    const source = queryRowOf(rows, ref.table)?.query;
+    const valueCol = source && refKeyCols(ref, source.columns).valueCol;
+    if (!source || !valueCol || !IDENT.test(valueCol))
       throw new ORPCError("BAD_REQUEST", { message: `Invalid lookup definition for parameter '${p.key}'` });
 
     const current = tables[ref.table];
@@ -146,16 +181,9 @@ export async function enrichLookups(
       message: `Invalid lookup value for parameter '${p.key}': value is missing or stale`,
     });
     if (typeof value === "number" && !Number.isFinite(value)) throw invalid();
-    const literal = typeof value === "string" ? `'${value.replace(/'/g, "''")}'` : String(value);
-    const exact = `${valueCol} eq ${literal}`;
-    const existing = /([?&]\$filter=)([^&]*)/.exec(query.path);
-    const path = existing
-      ? query.path.replace(
-          existing[0],
-          `${existing[1]}${encodeURIComponent(`(${decodeURIComponent(existing[2]!)}) and (${exact})`)}`,
-        )
-      : `${query.path}${query.path.includes("?") ? "&" : "?"}$filter=${encodeURIComponent(exact)}`;
-    const fetched = await fetchQueryTable(fetchQuery, query.target, path, query.columns, false);
+    const fetched = await fetchQueryTable(
+      run, source.target, withExact(source.query, valueCol, value ?? null), source.columns,
+    );
     const fetchedKey = fetched.columns.indexOf(valueCol);
     const row = fetched.rows[0];
     if (!row || fetchedKey < 0 || row[fetchedKey] !== value) throw invalid();
@@ -173,36 +201,43 @@ export async function enrichLookups(
   return tables === canonical.tables ? canonical : { domains: canonical.domains, tables };
 }
 
-/** Fetch each queryTable and add it to `tables` (mutates in place). Concurrent: every fetch is an
- *  agent round trip (insert + notify + B1 GET + ack), so serial cost was N hops on a cache miss.
- *  `resolveLookups`'s `fetchOnce` still collapses two tables that share one GET. */
+/** Fetch each query row and add it to `tables` (mutates in place). Concurrent: every read is a
+ *  live SAP hop. `resolveLookups`'s `runOnce` still collapses two tables that share one read.
+ *  `labels`/`hidden` ride along on the resolved table — that is how the value-help dialog gets
+ *  its headers now that the model no longer carries the query. */
 export async function addQueryTables(
   tables: Record<string, ResolvedTable>,
-  queryTables: ModelDef["queryTables"],
-  fetchQuery: QueryFetcher,
+  queryRows: MasterdataQueryRow[],
+  run: QueryRunner,
 ): Promise<void> {
   const fetched = await Promise.all(
-    queryTables.map((qt) => fetchQueryTable(fetchQuery, qt.target, qt.path, qt.columns, false)),
+    queryRows.map((r) => fetchQueryTable(run, r.query.target, r.query.query, r.query.columns)),
   );
-  queryTables.forEach((qt, i) => { tables[qt.name] = fetched[i]!; });
+  queryRows.forEach((r, i) => {
+    tables[r.name] = {
+      ...fetched[i]!,
+      ...(r.query.labels ? { labels: r.query.labels } : {}),
+      ...(r.query.hidden ? { hidden: r.query.hidden } : {}),
+    };
+  });
 }
 
 export async function resolveLookups(
   model: ModelDef,
-  tenantTables: TenantTable[],
-  fetchQuery: QueryFetcher,
+  rows: MasterdataRow[],
+  run: QueryRunner,
 ): Promise<ResolvedLookups> {
-  // Memoize per (target, path): two queryTables may share one GET.
-  const fetched = new Map<string, Promise<unknown>>();
-  const fetchOnce: QueryFetcher = (target, path, opts) => {
-    const k = `${target} ${path}`;
-    let p = fetched.get(k);
-    if (!p) fetched.set(k, (p = fetchQuery(target, path, opts)));
+  // Memoize per (target, query, skip): two query tables may share one read.
+  const seen = new Map<string, Promise<QueryPage>>();
+  const runOnce: QueryRunner = (target, query, columns, opts) => {
+    const k = `${target} ${JSON.stringify(query)} ${opts?.skip ?? 0} ${opts?.maxPages ?? 1}`;
+    let p = seen.get(k);
+    if (!p) seen.set(k, (p = run(target, query, columns, opts)));
     return p;
   };
 
-  const tables = tablesFromTenant(tenantTables);
-  await addQueryTables(tables, model.queryTables, fetchOnce);
+  const tables = tablesFromMasterdata(rows);
+  await addQueryTables(tables, queryRowsFor(model, rows), runOnce);
 
   const domains: ResolvedLookups["domains"] = {};
   for (const p of model.parameters) {

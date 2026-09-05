@@ -1,0 +1,14 @@
+{
+  "name": "@hera/b1",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.0"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.11.0"
+  }
+}

@@ -78,6 +78,18 @@ describe("propagate", () => {
     expect(p.candidateEstimate).toBe(18);
   });
 
+  test("excludeFromDomains omits param from engine domains and open", () => {
+    const m = structuredClone(model);
+    m.parameters.find((p) => p.key === "color")!.excludeFromDomains = true;
+    const p = propagate(m, lookups, { coated: true });
+    expect(p.domains.color).toBeUndefined();
+    expect(p.open).not.toContain("color");
+    expect(p.open.sort()).toEqual(["material", "section"]);
+    // material(2) × section(3); color no longer multiplies
+    expect(p.candidateEstimate).toBe(6);
+    expect(p.values.coated).toBe(true);
+  });
+
   test("2-unbound support check keeps values that have some support", () => {
     const p = propagate(model, lookups, { coated: true });
     // every color has a supporting material in the allow table except none -> red survives via steel
@@ -151,7 +163,7 @@ describe("derived lookup columns", () => {
     ],
     structure: { sections: [{ key: "s", title: "S", groups: [{ key: "g", title: "G", params: ["mat"] }] }] },
     computed: [{ key: "dbl", expr: "mat_density * 2" }],
-    constraints: [], bom: [], routing: [], queryTables: [],
+    constraints: [], bom: [], routing: [],
     pricing: { priceExpr: "0", quoteItemCode: "X" },
     batchDefaults: [1],
   };
@@ -181,7 +193,6 @@ describe("derived lookup columns", () => {
         { key: "height", label: "Height", type: "number", ui: "input", defaultExpr: "mp_ItemHeight" },
       ],
       computed: [],
-      queryTables: [{ name: "raw", target: "b1", path: "Items", columns: ["ItemCode", "ItemName", "ItemHeight"] }],
     };
     const lk: ResolvedLookups = {
       domains: { mp: [{ value: "A1", label: "Bar" }] },

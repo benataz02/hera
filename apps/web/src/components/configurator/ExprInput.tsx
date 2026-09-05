@@ -1,5 +1,5 @@
 import { useMemo, type CSSProperties } from "react";
-import { Input, SuggestionItemCustom } from "@ui5/webcomponents-react";
+import { Input, SuggestionItemCustom, TextArea } from "@ui5/webcomponents-react";
 import { DslError, parse, type Issue, type ModelDef } from "@hera/config-engine";
 import { complete, matches, scopeSuggestions, type TableCols } from "./exprHelpers.ts";
 
@@ -7,11 +7,11 @@ import { complete, matches, scopeSuggestions, type TableCols } from "./exprHelpe
 // span-accurate messages, trailing-token suggestions in the Input's native popup. Each
 // suggestion's text is the *completed* expression, so picking one just fires onInput with it.
 
-// Monospace inside the shadow DOM via the exposed `input` CSS part.
+// Monospace inside the shadow DOM via the exposed `input`/`textarea` CSS parts.
 if (typeof document !== "undefined" && !document.getElementById("hera-expr-style")) {
   const el = document.createElement("style");
   el.id = "hera-expr-style";
-  el.textContent = `.hera-expr::part(input){font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}`;
+  el.textContent = `.hera-expr::part(input),.hera-expr::part(textarea){font-family:ui-monospace,SFMono-Regular,Menlo,monospace;}`;
   document.head.appendChild(el);
 }
 
@@ -25,6 +25,7 @@ export function ExprInput({
   optional = false,
   issue,
   fieldId,
+  rows,
   style,
 }: {
   value: string | undefined;
@@ -39,6 +40,8 @@ export function ExprInput({
   issue?: Issue;
   /** DOM id (MessageView jump target) */
   fieldId?: string;
+  /** render as a growing TextArea of this many rows instead of a one-line Input */
+  rows?: number;
   style?: CSSProperties;
 }) {
   const text = value ?? "";
@@ -60,6 +63,27 @@ export function ExprInput({
 
   const sugg = matches(all, text).slice(0, 8);
   const emit = (v: string | undefined) => onChange(!v && optional ? undefined : (v ?? ""));
+
+  // Long formulas need room more than they need completion: UI5 has no suggestion popup for
+  // TextArea, so `rows` trades the trailing-token list for a growing multi-line box.
+  // ponytail: if the missing completion bites, the upgrade is a Popover anchored to the TextArea.
+  if (rows)
+    return (
+      <TextArea
+        id={fieldId}
+        className="hera-expr"
+        style={{ width: "100%", ...style }}
+        rows={rows}
+        growing
+        growingMaxRows={rows + 5}
+        value={text}
+        placeholder={placeholder}
+        valueState={error ? "Negative" : "None"}
+        valueStateMessage={<div>{errorText}</div>}
+        onInput={(e) => emit(e.target.value)}
+        data-expr-input
+      />
+    );
 
   return (
     <Input

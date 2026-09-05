@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { and, eq } from "drizzle-orm";
-import { db, configModel, configProject, configRun } from "@hera/db";
-import type { ModelDef } from "@hera/config-engine";
-import { applySelection, executeRun } from "../src/orpc/routers/configs.ts";
-import type { QueryFetcher } from "../src/lookups.ts";
+import { eq } from "drizzle-orm";
+import { db, configMasterdata, configModel, configProject, type ConfigCandidate } from "@hera/db";
+import type { Entries, ModelDef, ResolvedLookups } from "@hera/config-engine";
+import { applySelection, calculateProject } from "../src/orpc/routers/configs.ts";
+import { configDocumentCommandId } from "../src/config-quote.ts";
+import type { QueryRunner } from "../src/lookups.ts";
 
 const tenantId = `test-cfg-${crypto.randomUUID()}`;
 
@@ -24,174 +25,198 @@ const model: ModelDef = {
   constraints: [],
   bom: [{ id: "body", itemCode: '"BODY"', qty: 'size == "S" ? 1 : 2', price: "3", scrapPct: 0 }],
   routing: [{ id: "cut", resource: "SAW", setupMin: "10", runMinPerUnit: "1", ratePerHour: "60" }],
-  queryTables: [{ name: "items", target: "b1", path: "/Items?$select=ItemCode", columns: ["ItemCode"] }],
   pricing: { priceExpr: "unitCost * 2", quoteItemCode: "BOX" },
   batchDefaults: [10],
 };
 
-const fakeFetch: QueryFetcher = async (target, path) => {
+const fakeFetch: QueryRunner = async (target, query, columns) => {
   expect(target).toBe("b1");
-  expect(path).toBe("/Items?$select=ItemCode");
-  return { value: [{ ItemCode: "A" }, { ItemCode: "B" }] };
+  expect(query).toEqual({ entitySet: "Items" });
+  expect(columns).toEqual(["ItemCode"]);
+  return { rows: [{ ItemCode: "A" }, { ItemCode: "B" }] };
 };
 
-describe.skipIf(!process.env.DATABASE_URL)("configurator run + select (integration)", () => {
-  afterAll(async () => {
-    await db.delete(configRun).where(eq(configRun.tenantId, tenantId));
-    await db.delete(configProject).where(eq(configProject.tenantId, tenantId));
-    await db.delete(configModel).where(eq(configModel.tenantId, tenantId));
+const lookups: ResolvedLookups = {
+  domains: { grade: [{ value: "A", label: "A" }, { value: "B", label: "B" }] },
+  tables: { items: { columns: ["ItemCode"], rows: [["A"], ["B"]] } },
+};
+
+// A query table is tenant masterdata now, not part of any model: one row, referenced by name.
+const seedQueryTable = async (name: string, columns: string[]) => {
+  await db.insert(configMasterdata).values({
+    tenantId, name, kind: "query",
+    query: { target: "b1", query: { entitySet: "Items" }, columns },
+  }).onConflictDoNothing();
+};
+
+const seed = async (name: string, def: ModelDef, entries: Entries, batches: number[]) => {
+  const [m] = await db.insert(configModel).values({ tenantId, name: def.name, definition: def })
+    .returning({ id: configModel.id });
+  const [p] = await db.insert(configProject)
+    .values({ tenantId, modelId: m!.id, name, batches, entries, createdBy: "tester" })
+    .returning({ id: configProject.id });
+  return p!.id;
+};
+
+const load = async (id: string) =>
+  (await db.select().from(configProject).where(eq(configProject.id, id)).limit(1))[0]!;
+
+// configDocumentCommandId is pure — this half runs without a database.
+describe("configDocumentCommandId", () => {
+  const candidates = [
+    { assignment: { size: "S" }, perBatch: [{ batchQty: 10, outputs: {} as never }] },
+    { assignment: { size: "L" }, perBatch: [{ batchQty: 10, outputs: {} as never }] },
+  ] satisfies ConfigCandidate[];
+  const id = (sel: { candidateIdx: number; batchQty: number }[], c = candidates) =>
+    configDocumentCommandId({ tenantId: "t", projectId: "p", candidates: c, selection: sel });
+
+  test("a reordered retry of the same picks keeps its key", () => {
+    const a = id([{ candidateIdx: 0, batchQty: 10 }, { candidateIdx: 1, batchQty: 10 }]);
+    expect(a).toHaveLength(64);
+    expect(id([{ candidateIdx: 1, batchQty: 10 }, { candidateIdx: 0, batchQty: 10 }])).toBe(a);
   });
 
-  test("run snapshots model+lookups+candidates and flips status; select recomputes overrides", async () => {
-    const [m] = await db
-      .insert(configModel)
-      .values({ tenantId, name: model.name, definition: model })
-      .returning({ id: configModel.id });
-    const [p] = await db
-      .insert(configProject)
-      .values({ tenantId, modelId: m!.id, name: "proj", batches: [10], entries: {}, createdBy: "tester" })
-      .returning({ id: configProject.id });
+  test("dropping a pick or changing a batch quantity changes the key", () => {
+    const a = id([{ candidateIdx: 0, batchQty: 10 }, { candidateIdx: 1, batchQty: 10 }]);
+    expect(id([{ candidateIdx: 0, batchQty: 10 }])).not.toBe(a);
+    expect(id([{ candidateIdx: 0, batchQty: 20 }, { candidateIdx: 1, batchQty: 10 }])).not.toBe(a);
+  });
 
-    const res = await executeRun(tenantId, p!.id, fakeFetch);
+  // The reason the hash covers assignments and not indices: a recalculate replaces the candidate
+  // list, so "candidate 0" can silently come to mean a different configuration. If the key did not
+  // move with it, the U_HERA_DedupKey pre-check would hand back a quotation for the old one.
+  test("the same index against a different calculation is a different key", () => {
+    const a = id([{ candidateIdx: 0, batchQty: 10 }]);
+    const recalculated = [
+      { assignment: { size: "L" }, perBatch: [{ batchQty: 10, outputs: {} as never }] },
+    ] satisfies ConfigCandidate[];
+    expect(id([{ candidateIdx: 0, batchQty: 10 }], recalculated)).not.toBe(a);
+  });
+});
+
+describe.skipIf(!process.env.DATABASE_URL)("calculateProject (integration)", () => {
+  afterAll(async () => {
+    await db.delete(configProject).where(eq(configProject.tenantId, tenantId));
+    await db.delete(configModel).where(eq(configModel.tenantId, tenantId));
+    await db.delete(configMasterdata).where(eq(configMasterdata.tenantId, tenantId));
+  });
+
+  test("candidates land on config_project and flip its status; applySelection recomputes overrides", async () => {
+    await seedQueryTable("items", ["ItemCode"]);
+    const id = await seed("proj", model, {}, [10]);
+
+    const res = await calculateProject(tenantId, id, fakeFetch);
     // 2 sizes × 2 grades, nothing constrained away
     expect(res.candidateCount).toBe(4);
     expect(res.capped).toBe(false);
 
-    const [run] = await db
-      .select()
-      .from(configRun)
-      .where(and(eq(configRun.id, res.runId), eq(configRun.tenantId, tenantId)))
-      .limit(1);
-    expect(run).toBeDefined();
-    expect(run!.modelSnapshot.name).toBe("Test box");
-    expect(run!.lookupSnapshot.domains.grade).toEqual([
-      { value: "A", label: "A" },
-      { value: "B", label: "B" },
-    ]);
-    expect(run!.candidates).toHaveLength(4);
+    const project = await load(id);
+    expect(project.status).toBe("calculated");
+    expect(project.calculatedAt).not.toBeNull();
+    expect(project.candidates).toHaveLength(4);
 
     // Hand-check one candidate (size S, batch 10): material 1×3=3;
     // labor ((10/10+1)/60)×60=2; unitCost 5; priceExpr ×2 → unitPrice 10; batchTotal 100.
-    const idx = run!.candidates.findIndex((c) => c.assignment.size === "S");
-    const outputs = run!.candidates[idx]!.perBatch[0]!.outputs;
-    expect(run!.candidates[idx]!.perBatch[0]!.batchQty).toBe(10);
+    const idx = project.candidates.findIndex((c) => c.assignment.size === "S");
+    const outputs = project.candidates[idx]!.perBatch[0]!.outputs;
+    expect(project.candidates[idx]!.perBatch[0]!.batchQty).toBe(10);
     expect(outputs.unitCost).toBeCloseTo(5);
     expect(outputs.unitPrice).toBeCloseTo(10);
     expect(outputs.batchTotal).toBeCloseTo(100);
 
-    const [proj] = await db.select().from(configProject).where(eq(configProject.id, p!.id)).limit(1);
-    expect(proj!.status).toBe("calculated");
-
     // select: price override 3 → 4 on the same candidate: unitCost 6, unitPrice 12.
-    const selections = applySelection(run!, [
+    const selections = applySelection(model, lookups, project.candidates, [
       { candidateIdx: idx, batchQty: 10, overrides: { bom: [{ id: "body", unitPrice: 4 }] } },
     ]);
     expect(selections[0]!.outputs.unitCost).toBeCloseTo(6);
     expect(selections[0]!.outputs.unitPrice).toBeCloseTo(12);
 
     // out-of-range candidate index is rejected
-    expect(() => applySelection(run!, [{ candidateIdx: 99, batchQty: 10 }])).toThrow();
+    expect(() => applySelection(model, lookups, project.candidates, [{ candidateIdx: 99, batchQty: 10 }])).toThrow();
   });
 
-  test("a persisted off-page selection is enriched for derived values and stored in the run snapshot", async () => {
+  test("a persisted off-page selection is enriched before pricing", async () => {
     const offPageModel: ModelDef = {
       name: "Off-page material",
       parameters: [{
         key: "material", label: "Material", type: "string", ui: "select",
-        domain: { kind: "options", ref: { source: "query", table: "items", valueCol: "ItemCode", columns: ["Price"] } },
+        domain: { kind: "options", ref: { source: "query", table: "priced", valueCol: "ItemCode", columns: ["Price"] } },
       }],
       structure: { sections: [{ key: "main", title: "Main", groups: [{ key: "g", title: "G", params: ["material"] }] }] },
       computed: [],
       constraints: [],
       bom: [{ id: "body", itemCode: "material", qty: "1", price: "material_Price", scrapPct: 0 }],
       routing: [],
-      queryTables: [{ name: "items", target: "b1", path: "/Items?$select=ItemCode,Price", columns: ["ItemCode", "Price"] }],
       pricing: { priceExpr: "unitCost", quoteItemCode: "BOX" },
       batchDefaults: [1],
     };
-    const [m] = await db.insert(configModel)
-      .values({ tenantId, name: offPageModel.name, definition: offPageModel })
-      .returning({ id: configModel.id });
-    const [p] = await db.insert(configProject)
-      .values({ tenantId, modelId: m!.id, name: "off-page", batches: [1], entries: { material: "B" }, createdBy: "tester" })
-      .returning({ id: configProject.id });
+    await seedQueryTable("priced", ["ItemCode", "Price"]);
+    const id = await seed("off-page", offPageModel, { material: "B" }, [1]);
 
-    const paths: string[] = [];
-    const fetcher: QueryFetcher = async (_target, path, opts) => {
-      expect(opts).toEqual({ all: false });
-      paths.push(path);
-      const encoded = /[?&]\$filter=([^&]*)/.exec(path)?.[1];
-      if (!encoded) return { value: [{ ItemCode: "A", Price: 3 }] };
-      expect(decodeURIComponent(encoded)).toBe("ItemCode eq 'B'");
-      return { value: [{ ItemCode: "B", Price: 11 }] };
+    const reads: (string | undefined)[] = [];
+    const fetcher: QueryRunner = async (_target, query) => {
+      reads.push(query.filter);
+      if (!query.filter) return { rows: [{ ItemCode: "A", Price: 3 }] };
+      expect(query.filter).toBe("ItemCode eq 'B'");
+      return { rows: [{ ItemCode: "B", Price: 11 }] };
     };
 
-    const result = await executeRun(tenantId, p!.id, fetcher);
-    const [run] = await db.select().from(configRun)
-      .where(and(eq(configRun.id, result.runId), eq(configRun.tenantId, tenantId))).limit(1);
-
-    expect(paths).toHaveLength(2);
-    expect(run!.lookupSnapshot.domains.material).toEqual([{ value: "A", label: "3" }]);
-    expect(run!.lookupSnapshot.tables.items!.rows).toEqual([["A", 3], ["B", 11]]);
-    expect(run!.candidates[0]!.perBatch[0]!.outputs.unitCost).toBe(11);
+    await calculateProject(tenantId, id, fetcher);
+    // Canonical first page, then the exact fetch for the off-page value the project already holds.
+    expect(reads).toHaveLength(2);
+    const project = await load(id);
+    expect(project.candidates[0]!.perBatch[0]!.outputs.unitCost).toBe(11);
   });
 
-  // The auto-calculate on the process page fires a run ~1s after every field edit. Each run used to
-  // re-GET every query table through the agent; this counts the fetches so that regression is loud.
+  // The auto-calculate on the process page fires ~1s after every field edit. Each calculation used
+  // to re-GET every query table through the agent; this counts the fetches so that regression is loud.
   test("recalculating does not re-fetch query tables: reuse short-circuits, and the cache absorbs the rest", async () => {
-    const [m] = await db
-      .insert(configModel)
-      .values({ tenantId, name: model.name, definition: model })
-      .returning({ id: configModel.id });
-    const [p] = await db
-      .insert(configProject)
-      .values({ tenantId, modelId: m!.id, name: "no-refetch", batches: [10], entries: {}, createdBy: "tester" })
-      .returning({ id: configProject.id });
+    await seedQueryTable("items", ["ItemCode"]);
+    const id = await seed("no-refetch", model, {}, [10]);
 
     let fetches = 0;
-    const counting: QueryFetcher = async (target, path) => {
+    const counting: QueryRunner = async (target, query, columns, opts) => {
       fetches++;
-      return fakeFetch(target, path);
+      return fakeFetch(target, query, columns, opts);
     };
 
-    const first = await executeRun(tenantId, p!.id, counting);
+    const first = await calculateProject(tenantId, id, counting);
+    expect(first.reused).toBe(false);
     expect(fetches).toBe(1);
 
-    // Nothing changed: the same run comes back, and the reuse check must return before any
-    // lookup resolution — so the fetch count cannot move.
-    const again = await executeRun(tenantId, p!.id, counting);
-    expect(again.runId).toBe(first.runId);
+    // Nothing changed: the reuse check must return before any lookup resolution, so the fetch
+    // count cannot move and the stored candidates come straight back.
+    const again = await calculateProject(tenantId, id, counting);
+    expect(again.reused).toBe(true);
+    expect(again.candidateCount).toBe(first.candidateCount);
     expect(fetches).toBe(1);
 
-    // A real edit: a genuinely new run, but the model is untouched so its lookups come from cache.
-    await db.update(configProject).set({ entries: { size: "S" } }).where(eq(configProject.id, p!.id));
-    const edited = await executeRun(tenantId, p!.id, counting);
-    expect(edited.runId).not.toBe(first.runId);
+    // Chati's path asks for entries the project does not have yet — that cannot reuse, and it is
+    // the only case the entries/batches comparison decides on its own.
+    const proposed = await calculateProject(tenantId, id, counting, { entries: { size: "S" }, batches: [10] });
+    expect(proposed.reused).toBe(false);
+    expect(proposed.candidateCount).toBe(2); // size pinned to S, two grades left
+
+    // A real edit through the API: configs.update writes entries AND resets the status, which is
+    // the invariant that lets `status === "calculated"` stand in for "these entries produced these
+    // candidates". Reuse must not fire.
+    await db.update(configProject).set({ entries: { size: "L" }, status: "draft" }).where(eq(configProject.id, id));
+    const edited = await calculateProject(tenantId, id, counting);
+    expect(edited.reused).toBe(false);
+    expect(edited.candidateCount).toBe(2); // size pinned to L, two grades left
+
+    // The model was never touched, so none of that resolved a query table again.
     expect(fetches).toBe(1);
   });
 
-  test("one configuration = one run: recalculating replaces the row instead of appending", async () => {
-    const [m] = await db
-      .insert(configModel)
-      .values({ tenantId, name: model.name, definition: model })
-      .returning({ id: configModel.id });
-    const [p] = await db
-      .insert(configProject)
-      .values({ tenantId, modelId: m!.id, name: "one-run", batches: [10], entries: {}, createdBy: "tester" })
-      .returning({ id: configProject.id });
+  test("editing the model invalidates the stored calculation", async () => {
+    const id = await seed("model-edit", model, {}, [10]);
+    await calculateProject(tenantId, id, fakeFetch);
+    expect((await calculateProject(tenantId, id, fakeFetch)).reused).toBe(true);
 
-    const first = await executeRun(tenantId, p!.id, fakeFetch);
-
-    // Different entries → a genuinely different calculation, so the reuse check cannot short-circuit.
-    await db.update(configProject).set({ entries: { size: "S" } }).where(eq(configProject.id, p!.id));
-    const second = await executeRun(tenantId, p!.id, fakeFetch);
-    expect(second.runId).not.toBe(first.runId);
-
-    const rows = await db
-      .select({ id: configRun.id })
-      .from(configRun)
-      .where(and(eq(configRun.projectId, p!.id), eq(configRun.tenantId, tenantId)));
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.id).toBe(second.runId);
+    const { modelId } = await load(id);
+    await db.update(configModel).set({ updatedAt: new Date(Date.now() + 1000) })
+      .where(eq(configModel.id, modelId));
+    expect((await calculateProject(tenantId, id, fakeFetch)).reused).toBe(false);
   });
 });

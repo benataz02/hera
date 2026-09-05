@@ -21,7 +21,7 @@ export const LookupRefZ = z.discriminatedUnion("source", [
   }),
   z.object({
     source: z.literal("query"),
-    /** names a ModelDef.queryTables entry — the query itself is defined there */
+    /** names a tenant masterdata table of kind "query" — the query itself is defined there */
     table: z.string(),
     /** convention: absent = 1st declared column (see refKeyCols) */
     valueCol: z.string().optional(),
@@ -32,6 +32,24 @@ export const LookupRefZ = z.discriminatedUnion("source", [
 export type LookupRef = z.infer<typeof LookupRefZ>;
 
 const KeyZ = z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, "must be a valid identifier");
+
+/** A live read, as data rather than as a URL string. `$select` is derived from the source's
+ *  `columns` and deliberately not stored — one field fewer, and the two can never disagree.
+ *  URL construction lives in packages/b1's query.ts and nowhere else. */
+export const ODataQueryZ = z.object({
+  entitySet: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be an entity set name"),
+  filter: z.string().optional(),
+  orderby: z.string().optional(),
+});
+export type ODataQuery = z.infer<typeof ODataQueryZ>;
+
+/** One named live source: where to read, what to read, and the column set it yields. */
+export const QuerySourceZ = z.object({
+  target: z.enum(["b1", "beas"]),
+  query: ODataQueryZ,
+  columns: z.array(z.string()),
+});
+export type QuerySource = z.infer<typeof QuerySourceZ>;
 
 export const ParamZ = z.object({
   key: KeyZ,
@@ -50,6 +68,7 @@ export const ParamZ = z.object({
   /** informational per-unit price shown at the field's top-right; never enters the calculated price */
   priceExpr: z.string().optional(),
   readonly: z.boolean().optional(),
+  excludeFromDomains: z.boolean().optional(),
   unit: z.string().optional(),
   help: z.string().optional(),
   extractionHint: z.string().optional(),
@@ -115,15 +134,10 @@ export const ModelDefZ = z.object({
   constraints: z.array(ConstraintZ),
   bom: z.array(BomLineZ),
   routing: z.array(OperationZ),
-  queryTables: z.array(
-    z.object({ name: z.string(), target: z.enum(["b1", "beas"]), path: z.string(), columns: z.array(z.string()) }),
-  ),
   history: z
     .object({
       itemCodeParam: KeyZ.optional(),
-      query: z
-        .object({ target: z.enum(["b1", "beas"]), path: z.string(), columns: z.array(z.string()) })
-        .optional(),
+      query: QuerySourceZ.optional(),
       mappings: z.array(HistoryMappingZ),
       display: z.array(z.string()),
     })
@@ -137,7 +151,16 @@ export const ModelDefZ = z.object({
 export type ModelDef = z.infer<typeof ModelDefZ>;
 
 export type Option = { value: Val; label: string };
-export type ResolvedTable = { columns: string[]; rows: Val[][]; nextLink?: string };
+export type ResolvedTable = {
+  columns: string[];
+  rows: Val[][];
+  /** $skip for the next page; absent = last page */
+  nextSkip?: number;
+  /** value-help headers, from the masterdata row. Engine ignores; the picker reads them. */
+  labels?: Record<string, string>;
+  /** keys the value-help dialog hides. Still fetched, still derived. */
+  hidden?: string[];
+};
 /** Everything external, already fetched: engine never sees source kinds. */
 export type ResolvedLookups = {
   domains: Record<string, Option[]>;

@@ -1,137 +1,110 @@
-import { createORPCClient } from "@orpc/client";
-import { RPCLink } from "@orpc/client/fetch";
-import type { RouterClient } from "@orpc/server";
-import type { AppRouter } from "@hera/server/router";
-import { ServiceLayerClient, type EntitySchema } from "./service-layer-client.ts";
-import { BeasClient } from "./beas-client.ts";
-import { processRequest, type RequestCloudPort, type RequestRow, type WriteRequestRow } from "./sync.ts";
-import { processWrite, type WriteCloudPort } from "./write-sync.ts";
-import {
-  parseWriteCapabilities,
-  validateWriteCapabilities,
-  type WriteCapability,
-} from "./write-capabilities.ts";
+import { readFileSync } from "node:fs";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { DirectTransport, ServiceLayer, B1Error, type B1Transport } from "@hera/b1";
+import { ApiGateway, type ApiGatewayConfig } from "./api-gateway.ts";
 
-function env(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing required env var ${name}`);
-  return v;
+// One agent service, one B1 company database. A second company DB means a second agent on a
+// second port with its own agent.json — which is what keeps ServiceLayer exactly as the sample
+// designed it (companyDb fixed at construction, one session, one licence slot) and removes the
+// per-request company plumbing entirely.
+//
+// The HTTP surface is operation-shaped, not a generic proxy: each operation is its own endpoint,
+// so it can be authorized and audited on-prem, and a leaked cloud token cannot issue arbitrary
+// Service Layer calls.
+
+type ServiceConfig = {
+  url?: string; slUrl?: string; basePath?: string; auth?: "session" | "basic";
+  companyDb?: string; user: string; pass: string;
+  allowSelfSigned?: boolean; timeoutMs?: number;
+};
+type AgentConfig = { port?: number; secret: string; b1: ServiceConfig; beas?: ServiceConfig; apiGateway?: ApiGatewayConfig };
+
+const configPath = process.env.HERA_AGENT_CONFIG ?? "agent.json";
+const config = JSON.parse(readFileSync(configPath, "utf8")) as AgentConfig;
+if (!config.secret) throw new Error(`${configPath}: "secret" is required — it is the only auth in dev`);
+
+const logger = { info: (m: string) => console.log(m), warn: (m: string, x?: unknown) => console.warn(m, x ?? "") };
+
+const build = (c: ServiceConfig) =>
+  new ServiceLayer({ ...c, url: c.url ?? c.slUrl ?? "", logger });
+
+const services = { b1: build(config.b1), ...(config.beas ? { beas: build(config.beas) } : {}) };
+const transports: Record<string, B1Transport> = Object.fromEntries(
+  Object.entries(services).map(([k, sl]) => [k, new DirectTransport(sl)]),
+);
+
+// Optional: an install without a Reporting Service simply has no apiGateway block, and /print
+// answers 503 rather than the agent refusing to start.
+const gateway = config.apiGateway ? new ApiGateway(config.apiGateway, logger) : null;
+
+const sha = (s: string) => createHash("sha256").update(s).digest();
+const secretHash = sha(config.secret);
+/** Hashed compare so the lengths always match and the comparison stays constant-time. */
+function authorized(req: Request): boolean {
+  const header = req.headers.get("authorization") ?? "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  return timingSafeEqual(sha(token), secretHash);
 }
 
-const link = new RPCLink({
-  url: env("HERA_CLOUD_RPC_URL"),
-  headers: { authorization: `Bearer ${env("HERA_AGENT_TOKEN")}` },
-});
-const orpc: RouterClient<AppRouter> = createORPCClient(link);
-const cloud: RequestCloudPort = {
-  fulfill: (i) => orpc.sync.fulfill(i),
-  fail: (i) => orpc.sync.fail(i),
-};
-const writeCloud: WriteCloudPort = {
-  ack: (i) => orpc.sync.ack(i),
-  nack: (i) => orpc.sync.nack(i),
-};
+type Handler = (t: B1Transport, body: any) => Promise<unknown>;
 
-const sl = new ServiceLayerClient({
-  baseUrl: env("B1_BASE_URL"),
-  companyDb: env("B1_COMPANY_DB"),
-  user: env("B1_USER"),
-  pass: env("B1_PASS"),
-  insecureTls: process.env.B1_INSECURE_TLS === "true",
-  timeoutMs: process.env.B1_TIMEOUT_MS ? Number(process.env.B1_TIMEOUT_MS) : undefined,
-  pageSize: process.env.B1_PAGE_SIZE ? Number(process.env.B1_PAGE_SIZE) : undefined,
-});
-
-// Optional second on-prem source; only tenants whose models use target:"beas" need it.
-const beas = process.env.BEAS_BASE_URL
-  ? new BeasClient({
-      baseUrl: process.env.BEAS_BASE_URL,
-      user: process.env.BEAS_USER,
-      pass: process.env.BEAS_PASS,
-      insecureTls: process.env.BEAS_INSECURE_TLS === "true",
-    })
-  : undefined;
-
-const configuredCapabilities = parseWriteCapabilities(process.env.B1_CREATE_CAPABILITIES);
-/** Last EDMX-validated list; re-sent on each pull so checked_at stays within the ~90s stale window. */
-let lastValidatedCapabilities: WriteCapability[] | undefined;
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-// ponytail: diagnostic detail — Bun hides the real syscall error in .cause/.code; flatten them.
-const msg = (e: unknown): string => {
-  if (!(e instanceof Error)) return String(e);
-  const code = (e as { code?: string }).code;
-  const cause = (e as { cause?: unknown }).cause;
-  const causeMsg = cause instanceof Error ? cause.message : cause ? String(cause) : "";
-  return [e.message, code && `code=${code}`, causeMsg && `cause=${causeMsg}`]
-    .filter(Boolean)
-    .join(" | ");
+const routes: Record<string, Handler> = {
+  "/entity-set": (t, b) => t.readEntitySet(b.entitySet, b.query),
+  "/entity": (t, b) => t.readEntity(b.entitySet, b.key, b.query),
+  "/next": (t, b) => t.readNext(b.nextLink),
+  "/cross-join": (t, b) => t.crossJoin(b),
+  "/create": (t, b) => t.createEntity(b.entitySet, b.data, { prefer: b.prefer }),
+  "/update": (t, b) => t.updateEntity(b.entitySet, b.key, b.data, { etag: b.etag }),
+  "/delete": (t, b) => t.deleteEntity(b.entitySet, b.key, { etag: b.etag }),
+  "/metadata": async (t, b) => ({ status: 200, data: await t.metadata(b) }),
 };
 
-/** Validate against EDMX, cache, and heartbeat. Startup + after metadata only. */
-async function validateAndReport(schemas: EntitySchema[]): Promise<WriteCapability[]> {
-  const { valid, errors } = validateWriteCapabilities(configuredCapabilities, schemas);
-  for (const e of errors) console.warn("[agent] create capability rejected:", e);
-  lastValidatedCapabilities = valid;
-  await orpc.sync.heartbeat({ capabilities: valid });
-  console.log(
-    `[agent] reported ${valid.length} create capability(ies):`,
-    valid.map((c) => `${c.entity}:${c.dedupField}`).join(",") || "(none)",
-  );
-  return valid;
-}
+const fail = (status: number, code: string | number | null, message: string) =>
+  Response.json({ error: { status, code, message } }, { status: status === 401 ? 401 : 502 });
 
-/** Re-send cached list (no EDMX hop) so write_capabilities_checked_at stays fresh while pulling. */
-async function refreshCapabilityHeartbeat(): Promise<void> {
-  if (lastValidatedCapabilities === undefined) return;
-  await orpc.sync.heartbeat({ capabilities: lastValidatedCapabilities });
-}
+const server = Bun.serve({
+  port: config.port ?? 4000,
+  idleTimeout: 255,
+  async fetch(req) {
+    const { pathname } = new URL(req.url);
+    if (pathname === "/health") return Response.json({ ok: true, services: Object.keys(services) });
+    if (!authorized(req)) return fail(401, null, "Bad agent secret");
+    if (req.method !== "POST") return fail(405, null, "Method not allowed");
 
-async function main(): Promise<void> {
-  const url = process.env.HERA_CLOUD_RPC_URL;
-  console.log("[agent] starting pull loop ->", url);
-  try {
-    const schemas = await sl.metadata();
-    await validateAndReport(schemas);
-  } catch (e) {
-    console.error("[agent] initial create-capability report failed:", msg(e));
-  }
-  for (;;) {
-    const t0 = Date.now();
+    logger.info(`${req.method} ${pathname}`);
     try {
-      const { items } = await orpc.sync.pull({ max: 20 });
-      // ponytail: per-cycle heartbeat for debugging the connect issue; drop once stable.
-      console.log(`[agent] pull ok after ${Date.now() - t0}ms: ${items.length} item(s)`);
-      try {
-        await refreshCapabilityHeartbeat();
-      } catch (e) {
-        console.error("[agent] capability heartbeat refresh failed:", msg(e));
+      // Print is not a B1Transport operation: it talks to a different service on a different
+      // port, so it sits beside the /{target}/{operation} split rather than inside it.
+      if (pathname === "/print") {
+        if (!gateway) throw new B1Error(503, null, "No apiGateway block in agent.json — printing is not configured");
+        const b = (await req.json()) as { entity?: unknown; docEntry?: unknown };
+        return Response.json(await gateway.exportPdf(String(b.entity ?? ""), Number(b.docEntry)));
       }
-      for (const row of items) {
-        // Per-item isolation: a poison row dead-letters; it never crash-loops the batch.
-        try {
-          if ((row as RequestRow).kind === "write") {
-            // Durable writes: ack/nack only after SAP confirmation. Never fulfill/fail.
-            await processWrite(row as WriteRequestRow, sl, writeCloud);
-            continue;
-          }
-          const result = await processRequest(row as RequestRow, sl, cloud, beas);
-          if ((row as RequestRow).kind === "metadata" && Array.isArray(result)) {
-            try {
-              await validateAndReport(result as EntitySchema[]);
-            } catch (e) {
-              console.error("[agent] post-metadata capability report failed:", msg(e));
-            }
-          }
-        } catch (e) {
-          console.error("[agent] item failed (lease will redeliver):", row.id, msg(e));
-        }
-      }
-    } catch (e) {
-      console.error(`[agent] pull failed after ${Date.now() - t0}ms (url=${url}), backing off 3s:`, msg(e));
-      await sleep(3000);
-    }
-  }
-}
 
-main();
+      const [, target, ...rest] = pathname.split("/");
+      const transport = target ? transports[target] : undefined;
+      const handler = routes[`/${rest.join("/")}`];
+      if (!transport) return fail(404, null, `Unknown target '${target}'`);
+      if (!handler) return fail(404, null, `Unknown operation '${pathname}'`);
+
+      return Response.json(await handler(transport, await req.json()));
+    } catch (e) {
+      if (e instanceof B1Error) {
+        logger.warn(`${pathname}: ${e.message}`);
+        return fail(e.status, e.code, e.message);
+      }
+      logger.warn(`${pathname}:`, e instanceof Error ? e.message : String(e));
+      return fail(502, null, e instanceof Error ? e.message : String(e));
+    }
+  },
+});
+
+console.log(`hera-agent on :${server.port} — services: ${Object.keys(services).join(", ")}${gateway ? " + print" : ""}`);
+
+// Release the B1 licence slot when the service stops.
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, async () => {
+    await Promise.all(Object.values(services).map((s) => s.logout()));
+    process.exit(0);
+  });
+}

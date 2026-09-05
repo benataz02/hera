@@ -2,24 +2,25 @@ import { createFileRoute, redirect, useNavigate, Link } from "@tanstack/react-ro
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Input, Button, MessageStrip } from "@ui5/webcomponents-react";
-import { authClient } from "../auth-client.ts";
+import { authClient, sessionQuery } from "../auth-client.ts";
 import { AuthLayout } from "../components/AuthLayout.tsx";
 import { SocialButtons } from "../components/SocialButtons.tsx";
 import { apexUrl, hardRedirect, isApex, safeRedirect } from "../lib/tenant.ts";
 
 export const Route = createFileRoute("/signup")({
-  validateSearch: (s: Record<string, unknown>): { redirect?: string } => ({
+  validateSearch: (s: Record<string, unknown>): { redirect?: string; email?: string } => ({
     redirect: typeof s.redirect === "string" ? s.redirect : undefined,
+    email: typeof s.email === "string" ? s.email : undefined,
   }),
   beforeLoad: async ({ context, search }) => {
-    if (!isApex())
-      return hardRedirect(
-        apexUrl(`/signup${search.redirect ? `?redirect=${encodeURIComponent(search.redirect)}` : ""}`),
-      );
-    const data = await context.queryClient.ensureQueryData({
-      queryKey: ["session"],
-      queryFn: async () => (await authClient.getSession()).data ?? null,
-    });
+    if (!isApex()) {
+      const q = new URLSearchParams();
+      if (search.redirect) q.set("redirect", search.redirect);
+      if (search.email) q.set("email", search.email);
+      const qs = q.toString();
+      return hardRedirect(apexUrl(`/signup${qs ? `?${qs}` : ""}`));
+    }
+    const data = await context.queryClient.ensureQueryData(sessionQuery);
     if (data?.session) {
       const to = safeRedirect(search.redirect);
       if (to) return hardRedirect(to);
@@ -31,9 +32,9 @@ export const Route = createFileRoute("/signup")({
 
 function Signup() {
   const navigate = useNavigate();
-  const { redirect: redirectTo } = Route.useSearch();
+  const { redirect: redirectTo, email: emailFromInvite } = Route.useSearch();
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(emailFromInvite ?? "");
   const [password, setPassword] = useState("");
 
   const queryClient = useQueryClient();
@@ -49,11 +50,9 @@ function Signup() {
       return res.data;
     },
     onSuccess: async () => {
-      await queryClient.fetchQuery({
-        queryKey: ["session"],
-        queryFn: async () => (await authClient.getSession()).data ?? null,
-        staleTime: 0,
-      });
+      // staleTime:0 is load-bearing: a cached `null` counts as a cache hit, so ensureQueryData
+      // would never refetch after sign-up.
+      await queryClient.fetchQuery({ ...sessionQuery, staleTime: 0 });
       const to = safeRedirect(redirectTo);
       if (to) return void hardRedirect(to);
       navigate({ to: "/onboarding" }); // brand-new user has no org yet
@@ -90,7 +89,7 @@ function Signup() {
       <div className="auth-or">or</div>
       <SocialButtons callbackURL="/onboarding" />
       <p className="auth-alt">
-        Already have an account? <Link to="/login" search={{ redirect: redirectTo }}>Sign in</Link>
+        Already have an account? <Link to="/login" search={{ redirect: redirectTo, email: emailFromInvite }}>Sign in</Link>
       </p>
     </AuthLayout>
   );

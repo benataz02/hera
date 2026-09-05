@@ -1,10 +1,11 @@
 import { Bar, Button, Input, StepInput, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, TableRowAction, Text, Title } from "@ui5/webcomponents-react";
 import type { Issue, ModelDef } from "@hera/config-engine";
 import { ExprInput } from "./ExprInput.tsx";
+import type { TableCols } from "./exprHelpers.ts";
 import { issueFor } from "./useDraftModel.ts";
 
 type Update = (fn: (d: ModelDef) => ModelDef) => void;
-type Props = { draft: ModelDef; update: Update; issues: Issue[]; tables?: { name: string; columns: string[] }[] };
+type Props = { draft: ModelDef; update: Update; issues: Issue[]; tables?: TableCols[] };
 
 const newId = (prefix: string, taken: string[]) => {
   let n = taken.length + 1;

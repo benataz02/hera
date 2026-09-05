@@ -2,7 +2,7 @@ import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Input, Button, MessageStrip, BusyIndicator } from "@ui5/webcomponents-react";
-import { authClient } from "../auth-client.ts";
+import { authClient, sessionQuery } from "../auth-client.ts";
 import { AuthLayout } from "../components/AuthLayout.tsx";
 import {
   apexUrl, BASE_DOMAIN, hardRedirect, isApex, isReserved, SLUG_RE, toSlug, tenantUrl,
@@ -11,9 +11,9 @@ import {
 export const Route = createFileRoute("/onboarding")({
   // Auth lives on the apex. Signed-in users with no org land here; any signed-in user may
   // also create an additional workspace. The apex dispatcher (`/`) routes everyone else.
-  beforeLoad: async () => {
+  beforeLoad: async ({ context }) => {
     if (!isApex()) return hardRedirect(apexUrl("/onboarding"));
-    const { data } = await authClient.getSession();
+    const data = await context.queryClient.ensureQueryData(sessionQuery);
     if (!data?.session) throw redirect({ to: "/login" });
   },
   component: Onboarding,
@@ -75,7 +75,7 @@ function Onboarding() {
   // dispatcher, which sends a 0-org user straight back here.
   const signOut = async () => {
     await authClient.signOut();
-    queryClient.setQueryData(["session"], null);
+    queryClient.clear();
     navigate({ to: "/login" });
   };
 

@@ -82,7 +82,6 @@ export const model: ModelDef = {
     { id: "cut", resource: "SAW", setupMin: "10", runMinPerUnit: "0.5", ratePerHour: "60" },
     { id: "coat", resource: "COATER", condition: "coated", setupMin: "30", runMinPerUnit: "0.2 * section", ratePerHour: "60" },
   ],
-  queryTables: [],
   pricing: { priceExpr: "unitCost * 1.4", quoteItemCode: "CABLE-CFG" },
   batchDefaults: [100, 500, 1000],
 };

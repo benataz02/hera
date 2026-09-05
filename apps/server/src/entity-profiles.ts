@@ -1,148 +1,113 @@
-import type { EntityProfile } from "@hera/db";
+// The curated set: the handful of B1 entities HERA lets a user change, and exactly which fields.
+// Everything else B1 exposes stays read-only, enforced in the router (see orpc/routers/entities.ts).
+//
+// Hand-written on purpose. Inferring "which fields are safe to edit" from $metadata is a rules
+// engine nobody asked for, and it would guess wrong on precisely the fields (posting dates,
+// account codes, calculated totals) where guessing wrong costs money.
 
-const DOCUMENT_LINES = {
-  DocumentLines: {
-    parentKey: "DocEntry",
-    childParentKey: "DocEntry",
-    rowKey: "LineNum",
-    editable: true,
-  },
-} as const;
+export type EntityProfile = {
+  /** the field shown as the object page's title */
+  titleField: string;
+  /** the identifying line under it */
+  subtitleFields: string[];
+  /** header fields a user may change. NOT a display list — this is the write allowlist. */
+  editable: string[];
+  /** must be present in a create payload */
+  requiredOnCreate: string[];
+  /** collections whose lines may be edited/added */
+  editableCollections: string[];
+};
 
-const DOCUMENT_READ_ONLY = [
-  "DocEntry",
-  "DocNum",
-  "DocTotal",
-  "VatSum",
-  "DocTotalFc",
-  "VatSumFc",
-  "DocumentStatus",
-  "Cancelled",
-  "CreateDate",
-  "UpdateDate",
-  "DataVersion",
-  "Series",
-];
-
-const DOCUMENT_EDITABLE_HEADER = [
-  "CardCode",
-  "CardName",
-  "DocDate",
-  "DocDueDate",
-  "TaxDate",
-  "DocCurrency",
-  "SalesPersonCode",
-  "DocumentsOwner",
-  "Comments",
-  "NumAtCard",
-  "PaymentGroupCode",
-  "TransportationCode",
-  "ShipToCode",
-  "PayToCode",
-];
-
-const DOCUMENT_LINE_EDITABLE = [
-  "ItemCode",
-  "ItemDescription",
-  "Quantity",
-  "UnitPrice",
-  "DiscountPercent",
-  "TaxCode",
-  "WarehouseCode",
-  "UoMCode",
-  "UoMEntry",
-];
-
-const DOCUMENT_EDIT_WHEN = [
-  { field: "DocumentStatus", allowed: ["bost_Open"] as Array<string | number | boolean> },
-  { field: "Cancelled", allowed: ["tNO", "N", false] },
-];
-
-function documentProfile(
-  entity: string,
-  family: "sales-document" | "purchase-document",
-): EntityProfile {
-  return {
-    entity,
-    family,
+export const ENTITY_PROFILES: Record<string, EntityProfile> = {
+  Quotations: {
     titleField: "DocNum",
-    subtitleFields: ["CardCode", "CardName"],
-    fields: {
-      editableHeader: [...DOCUMENT_EDITABLE_HEADER],
-      requiredOnCreate: ["CardCode"],
-      readOnly: [...DOCUMENT_READ_ONLY],
-      collectionEditable: { DocumentLines: [...DOCUMENT_LINE_EDITABLE] },
-      editWhen: DOCUMENT_EDIT_WHEN.map((x) => ({ ...x, allowed: [...x.allowed] })),
-    },
-    create: { dedupField: "U_HERA_DedupKey", resultKey: "DocEntry" },
-    collections: { ...DOCUMENT_LINES },
-  };
-}
-
-const SALES_ENTITIES = [
-  "Quotations",
-  "Orders",
-  "Invoices",
-  "DeliveryNotes",
-  "CreditNotes",
-  "DownPayments",
-  "Returns",
-] as const;
-
-const PURCHASE_ENTITIES = [
-  "PurchaseOrders",
-  "PurchaseInvoices",
-  "PurchaseDeliveryNotes",
-  "PurchaseCreditNotes",
-  "PurchaseDownPayments",
-  "PurchaseReturns",
-] as const;
-
-const ITEMS: EntityProfile = {
-  entity: "Items",
-  family: "master-data",
-  titleField: "ItemCode",
-  subtitleFields: ["ItemName"],
-  fields: {
-    editableHeader: ["ItemName", "ForeignName", "ItemsGroupCode", "ItemType", "BarCode"],
-    requiredOnCreate: ["ItemCode", "ItemName"],
-    readOnly: ["ItemCode", "CreateDate", "UpdateDate", "DataVersion"],
-    collectionEditable: {},
-    editWhen: [],
+    subtitleFields: ["CardName", "DocDate"],
+    editable: ["CardCode", "DocDate", "DocDueDate", "Comments", "SalesPersonCode", "DocCurrency", "NumAtCard"],
+    requiredOnCreate: ["CardCode", "DocumentLines"],
+    editableCollections: ["DocumentLines"],
   },
-  collections: {},
-};
-
-const BUSINESS_PARTNERS: EntityProfile = {
-  entity: "BusinessPartners",
-  family: "master-data",
-  titleField: "CardCode",
-  subtitleFields: ["CardName"],
-  fields: {
-    editableHeader: [
-      "CardName",
-      "CardType",
-      "GroupCode",
-      "Phone1",
-      "EmailAddress",
-      "Currency",
-      "FederalTaxID",
-    ],
+  Orders: {
+    titleField: "DocNum",
+    subtitleFields: ["CardName", "DocDate"],
+    editable: ["CardCode", "DocDate", "DocDueDate", "Comments", "SalesPersonCode", "DocCurrency", "NumAtCard"],
+    requiredOnCreate: ["CardCode", "DocumentLines"],
+    editableCollections: ["DocumentLines"],
+  },
+  DeliveryNotes: {
+    titleField: "DocNum",
+    subtitleFields: ["CardName", "DocDate"],
+    editable: ["Comments", "NumAtCard"],
+    requiredOnCreate: ["CardCode", "DocumentLines"],
+    editableCollections: [],
+  },
+  Invoices: {
+    titleField: "DocNum",
+    subtitleFields: ["CardName", "DocDate"],
+    // An issued invoice is an accounting document: only the free-text fields are ours to touch.
+    editable: ["Comments", "NumAtCard"],
+    requiredOnCreate: ["CardCode", "DocumentLines"],
+    editableCollections: [],
+  },
+  PurchaseOrders: {
+    titleField: "DocNum",
+    subtitleFields: ["CardName", "DocDate"],
+    editable: ["CardCode", "DocDate", "DocDueDate", "Comments", "NumAtCard"],
+    requiredOnCreate: ["CardCode", "DocumentLines"],
+    editableCollections: ["DocumentLines"],
+  },
+  BusinessPartners: {
+    titleField: "CardName",
+    subtitleFields: ["CardCode", "CardType"],
+    editable: ["CardName", "Phone1", "Cellular", "EmailAddress", "Notes", "FreeText", "SalesPersonCode", "Currency"],
     requiredOnCreate: ["CardCode", "CardName", "CardType"],
-    readOnly: ["CardCode", "CreateDate", "UpdateDate", "DataVersion"],
-    collectionEditable: {},
-    editWhen: [],
+    editableCollections: [],
   },
-  collections: {},
+  Items: {
+    titleField: "ItemName",
+    subtitleFields: ["ItemCode", "ItemsGroupCode"],
+    editable: ["ItemName", "ForeignName", "BarCode", "User_Text", "SalesUnit", "InventoryUOM", "PurchaseUnit"],
+    requiredOnCreate: ["ItemCode", "ItemName"],
+    editableCollections: [],
+  },
+  BusinessPartnerGroups: {
+    titleField: "Name",
+    subtitleFields: ["Code", "Type"],
+    editable: ["Name"],
+    requiredOnCreate: ["Name", "Type"],
+    editableCollections: [],
+  },
 };
 
-const BY_NAME = new Map<string, EntityProfile>([
-  ...SALES_ENTITIES.map((e) => [e, documentProfile(e, "sales-document")] as const),
-  ...PURCHASE_ENTITIES.map((e) => [e, documentProfile(e, "purchase-document")] as const),
-  ["Items", ITEMS],
-  ["BusinessPartners", BUSINESS_PARTNERS],
-]);
+export const profileOf = (entity: string): EntityProfile | undefined => ENTITY_PROFILES[entity];
 
-export function getEntityProfile(entity: string): EntityProfile | null {
-  return BY_NAME.get(entity) ?? null;
+/** Keep only fields the profile allows, plus U_ UDFs (a tenant's own columns are theirs to set).
+ *  Returns the filtered payload and what it dropped, so the caller can refuse rather than
+ *  silently write less than the user asked for. */
+export function pickEditable(
+  profile: EntityProfile,
+  data: Record<string, unknown>,
+  opts: { create: boolean },
+): { payload: Record<string, unknown>; rejected: string[] } {
+  const allowed = new Set([...profile.editable, ...profile.editableCollections]);
+  if (opts.create) for (const f of profile.requiredOnCreate) allowed.add(f);
+
+  const payload: Record<string, unknown> = {};
+  const rejected: string[] = [];
+  for (const [k, v] of Object.entries(data)) {
+    if (allowed.has(k) || k.startsWith("U_")) payload[k] = v;
+    else rejected.push(k);
+  }
+  return { payload, rejected };
 }
+
+export function missingRequired(profile: EntityProfile, data: Record<string, unknown>): string[] {
+  return profile.requiredOnCreate.filter((f) => {
+    const v = data[f];
+    return v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length);
+  });
+}
+
+/** Documents HERA can ask SAP to render as a PDF. Same shape of rule as ENTITY_PROFILES: the
+ *  list is the boundary, enforced in the routers, not by which page drew a button. An entry
+ *  here also needs a matching layout code in the agent's `apiGateway.layouts`. */
+export const PRINTABLE = new Set(["Quotations", "Orders", "DeliveryNotes", "Invoices"]);

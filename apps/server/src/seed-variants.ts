@@ -1,24 +1,28 @@
 import { and, eq } from "drizzle-orm";
-import { db, uiVariant, type EntityProfile, type EntitySchema } from "@hera/db";
-import { getEntityProfile } from "./entity-profiles.ts";
-import { isEmptyObjectDef, seedObjectDef } from "./objectSeed.ts";
+import { db, uiVariant, type ListVariantDef, type ObjectVariantDef, type VariantDef } from "@hera/db";
+import { ENTITY_PROFILES } from "./entity-profiles.ts";
 
 // Variant seeding lives here, not in routers/variants.ts, so it imports @hera/db and nothing else.
 // auth.ts calls it from the afterCreateOrganization hook, and routers/variants.ts pulls in base.ts
 // which pulls in auth.ts — putting these in the router would close that cycle.
 
-// Preseed the shared "Standard" view for both pages of an entity, idempotent via isStandard —
-// called when an admin enables a B1 entity, on tenant creation, and from scripts/seed-standard.ts.
-// Empty object Standards (legacy `{ fields:[], sections:[] }` or new shape with no visible fields)
-// are replaced with a SAP-aware seed when schema is provided.
+const EMPTY_DEFS = {
+  list: { select: [], filter: [], orderby: [], filterBar: [] } as ListVariantDef,
+  object: { header: [], sections: [] } as ObjectVariantDef,
+};
+
+/** An empty Standard row means "show everything" — the state we may overwrite with defaults. */
+function isEmptyDef(d: VariantDef): boolean {
+  return "select" in d ? !d.select.length : !d.header.length && !d.sections.length;
+}
+
 export async function ensureStandardVariants(
   tenantId: string,
   userId: string,
   entity: string,
-  schema?: EntitySchema | null,
-  profile?: EntityProfile | null,
+  defs: { list: ListVariantDef; object: ObjectVariantDef } = EMPTY_DEFS,
+  force = false,
 ) {
-  const resolvedProfile = profile === undefined ? getEntityProfile(entity) : profile;
   for (const page of ["list", "object"] as const) {
     const [hit] = await db
       .select({ id: uiVariant.id, definition: uiVariant.definition })
@@ -33,15 +37,12 @@ export async function ensureStandardVariants(
       )
       .limit(1);
 
+    const definition = defs[page];
     if (hit) {
-      if (page === "object" && schema && isEmptyObjectDef(hit.definition)) {
-        await db
-          .update(uiVariant)
-          .set({
-            definition: seedObjectDef(schema, resolvedProfile),
-            updatedAt: new Date(),
-          })
-          .where(eq(uiVariant.id, hit.id));
+      // Backfill a Standard row seeded before these defaults existed. An admin's edits survive —
+      // only `force` overwrites a view someone has already shaped.
+      if ((force || isEmptyDef(hit.definition)) && !isEmptyDef(definition)) {
+        await db.update(uiVariant).set({ definition, updatedAt: new Date() }).where(eq(uiVariant.id, hit.id));
       }
       continue;
     }
@@ -55,19 +56,13 @@ export async function ensureStandardVariants(
       isStandard: true,
       shared: true,
       isDefault: true,
-      definition:
-        page === "list"
-          ? { select: [], filter: [], orderby: [], filterBar: [] }
-          : schema
-            ? seedObjectDef(schema, resolvedProfile)
-            : { header: [], sections: [] },
+      definition,
     });
   }
 }
 
-// The configurator lists are variant-backed like the B1 entity lists, but they have no "enable"
-// event to hang seeding off — so every tenant gets them at creation. `entity` is free text on
-// ui_variant (no FK, no schema validation), so "models"/"configs" are legal keys as-is.
+// The configurator lists are variant-backed. `entity` is free text on ui_variant (no FK), so
+// "models"/"configs" are legal keys as-is.
 export async function ensureConfiguratorVariants(tenantId: string, userId: string) {
   for (const entity of ["models", "configs"]) await ensureStandardVariants(tenantId, userId, entity);
 
@@ -102,4 +97,96 @@ export async function ensureConfiguratorVariants(tenantId: string, userId: strin
       filterBar: ["status"],
     },
   });
+}
+
+// --- B1 entity Standard views ------------------------------------------------------------------
+// Without these every B1 list and object page renders whatever $metadata returns — ~90 columns on a
+// sales document, which is unreadable and a wide read over the tunnel. The field lists are
+// hand-picked for the same reason entity-profiles.ts is: no rule over $metadata picks "the five
+// fields a salesperson looks at".
+
+const DOC_HEADER = ["DocNum", "CardCode", "CardName", "DocDueDate", "NumAtCard"];
+const DOC_LINES = ["VisOrder", "ItemCode", "ItemDescription", "Quantity", "UnitPrice", "LineTotal"];
+const DOC_ENTITIES = new Set(["Quotations", "Orders", "DeliveryNotes", "Invoices", "PurchaseOrders"]);
+
+const shown = (names: string[]) => names.map((name) => ({ name, visible: true }));
+
+/** The Standard list + object definitions for one curated B1 entity. */
+export function entityVariantDefs(entity: string): { list: ListVariantDef; object: ObjectVariantDef } {
+  const profile = ENTITY_PROFILES[entity];
+  const isDoc = DOC_ENTITIES.has(entity);
+  // ponytail: a non-document entity gets the columns its profile already names (title + subtitle);
+  // hand-pick a wider list per entity when someone asks for one.
+  const header = isDoc
+    ? DOC_HEADER
+    : [profile?.titleField, ...(profile?.subtitleFields ?? [])].filter((f): f is string => !!f);
+
+  return {
+    // The header fields are also the filter bar: the five things you search a document list by are
+    // the five it shows. Newest first — DocEntry, not DocNum, which restarts per series.
+    list: {
+      select: header,
+      filter: [],
+      orderby: isDoc ? [{ field: "DocEntry", dir: "desc" as const }] : [],
+      filterBar: header,
+    },
+    object: {
+      header: shown(header),
+      // Only DocumentLines is laid out: it is the one collection with a canonical reading order.
+      sections: isDoc ? [{ id: "DocumentLines", visible: true, fields: shown(DOC_LINES) }] : [],
+    },
+  };
+}
+
+/** The `entity` key a B1 page saves its views under — `b1:` namespaced so a B1 entity set can
+ *  never collide with a HERA list key like "models". Must match EntityListPage's `b1:${entity}`. */
+export const b1VariantKey = (entity: string) => `b1:${entity}`;
+
+/** Standard list + object views for every curated B1 entity. Idempotent. */
+export async function ensureEntityVariants(tenantId: string, userId: string, force = false) {
+  for (const entity of Object.keys(ENTITY_PROFILES)) {
+    await ensureStandardVariants(tenantId, userId, b1VariantKey(entity), entityVariantDefs(entity), force);
+  }
+}
+
+// --- Portal document views ---------------------------------------------------------------------
+// The client's four document lists. Same machinery as the B1 entity views, a different key
+// namespace, and a much shorter field list: no CardCode/CardName (the client IS the card), no
+// cost, margin or salesperson. The PORTAL_DOC/PORTAL_LINE allowlist in the portal router means
+// adding one of those to a variant by hand still would not fetch it.
+
+/** The `entity` key a portal document page saves its views under. Must match the web side's
+ *  `portal:${entity}` and the `startsWith("portal:")` test that makes those views read-only. */
+export const portalVariantKey = (entity: string) => `portal:${entity}`;
+
+const PORTAL_DOC_ENTITIES = ["Quotations", "Orders", "DeliveryNotes", "Invoices"];
+const PORTAL_LIST_FIELDS = ["DocNum", "DocDate", "DocDueDate", "NumAtCard", "DocumentStatus", "DocTotal"];
+const PORTAL_OBJECT_FIELDS = [
+  "DocNum", "DocDate", "DocDueDate", "DocumentStatus", "DocTotal", "DocCurrency", "NumAtCard", "Comments",
+];
+const PORTAL_LINE_FIELDS = ["ItemCode", "ItemDescription", "Quantity", "UnitPrice", "LineTotal"];
+
+/** Standard list + object views for the four portal document entities. Idempotent. */
+export async function ensurePortalVariants(tenantId: string, userId: string, force = false) {
+  for (const entity of PORTAL_DOC_ENTITIES) {
+    await ensureStandardVariants(
+      tenantId,
+      userId,
+      portalVariantKey(entity),
+      {
+        list: {
+          select: PORTAL_LIST_FIELDS,
+          filter: [],
+          // Newest first — DocEntry, not DocNum, which restarts per series.
+          orderby: [{ field: "DocEntry", dir: "desc" as const }],
+          filterBar: PORTAL_LIST_FIELDS,
+        },
+        object: {
+          header: shown(PORTAL_OBJECT_FIELDS),
+          sections: [{ id: "DocumentLines", visible: true, fields: shown(PORTAL_LINE_FIELDS) }],
+        },
+      },
+      force,
+    );
+  }
 }

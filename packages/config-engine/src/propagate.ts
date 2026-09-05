@@ -102,6 +102,7 @@ export function propagate(model: ModelDef, lookups: ResolvedLookups, entries: En
   const conflicts: Propagation["conflicts"] = [];
   const domains: Record<string, DomainOption[]> = {};
   for (const p of model.parameters) {
+    if (p.excludeFromDomains) continue;
     const d = domainOf(model, lookups, p.key);
     if (d.length) domains[p.key] = d.map((o) => ({ ...o }));
     else if (p.key in lookups.domains) domains[p.key] = [];

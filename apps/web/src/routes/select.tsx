@@ -1,7 +1,7 @@
 import { createFileRoute, redirect, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Button, BusyIndicator } from "@ui5/webcomponents-react";
-import { authClient } from "../auth-client.ts";
+import { authClient, sessionQuery } from "../auth-client.ts";
 import { AuthLayout } from "../components/AuthLayout.tsx";
 import { apexUrl, hardRedirect, isApex, tenantUrl } from "../lib/tenant.ts";
 
@@ -9,11 +9,7 @@ import { apexUrl, hardRedirect, isApex, tenantUrl } from "../lib/tenant.ts";
 export const Route = createFileRoute("/select")({
   beforeLoad: async ({ context }) => {
     if (!isApex()) return hardRedirect(apexUrl("/select"));
-    const data = await context.queryClient.ensureQueryData({
-      queryKey: ["session"],
-      queryFn: async () => (await authClient.getSession()).data ?? null,
-      staleTime: 0,
-    });
+    const data = await context.queryClient.ensureQueryData(sessionQuery);
     if (!data?.session) throw redirect({ to: "/login" });
   },
   component: Select,

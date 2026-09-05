@@ -1,5 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { authClient } from "../auth-client.ts";
+import { authClient, sessionQuery } from "../auth-client.ts";
+import { meQuery } from "../orpc.ts";
 import { apexUrl, currentSlug, hardRedirect, tenantUrl } from "../lib/tenant.ts";
 import { AppShell } from "../components/AppShell.tsx";
 
@@ -8,38 +9,39 @@ import { AppShell } from "../components/AppShell.tsx";
 export const Route = createFileRoute("/_authed")({
   beforeLoad: async ({ context, location }) => {
     const slug = currentSlug();
-    const data = await context.queryClient.ensureQueryData({
-      queryKey: ["session"],
-      queryFn: async () => (await authClient.getSession()).data ?? null,
-      staleTime: 0,
-    });
 
     if (!slug) {
-      // Apex lobby: route the user to their tenant subdomain, onboarding, or the picker.
+      // Apex lobby: no tenant to resolve, so this is the one branch that reads the session
+      // directly. Route the user to their tenant subdomain, onboarding, or the picker.
+      const data = await context.queryClient.ensureQueryData(sessionQuery);
       if (!data?.session) throw redirect({ to: "/login" });
+      // Deliberately uncached: accept.tsx reaches this dispatcher via a client-side navigate
+      // right after joining an org, and a cached list would miss the new membership.
       const orgs = (await authClient.organization.list()).data ?? [];
       if (orgs.length === 0) throw redirect({ to: "/onboarding" });
       if (orgs.length === 1) return hardRedirect(tenantUrl(orgs[0]!.slug));
       throw redirect({ to: "/select" });
     }
 
-    // Tenant subdomain: auth on the apex, so bounce there if signed out.
-    if (!data?.session) return hardRedirect(apexUrl("/login"));
-    // One call validates membership (FORBIDDEN if not a member) and points Better Auth's
-    // org-plugin endpoints (invite, active member) at this tenant. The server re-checks too.
-    const res = await authClient.organization.setActive({ organizationSlug: slug });
-    if (res.error) return hardRedirect(apexUrl("/select")); // not a member of this workspace
+    // Tenant subdomain: one call covers signed-in, member-of-this-workspace, and role.
+    // beforeLoad re-runs on every navigation, so it's cached — an in-app route change costs
+    // no network. Retry is off so a rejection bounces immediately. UNAUTHORIZED means auth,
+    // which lives on the apex; anything else means this isn't their workspace.
+    // The server re-checks membership on every procedure regardless — this is UX, not the boundary.
+    const me = await context.queryClient
+      .ensureQueryData({ ...meQuery, retry: false })
+      .catch((e: unknown) => (e as { code?: string }).code ?? "FORBIDDEN");
+    if (typeof me === "string") {
+      return hardRedirect(apexUrl(me === "UNAUTHORIZED" ? "/login" : "/select"));
+    }
 
     // Role decides which app this shell renders. UX only — the server procedures are the boundary.
-    // Roles are plain text (Better Auth's org plugin only types its own built-in "member"/"admin"/
-    // "owner" — "client" is this app's addition), so the query result is widened to `string`.
-    const role = await context.queryClient.ensureQueryData({
-      queryKey: ["active-member-role"],
-      queryFn: async (): Promise<string> => (await authClient.organization.getActiveMember()).data?.role ?? "member",
-    });
     const path = location.pathname;
-    if (role === "client" && !path.startsWith("/portal")) throw redirect({ to: "/portal" });
-    if (role !== "client" && path.startsWith("/portal")) throw redirect({ to: "/" });
+    if (me.role === "client" && !path.startsWith("/portal")) throw redirect({ to: "/portal" });
+    if (me.role !== "client" && path.startsWith("/portal")) throw redirect({ to: "/" });
+    if (me.role !== "admin" && me.role !== "owner" && (path === "/b1" || path.startsWith("/b1/"))) {
+      throw redirect({ to: "/" });
+    }
   },
   component: AppShell,
 });

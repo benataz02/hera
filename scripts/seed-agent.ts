@@ -1,51 +1,44 @@
 /**
- * Provision an on-prem agent for an EXISTING tenant (organization slug): map a bearer
- * token to that org so the agent's pull loop can claim its work. Unlike seed:dev this
- * does no auth/onboarding — the org must already exist. No server needed.
+ * Point a tenant at an on-prem agent. This row IS the difference between dev and production:
+ * `agentUrl` is http://localhost:4000 on a dev box and the Cloudflare Tunnel hostname in a
+ * customer install, and the Access service token is null in the first case.
  *
- *   bun run seed:agent <slug> [token]
+ *   bun --env-file=.env scripts/seed-agent.ts <slug> [agentUrl] [secret]
+ *   bun --env-file=.env scripts/seed-agent.ts alumigraf https://agent-acme.example S3CRET \
+ *       --access-id=<id> --access-secret=<secret> --beas
  *
- * Then set HERA_AGENT_TOKEN=<token> in the agent's .env and (re)start the agent.
+ * The secret must match `secret` in the agent's agent.json (and agent.example.json in
+ * local dev). It is stored encrypted.
  */
 import { eq } from "drizzle-orm";
-import { db, pool, organization, tenantIntegration } from "@hera/db";
-import { hashToken } from "../apps/server/src/crypto.ts";
+import { db, pool, organization, sapConnection } from "@hera/db";
+import { encryptSecret } from "../apps/server/src/crypto.ts";
 
-// NB: don't fall back to env HERA_AGENT_TOKEN — that's the agent's *own* token and would
-// reassign it (and steal it from whichever tenant currently owns it).
-const slug = process.argv[2] ?? process.env.SLUG;
-const token = process.argv[3] ?? `dev-agent-token-${slug}`;
-if (!slug) throw new Error("usage: bun run seed:agent <slug> [token]");
+const [slug, agentUrl = "http://localhost:4000", secret = "dev-secret-change-me-min-32-chars-long"] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const flag = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.split("=").slice(1).join("=") ?? null;
 
-async function main(slug: string): Promise<void> {
-  const [org] = await db
-    .select({ id: organization.id })
-    .from(organization)
-    .where(eq(organization.slug, slug))
-    .limit(1);
-  if (!org) throw new Error(`No organization with slug '${slug}'. Onboard it first.`);
-
-  // A token hash maps to exactly one tenant: clear any stale owner, then upsert this org's row.
-  const hash = hashToken(token);
-  await db.delete(tenantIntegration).where(eq(tenantIntegration.agentTokenHash, hash));
-  await db
-    .insert(tenantIntegration)
-    .values({
-      tenantId: org.id,
-      agentTokenHash: hash,
-      b1BaseUrl: process.env.B1_BASE_URL,
-      companyDb: process.env.B1_COMPANY_DB,
-    })
-    .onConflictDoUpdate({ target: tenantIntegration.tenantId, set: { agentTokenHash: hash } });
-
-  console.log(`Agent provisioned for '${slug}' (${org.id}).`);
-  console.log(`  set in the agent's .env:  HERA_AGENT_TOKEN=${token}`);
-  console.log(`  then restart the agent (bun run dev:agent).`);
+if (!slug) {
+  console.error("usage: bun scripts/seed-agent.ts <slug> [agentUrl] [secret] [--access-id=] [--access-secret=] [--beas]");
+  process.exit(1);
 }
 
-main(slug)
-  .catch((e) => {
-    console.error(e);
-    process.exitCode = 1;
-  })
-  .finally(() => pool.end());
+const [org] = await db.select({ id: organization.id }).from(organization).where(eq(organization.slug, slug)).limit(1);
+if (!org) {
+  console.error(`no organization with slug '${slug}' — run seed:dev first`);
+  process.exit(1);
+}
+
+const row = {
+  tenantId: org.id,
+  agentUrl,
+  secret: encryptSecret(secret),
+  accessClientId: flag("access-id"),
+  accessClientSecret: flag("access-secret"),
+  beasEnabled: process.argv.includes("--beas"),
+  status: "ok" as const,
+};
+
+await db.insert(sapConnection).values(row).onConflictDoUpdate({ target: sapConnection.tenantId, set: row });
+
+console.log(`${slug} -> ${agentUrl}${row.accessClientId ? " (behind Cloudflare Access)" : ""}${row.beasEnabled ? " + beas" : ""}`);
+await pool.end();

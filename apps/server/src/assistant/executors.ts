@@ -1,6 +1,6 @@
 import { ORPCError } from "@orpc/server";
 import { and, eq, inArray } from "drizzle-orm";
-import { db, configRun, type RunCandidate, type RunSelection } from "@hera/db";
+import { db, configProject, type ConfigCandidate, type ConfigSelection } from "@hera/db";
 import {
   propagate, enumerate, computeOutputs,
   type Entries, type ResolvedLookups, type Val, type Outputs,
@@ -12,9 +12,9 @@ import { validateSuggestionSet } from "../extraction.ts";
 import { callExtraction as realCallExtraction, type ExtractFile } from "../orpc/routers/extraction.ts";
 import {
   searchSimilarRows as realSimilar, fetchDocHistory as realDocs, loadModel,
-  executeRunFromSnapshot, applySelection,
+  calculateProject, applySelection,
 } from "../orpc/routers/configs.ts";
-import { agentFetcher } from "../orpc/routers/models.ts";
+import { modelRunner } from "../orpc/routers/configs.ts";
 import type { DocRow } from "../doc-history.ts";
 
 // Tool executors: the server-side implementations closed over one turn's context. Each returns
@@ -77,7 +77,7 @@ export function createExecutors(
   ctx: ExecutorCtx,
   deps: ExecutorDeps = { searchSimilarRows: realSimilar, fetchDocHistory: realDocs, callExtraction: realCallExtraction },
 ) {
-  const state: { frozen: boolean; lastRun?: { runId: string; candidates: RunCandidate[] } } = { frozen: false };
+  const state: { frozen: boolean; lastRun?: { candidates: ConfigCandidate[] } } = { frozen: false };
 
   /** Resolve evidence → display string, or an error result. User: bind to this message, detail
    *  must be a normalized substring (else whole short message). Other sources: sourceRef must
@@ -188,12 +188,12 @@ export function createExecutors(
       if (prop.conflicts.length) return err("CONFLICTS", prop.conflicts.map((c) => c.message).join("; "));
       if (!ctx.working.batches.length) return err("INVALID_ARGUMENTS", "Add at least one batch quantity");
       try {
-        const r = await executeRunFromSnapshot(
-          ctx.tenantId, ctx.projectId, ctx.working.entries, ctx.working.batches,
-          new Date(ctx.working.projectVersion), agentFetcher(ctx.tenantId),
+        const r = await calculateProject(
+          ctx.tenantId, ctx.projectId, await modelRunner(ctx.tenantId, ctx.model.definition),
+          { entries: ctx.working.entries, batches: ctx.working.batches },
         );
         state.frozen = true;
-        state.lastRun = { runId: r.runId, candidates: r.candidates };
+        state.lastRun = { candidates: r.candidates };
         ctx.working.projectVersion = r.projectVersion;
         const batchQty = ctx.working.batches[0] ?? 1;
         const top = r.candidates.slice(0, 5).map((cand, idx) => {
@@ -201,7 +201,7 @@ export function createExecutors(
           return { candidateId: `c${idx}`, label: summarize(cand.assignment), keyFigure: keyFigureOf(perBatch.outputs) };
         });
         return {
-          ok: true as const, stale: false as const, runId: r.runId, projectVersion: r.projectVersion,
+          ok: true as const, stale: false as const, projectVersion: r.projectVersion,
           reused: r.reused, candidateCount: r.candidateCount, top,
         };
       } catch (e) {
@@ -212,50 +212,56 @@ export function createExecutors(
     },
 
     async selectCandidates(input: {
-      runId: string;
       selections: { candidateId: string; batchQty: number }[]; mode: "add" | "replace";
     }) {
       return db.transaction(async (tx) => {
-        const [run] = await tx.select().from(configRun)
-          .where(and(eq(configRun.id, input.runId), eq(configRun.tenantId, ctx.tenantId)))
+        const [project] = await tx
+          .select({
+            status: configProject.status, entries: configProject.entries,
+            candidates: configProject.candidates, selection: configProject.selection,
+          })
+          .from(configProject)
+          .where(and(eq(configProject.id, ctx.projectId), eq(configProject.tenantId, ctx.tenantId)))
           .for("update");
-        // A recalculate replaces the project's run row, so a runId that no longer resolves means
-        // exactly that: this turn's run is stale.
-        if (!run || JSON.stringify(run.entries) !== JSON.stringify(ctx.working.entries))
-          return err("STALE_RUN", "This run is no longer the project's current configuration; recalculate");
+        // A recalculate overwrites the candidates in place, so "still calculated, still these
+        // entries" is what makes this turn's candidateIds mean what the model thinks they mean.
+        if (!project || project.status !== "calculated" ||
+            JSON.stringify(project.entries) !== JSON.stringify(ctx.working.entries))
+          return err("STALE_RUN", "These candidates are no longer the project's current configuration; recalculate");
 
-        const validBatchQtys = new Set(run.candidates[0]?.perBatch.map((b) => b.batchQty) ?? []);
+        const validBatchQtys = new Set(project.candidates[0]?.perBatch.map((b) => b.batchQty) ?? []);
         const parsed: { candidateIdx: number; batchQty: number }[] = [];
         for (const s of input.selections) {
           const m = /^c(\d+)$/.exec(s.candidateId);
           const idx = m ? Number(m[1]) : NaN;
-          if (!m || !run.candidates[idx]) return err("INVALID_ARGUMENTS", `Unknown candidateId ${s.candidateId}`);
+          if (!m || !project.candidates[idx]) return err("INVALID_ARGUMENTS", `Unknown candidateId ${s.candidateId}`);
           if (!validBatchQtys.has(s.batchQty))
-            return err("INVALID_ARGUMENTS", `batchQty ${s.batchQty} is not one of this run's batches`);
+            return err("INVALID_ARGUMENTS", `batchQty ${s.batchQty} is not one of this configuration's batches`);
           parsed.push({ candidateIdx: idx, batchQty: s.batchQty });
         }
 
         const key = (s: { candidateIdx: number; batchQty: number }) => `${s.candidateIdx}:${s.batchQty}`;
-        let next: RunSelection[];
+        let next: ConfigSelection[];
         if (input.mode === "replace") {
           next = parsed.map((p) => ({ candidateIdx: p.candidateIdx, batchQty: p.batchQty }));
         } else {
-          const merged = new Map((run.selection ?? []).map((s) => [key(s), s]));
+          const merged = new Map((project.selection ?? []).map((s) => [key(s), s]));
           for (const p of parsed) merged.set(key(p), { candidateIdx: p.candidateIdx, batchQty: p.batchQty });
           next = [...merged.values()];
         }
 
         try {
-          applySelection(run, next);
+          // ctx.lookups is this turn's resolution of the same live model — no snapshot to read.
+          applySelection(ctx.model.definition, ctx.lookups, project.candidates, next);
         } catch (e) {
           return mapInfra(e);
         }
 
-        await tx.update(configRun).set({ selection: next })
-          .where(and(eq(configRun.id, run.id), eq(configRun.tenantId, ctx.tenantId)));
+        await tx.update(configProject).set({ selection: next })
+          .where(and(eq(configProject.id, ctx.projectId), eq(configProject.tenantId, ctx.tenantId)));
 
         return {
-          ok: true as const, stale: false as const, runId: run.id,
+          ok: true as const, stale: false as const,
           selections: next.map((s) => ({ candidateId: `c${s.candidateIdx}`, batchQty: s.batchQty })),
         };
       });

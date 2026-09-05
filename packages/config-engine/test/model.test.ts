@@ -22,6 +22,13 @@ describe("ModelDefZ", () => {
     expect(parsed.parameters[0]!.extractionHint).toBe("Title block MATERIAL field");
   });
 
+  test("keeps excludeFromDomains on a parameter", () => {
+    const m = structuredClone(model) as any;
+    m.parameters[0].excludeFromDomains = true;
+    const parsed = ModelDefZ.parse(m);
+    expect(parsed.parameters[0]!.excludeFromDomains).toBe(true);
+  });
+
   test("rejects unknown constraint kind", () => {
     const bad = structuredClone(model) as any;
     bad.constraints.push({ kind: "magic" });
@@ -32,7 +39,7 @@ describe("ModelDefZ", () => {
 describe("LookupRef columns", () => {
   test("accepts named-source query refs and rejects the old inline shape", () => {
     expect(LookupRefZ.safeParse({ source: "query", table: "items", valueCol: "ItemCode" }).success).toBe(true);
-    expect(LookupRefZ.safeParse({ source: "query", target: "b1", path: "/Items", valueField: "ItemCode" }).success).toBe(false);
+    expect(LookupRefZ.safeParse({ source: "query", target: "b1", query: { entitySet: "Items" }, valueField: "ItemCode" }).success).toBe(false);
     expect(LookupRefZ.safeParse({ source: "table", table: "mats", valueCol: "code", columns: ["density"] }).success).toBe(true);
   });
 
@@ -53,5 +60,18 @@ describe("LookupRef columns", () => {
 
   test("derivedKey joins with underscore", () => {
     expect(derivedKey("material", "density")).toBe("material_density");
+  });
+
+  test("a query ref derives and displays every column but the key", () => {
+    const cols = ["ItemCode", "ItemName", "OnHand"];
+    const ref = { source: "query" as const, table: "items" };
+    expect(derivedColumns(ref, cols)).toEqual(["ItemName", "OnHand"]);
+    expect(displayColumns(ref, cols)).toEqual(["ItemName", "OnHand"]);
+  });
+
+  test("a model definition no longer carries query definitions", () => {
+    const m = structuredClone(model) as Record<string, unknown>;
+    m.queryTables = [{ name: "items", target: "b1", query: { entitySet: "Items" }, columns: ["ItemCode"] }];
+    expect("queryTables" in ModelDefZ.parse(m)).toBe(false);
   });
 });

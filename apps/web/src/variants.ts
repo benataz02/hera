@@ -20,18 +20,32 @@ export type { SaveAsInput, VariantRow } from "./components/objectVariantLogic.ts
 export type VariantPage = "list" | "object";
 
 // One place for the variant query + mutations so both pages stay thin.
+//
+// A `portal:` key is served by portal.variants instead: variants.list is userProcedure, which
+// fences client accounts out entirely. Both queries are declared unconditionally (hooks rules)
+// and exactly one is enabled — the disabled one never fetches and is never read.
 export function useVariants(page: VariantPage, entity: string) {
   const qc = useQueryClient();
+  const readOnly = entity.startsWith("portal:");
+
   const opts = orpc.variants.list.queryOptions({ input: { page, entity } });
-  const query = useQuery(opts);
+  const internal = useQuery({ ...opts, enabled: !readOnly });
+  const portal = useQuery({
+    ...orpc.portal.variants.queryOptions({ input: { page, entity } }),
+    enabled: readOnly,
+  });
+
+  const data = readOnly ? portal.data : internal.data;
   const invalidate = () => qc.invalidateQueries({ queryKey: opts.queryKey });
   const save = useMutation(orpc.variants.save.mutationOptions({ onSuccess: invalidate }));
   const remove = useMutation(orpc.variants.remove.mutationOptions({ onSuccess: invalidate }));
   const setWidths = useMutation(orpc.variants.setWidths.mutationOptions());
   return {
-    variants: query.data?.variants ?? [],
-    isAdmin: query.data?.isAdmin ?? false,
-    isLoading: query.isPending,
+    variants: data?.variants ?? [],
+    isAdmin: data?.isAdmin ?? false,
+    isLoading: readOnly ? portal.isPending : internal.isPending,
+    /** a portal client cannot create, edit or delete a view — the chrome for it is hidden */
+    readOnly,
     save,
     remove,
     setWidths,
@@ -69,15 +83,7 @@ export function useObjectVariants(entity: string, recordKey?: string) {
   const selected = variants.find((v) => v.id === selectedId) ?? null;
   const persisted = selected ? normalizeObjectDef(selected.definition) : null;
 
-  /** Same-id Save must refetch projection so newly visible fields appear. */
-  const invalidateObjectGet = (variantId: string) => {
-    if (!recordKey) return;
-    return qc.invalidateQueries({
-      queryKey: orpc.entities.get.queryOptions({
-        input: { entity, key: recordKey, variantId },
-      }).queryKey,
-    });
-  };
+  const invalidateObjectGet = (_variantId: string) => undefined;
 
   const select = (id: string) => {
     const row = variants.find((v) => v.id === id);
@@ -213,7 +219,7 @@ export type ObjectVariants = ReturnType<typeof useObjectVariants>;
 // The applied view: it drives the query, the dirty marker and what a Save persists. Owned here so
 // the page can run its own query off `spec` while ListReport renders the chrome from the same state.
 export function useListSpec(entity: string) {
-  const { variants, isAdmin, isLoading, save, remove, setWidths } = useVariants("list", entity);
+  const { variants, isAdmin, isLoading, readOnly, save, remove, setWidths } = useVariants("list", entity);
   const [spec, setSpec] = useState<ListVariantDef>(EMPTY_SPEC);
   const [selectedName, setSelectedName] = useState("");
   // Which entity `spec` was initialised for. Gates the query so an entity switch can't fire one
@@ -259,6 +265,7 @@ export function useListSpec(entity: string) {
     applyVariant,
     dirty: !sameDef(spec, selectedDef),
     isAdmin,
+    readOnly,
     save,
     remove,
     setWidths,

@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "bun:test";
-import { checkModel } from "../src/check";
+import { checkModel, referencedTables } from "../src/check";
 import type { ModelDef } from "../src/model";
 import { model } from "./fixture";
 
@@ -67,6 +67,13 @@ describe("checkModel", () => {
     expect(issues.some((i) => i.message.includes("arity") || i.message.includes("values"))).toBe(true);
   });
 
+  test("table constraint: excluded param is rejected", () => {
+    const bad = structuredClone(model);
+    bad.parameters.find((p) => p.key === "color")!.excludeFromDomains = true;
+    const issues = checkModel(bad, PRICES);
+    expect(issues.some((i) => i.message.includes("excluded from engine domains") && i.message.includes("color"))).toBe(true);
+  });
+
   test("structure referencing a missing param", () => {
     const bad = structuredClone(model);
     bad.structure.sections[0]!.groups[0]!.params.push("ghost");
@@ -83,7 +90,7 @@ describe("checkModel", () => {
     const m = structuredClone(model);
     m.history = {
       itemCodeParam: "material",
-      query: { target: "b1", path: "/x", columns: ["mat", "sec", "price"] },
+      query: { target: "b1", query: { entitySet: "X" }, columns: ["mat", "sec", "price"] },
       mappings: [
         { param: "material", column: "mat", match: "exact", weight: 2 },
         { param: "section", column: "sec", match: "closeness", weight: 1 },
@@ -97,7 +104,7 @@ describe("checkModel", () => {
     const m = structuredClone(model);
     m.history = {
       itemCodeParam: "nope",
-      query: { target: "b1", path: "/x", columns: ["mat"] },
+      query: { target: "b1", query: { entitySet: "X" }, columns: ["mat"] },
       mappings: [
         { param: "ghost", column: "mat", match: "exact", weight: 1 },
         { param: "material", column: "mat", match: "closeness", weight: 1 },
@@ -162,10 +169,12 @@ describe("lookup ref validation", () => {
     expect(collide.some((i) => i.message.includes("collides"))).toBe(true);
   });
 
-  it("resolves query refs against model.queryTables", () => {
+  it("resolves query refs against the tenant's masterdata, same namespace as table refs", () => {
     const m = withRef({ source: "query", table: "items", valueCol: "ItemCode" });
-    m.queryTables = [{ name: "items", target: "b1", path: "/Items", columns: ["ItemCode", "ItemName"] }];
-    expect(checkModel(m, [{ name: "prices", columns: ["code", "price"] }])).toEqual([]);
+    expect(checkModel(m, [
+      { name: "prices", columns: ["code", "price"] },
+      { name: "items", columns: ["ItemCode", "ItemName"] },
+    ])).toEqual([]);
   });
 
   it("flags two derived keys colliding with each other (not a pre-existing key)", () => {
@@ -198,5 +207,22 @@ describe("lookup ref validation", () => {
     bad.structure.sections[0]!.groups[0]!.params.push("pick_price");
     const issues = checkModel(bad, [{ name: "prices", columns: ["code", "price"] }]);
     expect(issues.some((i) => i.path === "structure" && i.message.includes("pick_price"))).toBe(true);
+  });
+});
+
+describe("referencedTables", () => {
+  it("collects domain refs and statically-known LOOKUP names", () => {
+    const m = structuredClone(model);
+    m.parameters[0]!.domain = { kind: "options", ref: { source: "query", table: "items", valueCol: "ItemCode" } };
+    m.bom[0]!.price = 'LOOKUP("prices", "code", material, "price")';
+    m.pricing.priceExpr = 'unitCost * LOOKUP("margins", "k", "std", "v")';
+    expect([...referencedTables(m)].sort()).toEqual(["items", "margins", "prices"]);
+  });
+
+  it("keeps going past an unparseable expression, and ignores manual domains", () => {
+    const m = structuredClone(model);
+    m.computed[0]!.expr = "1 + "; // checkModel's problem, not this one's
+    m.parameters[0]!.domain = { kind: "options", ref: { source: "manual", options: [{ value: "a" }] } };
+    expect([...referencedTables(m)]).toEqual(["prices"]); // still found, in the fixture's bom price
   });
 });

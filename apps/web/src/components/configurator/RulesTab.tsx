@@ -6,6 +6,7 @@ import {
 import "@ui5/webcomponents-fiori/dist/illustrations/NoData.js";
 import type { Constraint, Issue, ModelDef, ResolvedLookups, Val } from "@hera/config-engine";
 import { ExprInput } from "./ExprInput.tsx";
+import type { TableCols } from "./exprHelpers.ts";
 import { issueFor } from "./useDraftModel.ts";
 import { confirm } from "../confirm.ts";
 
@@ -19,7 +20,7 @@ export const parseLit = (s: string): Cell =>
   s === "" ? null : s === "true" ? true : s === "false" ? false : !Number.isNaN(Number(s)) ? Number(s) : s;
 
 export function RulesTab({ draft, update, issues, lookups, tables = [] }: {
-  draft: ModelDef; update: Update; issues: Issue[]; lookups?: ResolvedLookups; tables?: { name: string; columns: string[] }[];
+  draft: ModelDef; update: Update; issues: Issue[]; lookups?: ResolvedLookups; tables?: TableCols[];
 }) {
   const [editingTable, setEditingTable] = useState<number | null>(null);
   const setC = (i: number, c: Constraint) =>
@@ -119,7 +120,7 @@ function ComboTableDialog({ draft, lookups, value, onOk, onCancel }: {
 }) {
   const [c, setCLocal] = useState<TableConstraint>(structuredClone(value));
   // Only finite params can appear in a combination table (checkModel enforces the same).
-  const eligible = draft.parameters.filter((p) => p.domain?.kind === "options" || p.type === "boolean");
+  const eligible = draft.parameters.filter((p) => !p.excludeFromDomains && (p.domain?.kind === "options" || p.type === "boolean"));
   const optionsFor = (key: string): Cell[] | null => {
     const p = draft.parameters.find((x) => x.key === key);
     if (p?.type === "boolean") return [true, false];
