@@ -16,7 +16,7 @@ const def = {
       { key: "s2", title: "S2", groups: [{ key: "g2", title: "G2", params: ["c"] }] },
     ],
   },
-  computed: [], constraints: [], bom: [], routing: [], queryTables: [],
+  computed: [], constraints: [], bom: [], routing: [],
   pricing: { priceExpr: "unitCost", quoteItemCode: "X" }, batchDefaults: [1],
 } as ModelDef;
 

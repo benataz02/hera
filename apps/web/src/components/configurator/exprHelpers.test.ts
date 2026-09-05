@@ -10,7 +10,7 @@ const model = {
   ],
   structure: { sections: [] },
   computed: [{ key: "area", expr: "1" }],
-  constraints: [], bom: [], routing: [], queryTables: [],
+  constraints: [], bom: [], routing: [],
   pricing: { priceExpr: "unitCost", quoteItemCode: "X" },
   batchDefaults: [1],
 } as ModelDef;
@@ -49,15 +49,14 @@ describe("exprHelpers", () => {
     expect(complete("look", lookup)).toBe("LOOKUP(");
   });
 
-  it("suggests derived lookup columns when statically known", () => {
-    const m = structuredClone(model); // the test file's existing ModelDef fixture; if none, build a minimal one as in propagate.test.ts
-    m.queryTables = [{ name: "items", target: "b1", path: "/Items", columns: ["Code", "Name"] }];
+  it("suggests derived query columns from the tenant masterdata", () => {
+    const m = structuredClone(model);
     m.parameters.push({
       key: "item", label: "Item", type: "string", ui: "select",
       domain: { kind: "options", ref: { source: "query", table: "items", valueCol: "Code" } },
     });
-    const texts = scopeSuggestions(m).map((s) => s.text);
-    expect(texts).toContain("item_Name");
+    const tables = [{ name: "items", kind: "query" as const, columns: ["Code", "Name"] }];
+    expect(scopeSuggestions(m, [], tables).map((s) => s.text)).toContain("item_Name");
   });
 
   it("suggests every extra tenant-table column even when display is a subset", () => {
@@ -66,7 +65,7 @@ describe("exprHelpers", () => {
       key: "item", label: "Item", type: "string", ui: "select",
       domain: { kind: "options", ref: { source: "table", table: "items", valueCol: "Code", columns: ["Name"] } },
     });
-    const texts = scopeSuggestions(m, [], [{ name: "items", columns: ["Code", "Name", "Price"] }]).map((s) => s.text);
+    const texts = scopeSuggestions(m, [], [{ name: "items", kind: "table", columns: ["Code", "Name", "Price"] }]).map((s) => s.text);
     expect(texts).toContain("item_Name");
     expect(texts).toContain("item_Price");
   });

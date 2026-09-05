@@ -7,7 +7,7 @@ import {
 
 const param = (key: string) => ({ key, label: key, type: "string" as const, ui: "select" as const });
 const model: ModelDef = {
-  name: "m", computed: [], constraints: [], bom: [], routing: [], queryTables: [],
+  name: "m", computed: [], constraints: [], bom: [], routing: [],
   structure: { sections: [] }, pricing: { priceExpr: "0", quoteItemCode: "X" }, batchDefaults: [1],
   parameters: [param("material"), param("size"), param("coating")],
 };

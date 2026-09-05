@@ -62,24 +62,16 @@ describe("LookupRef columns", () => {
     expect(derivedKey("material", "density")).toBe("material_density");
   });
 
-  test("query table labels/hidden are kept and do not change derived or display columns", () => {
-    const m = structuredClone(model) as any;
-    m.queryTables = [{
-      name: "items", target: "b1", query: { entitySet: "Items" },
-      columns: ["ItemCode", "ItemName", "OnHand"],
-      labels: { ItemName: "Name" },
-      hidden: ["OnHand"],
-    }];
-    const parsed = ModelDefZ.parse(m);
-    expect(parsed.queryTables[0]).toEqual({
-      name: "items", target: "b1", query: { entitySet: "Items" },
-      columns: ["ItemCode", "ItemName", "OnHand"],
-      labels: { ItemName: "Name" },
-      hidden: ["OnHand"],
-    });
+  test("a query ref derives and displays every column but the key", () => {
+    const cols = ["ItemCode", "ItemName", "OnHand"];
     const ref = { source: "query" as const, table: "items" };
-    const cols = parsed.queryTables[0]!.columns;
     expect(derivedColumns(ref, cols)).toEqual(["ItemName", "OnHand"]);
     expect(displayColumns(ref, cols)).toEqual(["ItemName", "OnHand"]);
+  });
+
+  test("a model definition no longer carries query definitions", () => {
+    const m = structuredClone(model) as Record<string, unknown>;
+    m.queryTables = [{ name: "items", target: "b1", query: { entitySet: "Items" }, columns: ["ItemCode"] }];
+    expect("queryTables" in ModelDefZ.parse(m)).toBe(false);
   });
 });

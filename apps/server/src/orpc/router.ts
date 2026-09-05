@@ -1,6 +1,7 @@
 import { createAssistantRouter } from "../assistant/router.ts";
 import { variantsRouter } from "./routers/variants.ts";
 import { modelsRouter } from "./routers/models.ts";
+import { masterdataRouter } from "./routers/masterdata.ts";
 import { configsRouter } from "./routers/configs.ts";
 import { extractionRouter } from "./routers/extraction.ts";
 import { portalClientsRouter, portalRouter } from "./routers/portal.ts";
@@ -19,6 +20,7 @@ export const router = {
   })),
   variants: variantsRouter,
   models: modelsRouter,
+  masterdata: masterdataRouter,
   configs: configsRouter,
   extraction: extractionRouter,
   portal: portalRouter,

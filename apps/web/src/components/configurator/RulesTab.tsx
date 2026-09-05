@@ -6,6 +6,7 @@ import {
 import "@ui5/webcomponents-fiori/dist/illustrations/NoData.js";
 import type { Constraint, Issue, ModelDef, ResolvedLookups, Val } from "@hera/config-engine";
 import { ExprInput } from "./ExprInput.tsx";
+import type { TableCols } from "./exprHelpers.ts";
 import { issueFor } from "./useDraftModel.ts";
 import { confirm } from "../confirm.ts";
 
@@ -19,7 +20,7 @@ export const parseLit = (s: string): Cell =>
   s === "" ? null : s === "true" ? true : s === "false" ? false : !Number.isNaN(Number(s)) ? Number(s) : s;
 
 export function RulesTab({ draft, update, issues, lookups, tables = [] }: {
-  draft: ModelDef; update: Update; issues: Issue[]; lookups?: ResolvedLookups; tables?: { name: string; columns: string[] }[];
+  draft: ModelDef; update: Update; issues: Issue[]; lookups?: ResolvedLookups; tables?: TableCols[];
 }) {
   const [editingTable, setEditingTable] = useState<number | null>(null);
   const setC = (i: number, c: Constraint) =>

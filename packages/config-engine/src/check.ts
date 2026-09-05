@@ -46,11 +46,8 @@ export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Iss
     seen.add(k);
   }
 
-  // lookup refs: table/query names, columns, and the derived keys they add to scope
-  const tableCols = new Map<string, string[]>([
-    ...knownTables.map((t) => [t.name, t.columns] as const),
-    ...model.queryTables.map((t) => [t.name, t.columns] as const),
-  ]);
+  // lookup refs: masterdata names, columns, and the derived keys they add to scope
+  const tableCols = new Map<string, string[]>(knownTables.map((t) => [t.name, t.columns] as const));
   const derived: string[] = [];
   const baseKeys = new Set([...paramKeys, ...computedKeys]);
   model.parameters.forEach((p, i) => {
@@ -172,7 +169,7 @@ export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Iss
   }
 
   // LOOKUP table names when statically known (first arg is a string literal)
-  const tables = new Set([...knownTables.map((t) => t.name), ...model.queryTables.map((t) => t.name)]);
+  const tables = new Set(knownTables.map((t) => t.name));
   const checkLookups = (src: string | undefined, path: string) => {
     if (src === undefined) return;
     let ast: Ast;
@@ -225,4 +222,45 @@ export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Iss
   }
 
   return issues;
+}
+
+
+/** Every masterdata table this model names: domain refs plus statically-known LOOKUP() first
+ *  arguments. The server fetches only these, so a tenant's other live queries cost nothing —
+ *  a LOOKUP whose table name is computed at runtime cannot be seen here, which is why
+ *  `checkModel` only accepts string literals there in the first place. */
+export function referencedTables(model: ModelDef): Set<string> {
+  const out = new Set<string>();
+  for (const p of model.parameters) {
+    const ref = p.domain?.kind === "options" ? p.domain.ref : undefined;
+    if (ref && ref.source !== "manual") out.add(ref.table);
+  }
+  const walk = (n: Ast): void => {
+    if (n.t === "call") {
+      if (n.name === "LOOKUP" && n.args[0]?.t === "lit" && typeof n.args[0].v === "string") out.add(n.args[0].v);
+      n.args.forEach(walk);
+    } else if (n.t === "un") walk(n.e);
+    else if (n.t === "bin") { walk(n.l); walk(n.r); }
+    else if (n.t === "tern") { walk(n.c); walk(n.a); walk(n.b); }
+  };
+  for (const src of exprsOf(model)) {
+    try {
+      walk(parse(src));
+    } catch {
+      // an unparseable expression is checkModel's problem, not this one's
+    }
+  }
+  return out;
+}
+
+/** Every expression string in a model, in no particular order. */
+function* exprsOf(model: ModelDef): Generator<string> {
+  for (const p of model.parameters)
+    for (const e of [p.defaultExpr, p.visibleWhen, p.requiredWhen, p.priceExpr]) if (e) yield e;
+  for (const c of model.computed) yield c.expr;
+  for (const c of model.constraints) if (c.kind === "expr") { if (c.when) yield c.when; yield c.assert; }
+  for (const l of model.bom) for (const e of [l.itemCode, l.desc, l.condition, l.qty, l.price]) if (e) yield e;
+  for (const o of model.routing)
+    for (const e of [o.condition, o.setupMin, o.runMinPerUnit, o.ratePerHour]) if (e) yield e;
+  yield model.pricing.priceExpr;
 }

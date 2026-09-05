@@ -14,8 +14,8 @@ docker compose up -d db                 # Postgres 17 on :5432 (dev runs server/
 bun install
 bun run db:push                         # drizzle-kit push — the ONLY schema migration path
 bun run seed:dev [slug]                 # a user + org; sign in at http://lvh.me:5173
-bun run dev                             # server (:3000) + web (:5173) in parallel
-bun run dev:agent                       # the on-prem agent, from apps/agent/agent.json
+bun run dev                             # 3 PowerShell windows: web (:5173), server (:3000), agent
+bun run kill                            # scripts/kill-dev.ps1 — frees the dev ports on Windows
 bun run kill                            # scripts/kill-dev.ps1 — frees the dev ports on Windows
 ```
 
@@ -37,6 +37,7 @@ Live-SAP work:
 bun run seed:agent <slug> http://localhost:4000 <secret>   # secret must match agent.json
 bun run e2e <slug>                      # cloud -> agent -> Service Layer smoke test
 bun run migrate:queries [--write]       # one-way queryTables path -> structured query migration
+bun run migrate:masterdata [--write]    # one-way model queryTables -> config_masterdata rows
 ```
 
 ## The three processes
@@ -85,9 +86,11 @@ candidates) → `computeOutputs` (BOM, routing, cost, price). `dsl.ts` is a smal
 expression language; `check.ts` validates a whole model and is the gate on save, so a model that
 saves cannot produce a parse/unknown-ref error at runtime.
 
-`ResolvedLookups` is the seam: the engine never sees where options came from — manual lists,
-tenant `config_table` rows and live B1 reads are all resolved to the same shape by
-`apps/server/src/lookups.ts` before the engine runs.
+`ResolvedLookups` is the seam: the engine never sees where options came from — manual lists and
+tenant `config_masterdata` rows (kind `table` = values maintained in HERA, kind `query` = a live
+B1/Beas read) are all resolved to the same shape by `apps/server/src/lookups.ts` before the engine
+runs. **A model holds no table definitions**: it names masterdata, and `referencedTables` decides
+which query rows a resolve actually fetches — a model naming none never touches the agent.
 
 **Nothing is snapshotted.** One configuration is one row: `config_project` carries its own
 `entries` + `candidates` + `selection`, and a recalculate overwrites them in place. Model and
@@ -125,7 +128,7 @@ and a different agent route prefix.
 
 ## Live queries are data, not paths
 
-`ModelDef.queryTables[].query` is `{ entitySet, filter?, orderby?, top? }`. `$select` is **derived
+`config_masterdata.query` is `{ entitySet, filter?, orderby?, top? }`. `$select` is **derived
 from `columns`** and never stored, so the two cannot disagree. Value-help paging uses a `$skip`
 offset — a cursor that can express nothing but paging, which is what the old "parse both URLs and
 compare their searchParams" check was trying to guarantee.

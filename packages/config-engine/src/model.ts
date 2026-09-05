@@ -21,7 +21,7 @@ export const LookupRefZ = z.discriminatedUnion("source", [
   }),
   z.object({
     source: z.literal("query"),
-    /** names a ModelDef.queryTables entry — the query itself is defined there */
+    /** names a tenant masterdata table of kind "query" — the query itself is defined there */
     table: z.string(),
     /** convention: absent = 1st declared column (see refKeyCols) */
     valueCol: z.string().optional(),
@@ -40,8 +40,6 @@ export const ODataQueryZ = z.object({
   entitySet: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be an entity set name"),
   filter: z.string().optional(),
   orderby: z.string().optional(),
-  /** rows per read — the value help's page size, not a hard total. */
-  top: z.number().int().positive().optional(),
 });
 export type ODataQuery = z.infer<typeof ODataQueryZ>;
 
@@ -136,15 +134,6 @@ export const ModelDefZ = z.object({
   constraints: z.array(ConstraintZ),
   bom: z.array(BomLineZ),
   routing: z.array(OperationZ),
-  queryTables: z.array(
-    QuerySourceZ.extend({
-      name: z.string(),
-      /** dialog headers; missing/blank → show the key. Engine ignores. */
-      labels: z.record(z.string(), z.string()).optional(),
-      /** keys omitted from the value-help dialog. Still fetched, still derived. */
-      hidden: z.array(z.string()).optional(),
-    }),
-  ),
   history: z
     .object({
       itemCodeParam: KeyZ.optional(),
@@ -162,7 +151,16 @@ export const ModelDefZ = z.object({
 export type ModelDef = z.infer<typeof ModelDefZ>;
 
 export type Option = { value: Val; label: string };
-export type ResolvedTable = { columns: string[]; rows: Val[][]; /** $skip for the next page; absent = last page */ nextSkip?: number };
+export type ResolvedTable = {
+  columns: string[];
+  rows: Val[][];
+  /** $skip for the next page; absent = last page */
+  nextSkip?: number;
+  /** value-help headers, from the masterdata row. Engine ignores; the picker reads them. */
+  labels?: Record<string, string>;
+  /** keys the value-help dialog hides. Still fetched, still derived. */
+  hidden?: string[];
+};
 /** Everything external, already fetched: engine never sees source kinds. */
 export type ResolvedLookups = {
   domains: Record<string, Option[]>;

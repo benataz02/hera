@@ -75,6 +75,7 @@ export function AppShell() {
               run: () => navigate({ to: "/b1/$entity", params: { entity: p.name } }),
             })),
             page("Configurator models", "/models", "tree"),
+            page("Masterdata", "/masterdata", "table-view"),
             page("Settings", "/settings", "action-settings"),
           ]
         : []),
@@ -240,12 +241,20 @@ export function AppShell() {
                   selected={pathname === "/configs" || pathname.startsWith("/configs/")}
                 />
                 {isAdmin ? (
-                  <SideNavigationItem
-                    text="Configurator models"
-                    icon="tree"
-                    data-to="/models"
-                    selected={pathname === "/models" || pathname.startsWith("/models/")}
-                  />
+                  <>
+                    <SideNavigationItem
+                      text="Configurator models"
+                      icon="tree"
+                      data-to="/models"
+                      selected={pathname === "/models" || pathname.startsWith("/models/")}
+                    />
+                    <SideNavigationItem
+                      text="Master data"
+                      icon="table-view"
+                      data-to="/masterdata"
+                      selected={pathname === "/masterdata" || pathname.startsWith("/masterdata/")}
+                    />
+                  </>
                 ) : null}
               </SideNavigationGroup>
             </>

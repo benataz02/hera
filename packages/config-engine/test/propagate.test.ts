@@ -163,7 +163,7 @@ describe("derived lookup columns", () => {
     ],
     structure: { sections: [{ key: "s", title: "S", groups: [{ key: "g", title: "G", params: ["mat"] }] }] },
     computed: [{ key: "dbl", expr: "mat_density * 2" }],
-    constraints: [], bom: [], routing: [], queryTables: [],
+    constraints: [], bom: [], routing: [],
     pricing: { priceExpr: "0", quoteItemCode: "X" },
     batchDefaults: [1],
   };
@@ -193,7 +193,6 @@ describe("derived lookup columns", () => {
         { key: "height", label: "Height", type: "number", ui: "input", defaultExpr: "mp_ItemHeight" },
       ],
       computed: [],
-      queryTables: [{ name: "raw", target: "b1", query: { entitySet: "Items" }, columns: ["ItemCode", "ItemName", "ItemHeight"] }],
     };
     const lk: ResolvedLookups = {
       domains: { mp: [{ value: "A1", label: "Bar" }] },

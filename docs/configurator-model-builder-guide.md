@@ -134,13 +134,13 @@ The **domain** decides which values are offered:
 |--------|-----------|-------------|
 | **None (free entry)** | open text/number | nothing |
 | **Manual list** | a fixed short list | value + optional label rows (numeric values stay numeric) |
-| **Table** | values from a lookup table | table name, value column, optional label column |
-| **Query (B1/Beas)** | values pulled live from SAP | the name of a query table (defined on the Tables tab), value field, optional label field |
+| **Table** | values from a masterdata table | table name, value column, optional label column |
+| **Query (B1/Beas)** | values pulled live from SAP | the name of a masterdata query, value field, optional label field |
 | **Number range** | a bounded number | min, max, step |
 
-For **manual/table/query** domains, click **Preview options** to resolve the source live and see
-the first 20 results — the same resolution a real run uses. If the workspace has no on-prem agent
-configured, or it is unreachable, you'll see that message here instead.
+A half-built domain (a table with no value column, a query with no source) blocks **Save** and says
+so at the top of the **Value domain** tab. To see the resolved options, save and use the live
+preview pane — it runs the same resolution a real configuration does.
 
 ### Computed values
 
@@ -204,18 +204,15 @@ e.g. `LOOKUP("nope", …)` flags *unknown table 'nope'* on the literal.
 
 ---
 
-## 7. Tables tab — reusable lookup data
+## 7. Where values come from — the Masterdata page
 
-Tenant-wide lookup tables that `LOOKUP()` and **Table** domains reference by name. They're saved
-**independently** of the model, so several models can share one table.
+Tables are **not** part of a model. Both kinds — values you maintain by hand and live B1/Beas
+queries — are workspace masterdata, managed under **Configurator → Masterdata** and referenced by
+name from `LOOKUP()` and from **Table**/**Query** domains. One definition, every model.
 
-1. Click **＋** to create a table, or pick one from the list to edit it.
-2. Give it a **name** (this is what expressions reference).
-3. Define **columns** — key, label, and type (`string`/`number`/`boolean`).
-4. Add rows manually, or **paste straight from a spreadsheet** — copy cells in Excel/Sheets and
-   paste anywhere in the grid; each column's type is applied automatically.
-5. **Save table.** New/renamed tables are picked up by the builder immediately (validation and
-   the domain pickers see them right away). A duplicate name is rejected with a message.
+See **[docs/masterdata-guide.md](masterdata-guide.md)** for creating and editing them.
+
+A name the workspace does not have flags as *unknown table* on the literal, and blocks the save.
 
 ---
 
@@ -227,10 +224,6 @@ Tenant-wide lookup tables that `LOOKUP()` and **Table** domains reference by nam
 - **Unit price expression** — how the sell price is derived, with `unitCost` and `qty` in scope
   (e.g. `unitCost * 1.4`).
 - **Quote item code** — the SAP item code the resulting quote line uses.
-- **Query tables** — B1/Beas datasets read live for `LOOKUP()` and query domains: a **name**,
-  **target** (B1/Beas), an **entity set** with an optional **filter**, **order by** and page size,
-  and the **columns** to keep. There is no `$select` field: it is derived from the columns Test
-  fetch discovered, so the two can never drift apart.
 
 ---
 
@@ -251,8 +244,8 @@ fix it, and Save lights up.
 |------------|-------|
 | Ask the user a question | **Parameters** → Add parameter |
 | Offer a fixed list of choices | Parameter → domain **Manual list** |
-| Offer choices from SAP | Parameter → domain **Query**, or a **Query table** in Settings |
-| Offer choices from a spreadsheet | **Tables** tab → create table → Parameter → domain **Table** |
+| Offer choices from SAP | **Masterdata** → Create → kind **Query** → Parameter → domain **Query** |
+| Offer choices from a spreadsheet | **Masterdata** → Create → kind **Table** → Parameter → domain **Table** |
 | Enforce a rule between answers | **Rules** → Add constraint (or combination table) |
 | Add a material / price line | **BOM** → Add line |
 | Add a labor step | **Routing** → Add operation |

@@ -11,13 +11,13 @@ import type { Issue, ModelDef, Param } from "@hera/config-engine";
 import { confirm } from "../confirm.ts";
 import { ExprInput } from "./ExprInput.tsx";
 import { ParamDialog } from "./ParamDialog.tsx";
-import { mergeTableCols } from "./exprHelpers.ts";
+import type { TableCols } from "./exprHelpers.ts";
 import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
 import { mergeQueryPicks, setQueryPick, type QueryPicks } from "./formHelpers.ts";
 import { issueFor } from "./useDraftModel.ts";
 import { applyMove, canDrop, duplicateParam, parseRowKey, placeParam, removeFromStructure, rowKeyOf, unplacedParams, type Placement, type RowRef } from "./structureOps.ts";
 
-type Tables = { name: string; columns: string[] }[];
+type Tables = TableCols[];
 type Update = (fn: (d: ModelDef) => ModelDef) => void;
 
 const emptyParam = (): Param => ({ key: "", label: "", type: "string", ui: "select" });
@@ -70,8 +70,8 @@ function revealActionsHeader(el: TableHeaderRowDomRef | null) {
   sr.appendChild(style);
 }
 
-export function ParamsTab({ draft, update, issues, tables, lookups, lookupsError, onRetryLookups }: {
-  draft: ModelDef; update: Update; issues: Issue[]; tables: Tables;
+export function ParamsTab({ modelId, draft, update, issues, tables, lookups, lookupsError, onRetryLookups }: {
+  modelId: string; draft: ModelDef; update: Update; issues: Issue[]; tables: Tables;
   lookups?: ResolvedLookups; lookupsError?: Error | null; onRetryLookups: () => void;
 }) {
   const [editing, setEditing] = useState<{ param: Param; isNew: boolean; place?: { s: number; g: number } } | null>(null);
@@ -83,10 +83,6 @@ export function ParamsTab({ draft, update, issues, tables, lookups, lookupsError
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggle = (id: string) =>
     setCollapsed((c) => { const n = new Set(c); n.delete(id) || n.add(id); return n; });
-  const suggestTables = mergeTableCols(
-    tables,
-    draft.queryTables.map((q) => ({ name: q.name, columns: q.columns })),
-  );
 
   type StructRow = { kind: "struct"; key: string; depth: number; label: string; detail: string; ref: RowRef; collapseId?: string };
   type Row = StructRow | { kind: "formula"; key: string; idx: number };
@@ -209,7 +205,7 @@ export function ParamsTab({ draft, update, issues, tables, lookups, lookupsError
   return (
     <DynamicSideContent equalSplit sideContentVisibility="AlwaysShow" style={{ height: "100%", minHeight: "28rem" }}
       sideContent={
-        <PreviewPane draft={draft} issues={issues} lookups={lookups}
+        <PreviewPane modelId={modelId} draft={draft} issues={issues} lookups={lookups}
           lookupsError={lookupsError} onRetryLookups={onRetryLookups} />
       }>
     <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", padding: "1rem" }}>
@@ -297,7 +293,7 @@ export function ParamsTab({ draft, update, issues, tables, lookups, lookupsError
               </TableCell>
               <TableCell>
                 <div style={r.idx === 0 ? SEP : undefined}>
-                  <ExprInput value={draft.computed[r.idx]!.expr} model={draft} tables={suggestTables} fieldId={`expr-computed[${r.idx}].expr`}
+                  <ExprInput value={draft.computed[r.idx]!.expr} model={draft} tables={tables} fieldId={`expr-computed[${r.idx}].expr`}
                     issue={issueFor(issues, `computed[${r.idx}].expr`)}
                     onChange={(v) => update((d) => ({ ...d, computed: d.computed.map((x, j) => (j === r.idx ? { ...x, expr: v ?? "" } : x)) }))} />
                 </div>
@@ -380,7 +376,7 @@ export function ParamsTab({ draft, update, issues, tables, lookups, lookupsError
 
       {editing ? (
         <ParamDialog
-          draft={draft} tables={tables} suggestTables={suggestTables} initial={editing.param} isNew={editing.isNew}
+          draft={draft} tables={tables} initial={editing.param} isNew={editing.isNew}
           onCancel={() => setEditing(null)}
           onOk={(p) => { saveParam(p, editing.isNew, editing.place); setEditing(null); }}
         />
@@ -390,8 +386,8 @@ export function ParamsTab({ draft, update, issues, tables, lookups, lookupsError
   );
 }
 
-function PreviewPane({ slot, draft, issues, lookups, lookupsError, onRetryLookups }: {
-  slot?: string; draft: ModelDef; issues: Issue[];
+function PreviewPane({ slot, modelId, draft, issues, lookups, lookupsError, onRetryLookups }: {
+  slot?: string; modelId: string; draft: ModelDef; issues: Issue[];
   lookups?: ResolvedLookups; lookupsError?: Error | null; onRetryLookups: () => void;
 }) {
   const [entries, setEntries] = useState<Entries>({});
@@ -419,7 +415,7 @@ function PreviewPane({ slot, draft, issues, lookups, lookupsError, onRetryLookup
         {lookups && lk && prop ? (
           <ConfiguratorForm model={previewModel} lookups={lookups} lk={lk} prop={prop} entries={entries} onChange={setEntries}
             onQueryPick={(k, t, sel) => setPicks((p) => setQueryPick(p, k, t, sel))}
-            querySource={{ kind: "draft" }} />
+            querySource={{ kind: "project", modelId }} />
         ) : lookupsError ? null : <BusyIndicator active delay={0} />}
       </div>
       <Bar design="Footer" startContent={prop ? <ConsistencyStatus prop={prop} /> : undefined} />

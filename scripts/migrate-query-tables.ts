@@ -1,6 +1,6 @@
 /**
  * One-way migration: config_model.definition queryTables[].path and history.query.path become
- * structured queries ({ entitySet, filter, orderby, top }). $select is dropped — it is derived
+ * structured queries ({ entitySet, filter, orderby }). $select is dropped — it is derived
  * from `columns` at read time now, so the two can never disagree.
  *
  *   bun --env-file=.env scripts/migrate-query-tables.ts          # dry run, prints the plan
@@ -16,7 +16,7 @@ import type { ODataQuery } from "@hera/config-engine";
 const BASE = "https://migrate.invalid/";
 const ENTITY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** `/Items?$select=A,B&$filter=X&$top=50` -> { entitySet: "Items", filter: "X", top: 50 }. */
+/** `/Items?$select=A,B&$filter=X&$top=50` -> { entitySet: "Items", filter: "X" }. */
 export function parsePath(path: string, columns: string[]): ODataQuery {
   const url = new URL(path, BASE);
   const entitySet = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
@@ -35,14 +35,12 @@ export function parsePath(path: string, columns: string[]): ODataQuery {
     if (missing.length) throw new Error(`'${path}': $select has ${missing.join(", ")} but columns do not — run Test fetch first`);
   }
 
-  const top = url.searchParams.get("$top");
-  if (top !== null && !/^\d+$/.test(top)) throw new Error(`'${path}': $top '${top}' is not a positive integer`);
-
+  // $top is accepted so a legacy path still migrates, but dropped: every read now pages at
+  // lookups.ts's DEFAULT_PAGE.
   return {
     entitySet,
     ...(url.searchParams.get("$filter") ? { filter: url.searchParams.get("$filter")! } : {}),
     ...(url.searchParams.get("$orderby") ? { orderby: url.searchParams.get("$orderby")! } : {}),
-    ...(top !== null && Number(top) > 0 ? { top: Number(top) } : {}),
   };
 }
 

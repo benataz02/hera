@@ -22,7 +22,6 @@ export function starterModel(name: string): ModelDef {
     constraints: [],
     bom: [],
     routing: [],
-    queryTables: [],
     pricing: { priceExpr: "unitCost * 1.2", quoteItemCode: "CFG" },
     batchDefaults: [1, 10, 100],
   };

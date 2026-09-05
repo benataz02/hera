@@ -45,7 +45,7 @@ export async function bindClient(tenantId: string, userId: string, cardCode = "C
 export const tenantHeaders = (slug: string, cookie?: string): Headers =>
   new Headers({ "x-forwarded-host": `${slug}.${BASE}`, ...(cookie ? { cookie } : {}) });
 
-// Agent-free model (no queryTables, no query domains): runs entirely from manual options.
+// Agent-free model (no query masterdata, no query domains): runs entirely from manual options.
 export const TEST_MODEL: ModelDef = {
   name: "Cable (portal test)",
   parameters: [
@@ -62,7 +62,6 @@ export const TEST_MODEL: ModelDef = {
   constraints: [],
   bom: [{ id: "conductor", itemCode: '"COND-1"', qty: "2", price: '(material == "steel" ? 1.5 : 2.5)', scrapPct: 0 }],
   routing: [{ id: "cut", resource: "SAW", setupMin: "10", runMinPerUnit: "0.5", ratePerHour: "60" }],
-  queryTables: [],
   pricing: { priceExpr: "unitCost * 1.4", quoteItemCode: "CFG" },
   batchDefaults: [100, 500],
 };

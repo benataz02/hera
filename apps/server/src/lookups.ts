@@ -1,13 +1,14 @@
-import { refKeyCols } from "@hera/config-engine";
+import { refKeyCols, referencedTables } from "@hera/config-engine";
 import type {
   Entries, LookupRef, ModelDef, ODataQuery, Option, QuerySource, ResolvedLookups, ResolvedTable, Val,
 } from "@hera/config-engine";
 import { andFilter, escapeLiteral } from "@hera/b1";
 import { ORPCError } from "@orpc/server";
 
-// Resolve a model's external references (manual lists, tenant config_tables, and query-backed
-// B1/Beas reads) into the engine's ResolvedLookups. The read hop is injected so this stays
-// testable and DB/transport-free; production callers pass runnerFor(connector) from b1.ts.
+// Resolve a model's external references (manual lists, and the tenant's masterdata — rows
+// maintained here or query-backed B1/Beas reads) into the engine's ResolvedLookups. The read hop
+// is injected so this stays testable and DB/transport-free; production callers pass
+// runnerFor(connector) from b1.ts.
 //
 // Nothing here builds a URL any more: a query is `{ entitySet, filter, orderby, top }` and
 // packages/b1's query.ts is the only place that turns one into a path.
@@ -28,19 +29,51 @@ export type QueryRunner = (
   target: "b1" | "beas",
   query: ODataQuery,
   columns: string[],
-  opts?: { skip?: number; maxPages?: number },
+  opts?: { skip?: number; top?: number; maxPages?: number },
 ) => Promise<QueryPage>;
 
-export type TenantTable = { name: string; columns: { key: string }[]; rows: Val[][] };
+/** A live read plus the two display-only fields the value-help dialog reads. Structurally the
+ *  `query` column of config_masterdata; spelled out here so this module stays DB-free. */
+export type MasterdataQuery = QuerySource & { labels?: Record<string, string>; hidden?: string[] };
+/** One config_masterdata row: values maintained here (`columns`/`rows`) or a live read (`query`). */
+export type MasterdataRow = {
+  name: string;
+  kind: "table" | "query";
+  columns: { key: string }[];
+  rows: Val[][];
+  query?: MasterdataQuery | null;
+};
+export type MasterdataQueryRow = MasterdataRow & { query: MasterdataQuery };
 
 const asVal = (v: unknown): Val =>
   typeof v === "number" || typeof v === "boolean" || v === null || v === undefined ? ((v ?? null) as Val) : String(v);
 
-export function tablesFromTenant(tenantTables: TenantTable[]): Record<string, ResolvedTable> {
+export function tablesFromMasterdata(rows: MasterdataRow[]): Record<string, ResolvedTable> {
   const out: Record<string, ResolvedTable> = {};
-  for (const t of tenantTables) out[t.name] = { columns: t.columns.map((c) => c.key), rows: t.rows };
+  for (const t of rows) if (t.kind === "table") out[t.name] = { columns: t.columns.map((c) => c.key), rows: t.rows };
   return out;
 }
+
+/** The query rows a model actually reads. Masterdata is tenant-wide now, so without this filter
+ *  every model would fetch every tenant query — one SAP hop each, for tables it never names. */
+export function queryRowsFor(model: ModelDef, rows: MasterdataRow[]): MasterdataQueryRow[] {
+  const named = referencedTables(model);
+  return rows.filter((r): r is MasterdataQueryRow => r.kind === "query" && !!r.query && named.has(r.name));
+}
+
+// Bumped whenever a tenant's masterdata changes; configs.ts folds it into its lookup cache key so
+// an edited table shows up at once instead of after the 5-minute TTL.
+// ponytail: per-process, like the cache it feeds — a second server process would need the row's
+// updatedAt in the key instead.
+const versions = new Map<string, number>();
+export const masterdataVersion = (tenantId: string) => versions.get(tenantId) ?? 0;
+export const bumpMasterdata = (tenantId: string) => { versions.set(tenantId, Date.now()); };
+
+/** True when resolving this model needs the tenant's agent. */
+export const needsSap = (model: ModelDef, rows: MasterdataRow[]): boolean => queryRowsFor(model, rows).length > 0;
+
+export const queryRowOf = (rows: MasterdataRow[], name: string): MasterdataQueryRow | undefined =>
+  rows.find((r): r is MasterdataQueryRow => r.name === name && r.kind === "query" && !!r.query);
 
 function project(t: ResolvedTable, name: string, valueCol: string, labelCol?: string): Option[] {
   const vi = t.columns.indexOf(valueCol);
@@ -80,16 +113,16 @@ export function withExact(query: ODataQuery, col: string, value: Val): ODataQuer
   return { ...query, filter: andFilter(query.filter, `${col} eq ${literal}`) };
 }
 
-/** Resolve a value-help page request against the model. The query always comes from the model's
- *  own queryTables, never from the client; `cursor` is a plain `$skip` offset and can express
- *  nothing else — which is what the old "parse both URLs and compare their searchParams" check
- *  was trying to guarantee. */
+/** Resolve a value-help page request. The query always comes from the tenant's masterdata, never
+ *  from the client; `cursor` is a plain `$skip` offset and can express nothing else — which is
+ *  what the old "parse both URLs and compare their searchParams" check was trying to guarantee. */
 export function queryPageSource(
-  model: ModelDef,
+  rows: MasterdataRow[],
   input: { table: string; search?: string; searchCols?: string[]; cursor?: number },
 ): QuerySource & { skip?: number } {
-  const qt = model.queryTables.find((q) => q.name === input.table);
-  if (!qt) throw new Error(`Unknown query table '${input.table}'`);
+  const row = queryRowOf(rows, input.table);
+  if (!row) throw new Error(`Unknown query table '${input.table}'`);
+  const qt = { name: row.name, ...row.query };
   const searchCols = input.searchCols ?? [];
   const unknownCol = searchCols.find((c) => !qt.columns.includes(c));
   if (unknownCol) throw new Error(`Search column '${unknownCol}' is not declared by query table '${qt.name}'`);
@@ -109,7 +142,7 @@ export async function fetchQueryTable(
   target: "b1" | "beas",
   query: ODataQuery,
   columns?: string[],
-  opts?: { skip?: number; maxPages?: number },
+  opts?: { skip?: number; top?: number; maxPages?: number },
 ): Promise<ResolvedTable> {
   const page = await run(target, query, columns ?? [], opts);
   const cols = columns?.length ? columns : fieldsOf(page.rows);
@@ -124,6 +157,7 @@ export async function fetchQueryTable(
  *  canonical first page, and cached lookup objects are never mutated. */
 export async function enrichLookups(
   model: ModelDef,
+  rows: MasterdataRow[],
   entries: Entries,
   canonical: ResolvedLookups,
   run: QueryRunner,
@@ -134,7 +168,7 @@ export async function enrichLookups(
     const value = entries[p.key];
     if (ref?.source !== "query" || !(p.key in entries) || Array.isArray(value)) continue;
 
-    const source = model.queryTables.find((q) => q.name === ref.table);
+    const source = queryRowOf(rows, ref.table)?.query;
     const valueCol = source && refKeyCols(ref, source.columns).valueCol;
     if (!source || !valueCol || !IDENT.test(valueCol))
       throw new ORPCError("BAD_REQUEST", { message: `Invalid lookup definition for parameter '${p.key}'` });
@@ -167,25 +201,33 @@ export async function enrichLookups(
   return tables === canonical.tables ? canonical : { domains: canonical.domains, tables };
 }
 
-/** Fetch each queryTable and add it to `tables` (mutates in place). Concurrent: every read is a
- *  live SAP hop. `resolveLookups`'s `runOnce` still collapses two tables that share one read. */
+/** Fetch each query row and add it to `tables` (mutates in place). Concurrent: every read is a
+ *  live SAP hop. `resolveLookups`'s `runOnce` still collapses two tables that share one read.
+ *  `labels`/`hidden` ride along on the resolved table — that is how the value-help dialog gets
+ *  its headers now that the model no longer carries the query. */
 export async function addQueryTables(
   tables: Record<string, ResolvedTable>,
-  queryTables: ModelDef["queryTables"],
+  queryRows: MasterdataQueryRow[],
   run: QueryRunner,
 ): Promise<void> {
   const fetched = await Promise.all(
-    queryTables.map((qt) => fetchQueryTable(run, qt.target, qt.query, qt.columns)),
+    queryRows.map((r) => fetchQueryTable(run, r.query.target, r.query.query, r.query.columns)),
   );
-  queryTables.forEach((qt, i) => { tables[qt.name] = fetched[i]!; });
+  queryRows.forEach((r, i) => {
+    tables[r.name] = {
+      ...fetched[i]!,
+      ...(r.query.labels ? { labels: r.query.labels } : {}),
+      ...(r.query.hidden ? { hidden: r.query.hidden } : {}),
+    };
+  });
 }
 
 export async function resolveLookups(
   model: ModelDef,
-  tenantTables: TenantTable[],
+  rows: MasterdataRow[],
   run: QueryRunner,
 ): Promise<ResolvedLookups> {
-  // Memoize per (target, query, skip): two queryTables may share one read.
+  // Memoize per (target, query, skip): two query tables may share one read.
   const seen = new Map<string, Promise<QueryPage>>();
   const runOnce: QueryRunner = (target, query, columns, opts) => {
     const k = `${target} ${JSON.stringify(query)} ${opts?.skip ?? 0} ${opts?.maxPages ?? 1}`;
@@ -194,8 +236,8 @@ export async function resolveLookups(
     return p;
   };
 
-  const tables = tablesFromTenant(tenantTables);
-  await addQueryTables(tables, model.queryTables, runOnce);
+  const tables = tablesFromMasterdata(rows);
+  await addQueryTables(tables, queryRowsFor(model, rows), runOnce);
 
   const domains: ResolvedLookups["domains"] = {};
   for (const p of model.parameters) {

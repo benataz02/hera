@@ -135,8 +135,7 @@ export function ConfiguratorForm({ model, lookups, lk, prop, entries, onChange, 
     if (p.domain?.kind === "options" && p.domain.ref.source === "query") {
       const ref: LookupRef = p.domain.ref;
       return (
-        <QueryValueHelp source={querySource} queryTable={model.queryTables.find((q) => q.name === ref.table)}
-          canonicalTable={lookups.tables[ref.table]} lookupRef={ref}
+        <QueryValueHelp source={querySource} canonicalTable={lookups.tables[ref.table]} lookupRef={ref}
           value={v} onChange={(nv) => set(key, nv)} headerText={p.label}
           disabled={disabled} readonly={ro}
           onPick={(t) => onQueryPick(key, ref.table, t)} />

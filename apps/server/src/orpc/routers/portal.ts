@@ -17,12 +17,11 @@ import { bad, readOne, readRows } from "../../entity-read.ts";
 import { printDocument } from "../../print.ts";
 import { documentChain } from "../../doc-chain.ts";
 import {
-  applySelection, cachedLookups, calculateProject, liveEngine, loadModel, modelRunner, pushEvent,
-  QueryPageZ, queryTablePage,
+  applySelection, cachedLookups, calculateProject, enrichedLookups, liveEngine, loadModel,
+  modelRunner, pushEvent, QueryPageZ, queryTablePage,
 } from "./configs.ts";
 
 import { ExtractFileZ, extractSuggestions } from "./extraction.ts";
-import { enrichLookups } from "../../lookups.ts";
 
 // The client portal API. Trust model: every clientProcedure handler is scoped by
 // tenantId + the client's bound CardCode + source='portal'; responses pass through
@@ -152,7 +151,6 @@ const toPortalModelDef = (d: ModelDef): ModelDef => ({
   structure: d.structure,
   computed: d.computed,
   constraints: d.constraints,
-  queryTables: d.queryTables,
   batchDefaults: d.batchDefaults,
   extraction: d.extraction,
   bom: [],
@@ -579,8 +577,7 @@ export const portalRouter = {
     .handler(async ({ input, context }) => {
       const model = await loadModel(context.tenantId, input.modelId);
       if (!model.portal) throw new ORPCError("BAD_REQUEST", { message: UNAVAILABLE });
-      const run = await modelRunner(context.tenantId, model.definition);
-      return enrichLookups(model.definition, input.entries ?? {}, await cachedLookups(context.tenantId, model, run), run);
+      return enrichedLookups(context.tenantId, model, input.entries ?? {});
     }),
 
   // Value help paging, model-scoped exactly like the internal one: a portal client names a query
@@ -588,7 +585,7 @@ export const portalRouter = {
   queryPage: clientProcedure.input(QueryPageZ).handler(async ({ input, context }) => {
     const model = await loadModel(context.tenantId, input.modelId);
     if (!model.portal) throw new ORPCError("BAD_REQUEST", { message: UNAVAILABLE });
-    return queryTablePage(context.tenantId, model.definition, input);
+    return queryTablePage(context.tenantId, input, model.definition);
   }),
 
   // Drawing extraction for published models — one code path with the internal procedure.

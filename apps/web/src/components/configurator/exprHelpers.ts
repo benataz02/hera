@@ -11,17 +11,9 @@ export type Suggestion = {
   label?: string;
 };
 
-export type TableCols = { name: string; columns: string[] };
-
-export function mergeTableCols(...sources: (TableCols[] | undefined)[]): TableCols[] {
-  const by = new Map<string, string[]>();
-  for (const src of sources) {
-    for (const t of src ?? []) {
-      by.set(t.name, [...new Set([...(by.get(t.name) ?? []), ...t.columns])]);
-    }
-  }
-  return [...by].map(([name, columns]) => ({ name, columns }));
-}
+/** One tenant masterdata table, as the builder needs it: a name, its column keys, and which
+ *  kind it is. Both kinds share one namespace — a model references either the same way. */
+export type TableCols = { name: string; kind: "table" | "query"; columns: string[] };
 
 /** Overlay a param being edited (including unsaved new ones) so its derived keys are in scope. */
 export function modelWithParam(model: ModelDef, p: Param): ModelDef {
@@ -30,9 +22,7 @@ export function modelWithParam(model: ModelDef, p: Param): ModelDef {
 }
 
 export function scopeSuggestions(model: ModelDef, extraVars: string[] = [], tables: TableCols[] = []): Suggestion[] {
-  const colsOf = (name: string) =>
-    tables.find((t) => t.name === name)?.columns ??
-    model.queryTables.find((q) => q.name === name)?.columns;
+  const colsOf = (name: string) => tables.find((t) => t.name === name)?.columns;
   const derived = model.parameters.flatMap((p) => {
     const ref = p.domain?.kind === "options" ? p.domain.ref : undefined;
     if (!ref || ref.source === "manual") return [];

@@ -7,14 +7,17 @@ import {
 } from "@hera/db";
 import { assistantConversation } from "@hera/assistant/schema";
 import {
-  computeOutputs, DslError, enumerate, EntriesZ, OutputOverridesZ, propagate,
+  computeOutputs, DslError, enumerate, EntriesZ, OutputOverridesZ, propagate, referencedTables,
   type Entries, type ModelDef, type Outputs, type ResolvedLookups, type Val,
 } from "@hera/config-engine";
 import { userProcedure } from "../base.ts";
 import { B1Error, rowsOf } from "@hera/b1";
 import { runnerFor, tenantConnector, viaB1 } from "../../b1.ts";
-import { tenantTables } from "./models.ts";
-import { enrichLookups, fetchQueryTable, queryPageSource, resolveLookups, type QueryRunner } from "../../lookups.ts";
+import { masterdataRows } from "./masterdata.ts";
+import {
+  enrichLookups, fetchQueryTable, masterdataVersion, needsSap, queryPageSource, resolveLookups,
+  type MasterdataRow, type QueryRunner,
+} from "../../lookups.ts";
 import { loadHistoryRows } from "../../history-sync.ts";
 import { scoreRows } from "../../similarity.ts";
 import { docHistoryQuery, flattenDocs, sortDocRows, type DocRow } from "../../doc-history.ts";
@@ -30,13 +33,13 @@ import {
 // Trust model: browser propagates for preview; THESE handlers compute the numbers that get
 // stored. Lookups: ~5-min cache for interactive use, always fresh inside calculateProject.
 
-export const needsSap = (m: ModelDef): boolean =>
-  m.queryTables.length > 0 || m.parameters.some((p) => p.domain?.kind === "options" && p.domain.ref.source === "query");
-
 /** A runner for this model: the tenant's agent when the model reads live data, and otherwise one
- *  that would throw if anything called it — so an agent-free model never touches sap_connection. */
-export async function modelRunner(tenantId: string, m: ModelDef): Promise<QueryRunner> {
-  if (!needsSap(m)) return () => Promise.reject(new Error("Model has no live queries"));
+ *  that would throw if anything called it — so an agent-free model never touches sap_connection.
+ *  "Reads live data" is a property of the model *and* the tenant's masterdata now: true only when
+ *  a table the model names is of kind "query". */
+export async function modelRunner(tenantId: string, m: ModelDef, rows?: MasterdataRow[]): Promise<QueryRunner> {
+  if (!needsSap(m, rows ?? (await masterdataRows(tenantId))))
+    return () => Promise.reject(new Error("Model has no live queries"));
   return runnerFor(await tenantConnector(tenantId));
 }
 
@@ -53,9 +56,9 @@ export async function loadModel(tenantId: string, modelId: string) {
   return m;
 }
 
-async function freshLookups(tenantId: string, model: ModelDef, run: QueryRunner): Promise<ResolvedLookups> {
+async function freshLookups(model: ModelDef, rows: MasterdataRow[], run: QueryRunner): Promise<ResolvedLookups> {
   try {
-    return await resolveLookups(model, await tenantTables(tenantId), run);
+    return await resolveLookups(model, rows, run);
   } catch (e) {
     if (e instanceof ORPCError) throw e; // SAP-not-connected etc. — keep the specific message
     throw new ORPCError("BAD_GATEWAY", { message: e instanceof Error ? e.message : String(e) });
@@ -73,23 +76,37 @@ const lookupCache = new Map<string, { at: number; lookups: Promise<ResolvedLooku
  *  the process page's auto-calculate would otherwise re-GET every query table on each keystroke. */
 export function cachedLookups(
   tenantId: string, model: Awaited<ReturnType<typeof loadModel>>,
-  run?: QueryRunner,
+  run?: QueryRunner, rows?: MasterdataRow[],
 ): Promise<ResolvedLookups> {
-  const key = `${tenantId}:${model.id}:${model.updatedAt.getTime()}`;
+  // masterdataVersion is in the key because a table edit changes the answer without touching the model.
+  const key = `${tenantId}:${model.id}:${model.updatedAt.getTime()}:${masterdataVersion(tenantId)}`;
   const hit = lookupCache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.lookups;
   // An injected runner is the test seam (see configurator.test.ts); production resolves the
   // tenant's agent — but only for a model that actually reads live data.
-  const p = (async () =>
-    freshLookups(tenantId, model.definition, run ?? await modelRunner(tenantId, model.definition)))();
+  const p = (async () => {
+    const md = rows ?? (await masterdataRows(tenantId));
+    return freshLookups(model.definition, md, run ?? (await modelRunner(tenantId, model.definition, md)));
+  })();
   p.catch(() => lookupCache.delete(key)); // a failed live lookup must not poison the key for 5 minutes
   lookupCache.set(key, { at: Date.now(), lookups: p });
   return p;
 }
 
+/** Cached lookups plus the off-page query rows a persisted entry depends on — the one call every
+ *  read path makes. `enrichLookups` is not optional: a stored entry can name a row that is not on
+ *  the canonical first page. */
+export async function enrichedLookups(
+  tenantId: string, model: Awaited<ReturnType<typeof loadModel>>, entries: Entries, run?: QueryRunner,
+): Promise<ResolvedLookups> {
+  const rows = await masterdataRows(tenantId);
+  const runner = run ?? (await modelRunner(tenantId, model.definition, rows));
+  return enrichLookups(model.definition, rows, entries, await cachedLookups(tenantId, model, runner, rows), runner);
+}
+
 /** One page of a model's query table, for the value help. The caller names a table; the query is
- *  resolved from the stored model by queryPageSource (`models.queryPage` is the ad-hoc-query
- *  variant and stays admin-only). The cursor is a plain row offset and nothing else. */
+ *  resolved from the tenant's masterdata by queryPageSource (`masterdata.queryPage` is the
+ *  ad-hoc-query variant and stays admin-only). The cursor is a plain row offset and nothing else. */
 export const QueryPageZ = z.object({
   modelId: z.uuid(),
   table: z.string().min(1),
@@ -98,12 +115,18 @@ export const QueryPageZ = z.object({
   cursor: z.number().int().min(0).optional(),
 });
 
+/** `scopeTo` bounds the read to the tables a model names. The portal passes it: masterdata is
+ *  tenant-wide, and an external client must not be able to page a table their model never
+ *  references. Internal callers do not — the builder previews a draft whose newest query domain is
+ *  not in the saved definition yet, and a member can reach any of the tenant's tables anyway. */
 export async function queryTablePage(
-  tenantId: string, definition: ModelDef, input: z.infer<typeof QueryPageZ>,
+  tenantId: string, input: z.infer<typeof QueryPageZ>, scopeTo?: ModelDef,
 ) {
+  if (scopeTo && !referencedTables(scopeTo).has(input.table))
+    throw new ORPCError("BAD_REQUEST", { message: `Model does not use query table '${input.table}'` });
   let q;
   try {
-    q = queryPageSource(definition, input);
+    q = queryPageSource(await masterdataRows(tenantId), input);
   } catch (e) {
     throw new ORPCError("BAD_REQUEST", { message: e instanceof Error ? e.message : String(e) });
   }
@@ -116,11 +139,7 @@ export async function queryTablePage(
  *  re-appends the off-page query rows a persisted entry may depend on. */
 export async function liveEngine(tenantId: string, project: { modelId: string; entries: Entries }) {
   const model = await loadModel(tenantId, project.modelId);
-  const runner = await modelRunner(tenantId, model.definition);
-  const lookups = await enrichLookups(
-    model.definition, project.entries, await cachedLookups(tenantId, model, runner), runner,
-  );
-  return { model, lookups };
+  return { model, lookups: await enrichedLookups(tenantId, model, project.entries) };
 }
 
 /** The calculate path, shared by configs.run, portal.run and Chati's calculate tool. `entries` /
@@ -168,9 +187,7 @@ export async function calculateProject(
     };
   }
 
-  const lookups = await enrichLookups(
-    model.definition, entries, await cachedLookups(tenantId, model, run), run,
-  );
+  const lookups = await enrichedLookups(tenantId, model, entries, run);
 
   try {
     const pre = propagate(model.definition, lookups, entries);
@@ -493,13 +510,14 @@ export const configsRouter = {
     .input(z.object({ modelId: z.uuid(), entries: EntriesZ.optional() }))
     .handler(async ({ input, context }) => {
       const model = await loadModel(context.tenantId, input.modelId);
-      const run = await modelRunner(context.tenantId, model.definition);
-      return enrichLookups(model.definition, input.entries ?? {}, await cachedLookups(context.tenantId, model, run), run);
+      return enrichedLookups(context.tenantId, model, input.entries ?? {});
     }),
 
   // Value help paging for a query-backed parameter (see queryTablePage).
-  queryPage: userProcedure.input(QueryPageZ).handler(async ({ input, context }) =>
-    queryTablePage(context.tenantId, (await loadModel(context.tenantId, input.modelId)).definition, input)),
+  queryPage: userProcedure.input(QueryPageZ).handler(async ({ input, context }) => {
+    await loadModel(context.tenantId, input.modelId); // the model must exist and be this tenant's
+    return queryTablePage(context.tenantId, input);
+  }),
 
   // Exact help: live B1 Orders + Quotations for the project customer and/or the item-code param.
   // itemCode comes from the client (current unsaved entry); it is only ever a quoted filter value.

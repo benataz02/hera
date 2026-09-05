@@ -83,7 +83,6 @@ export function runnerFor(conn: Connector): QueryRunner {
   return (target, query, columns, opts) =>
     viaB1(async () => {
       const t = transportFor(conn, target);
-      const top = query.top ?? DEFAULT_PAGE;
       const base = {
         filter: query.filter,
         orderby: query.orderby,
@@ -93,11 +92,14 @@ export function runnerFor(conn: Connector): QueryRunner {
       if (opts?.maxPages && opts.maxPages > 1) {
         // Multi-page read (history sync). No $top: the bound is the page cap, stated by the caller.
         const { rows, truncated } = await readPages(
-          t, query.entitySet, { ...base, maxPageSize: top }, { maxPages: opts.maxPages },
+          t, query.entitySet, { ...base, maxPageSize: DEFAULT_PAGE }, { maxPages: opts.maxPages },
         );
         return { rows, truncated };
       }
 
+      // The caller may ask for less than a page (the masterdata editor's preview reads five rows);
+      // DEFAULT_PAGE stays the ceiling, so `top` can only ever shrink the read.
+      const top = Math.min(opts?.top ?? DEFAULT_PAGE, DEFAULT_PAGE);
       const res = await t.readEntitySet(query.entitySet, { ...base, top, skip: opts?.skip });
       const rows = rowsOrThrow(res.data, `Lookup ${target} ${query.entitySet}`);
       // A full page means there is probably another. One extra empty read at the end beats

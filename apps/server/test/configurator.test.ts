@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { eq } from "drizzle-orm";
-import { db, configModel, configProject, type ConfigCandidate } from "@hera/db";
+import { db, configMasterdata, configModel, configProject, type ConfigCandidate } from "@hera/db";
 import type { Entries, ModelDef, ResolvedLookups } from "@hera/config-engine";
 import { applySelection, calculateProject } from "../src/orpc/routers/configs.ts";
 import { configDocumentCommandId } from "../src/config-quote.ts";
@@ -25,7 +25,6 @@ const model: ModelDef = {
   constraints: [],
   bom: [{ id: "body", itemCode: '"BODY"', qty: 'size == "S" ? 1 : 2', price: "3", scrapPct: 0 }],
   routing: [{ id: "cut", resource: "SAW", setupMin: "10", runMinPerUnit: "1", ratePerHour: "60" }],
-  queryTables: [{ name: "items", target: "b1", query: { entitySet: "Items" }, columns: ["ItemCode"] }],
   pricing: { priceExpr: "unitCost * 2", quoteItemCode: "BOX" },
   batchDefaults: [10],
 };
@@ -40,6 +39,14 @@ const fakeFetch: QueryRunner = async (target, query, columns) => {
 const lookups: ResolvedLookups = {
   domains: { grade: [{ value: "A", label: "A" }, { value: "B", label: "B" }] },
   tables: { items: { columns: ["ItemCode"], rows: [["A"], ["B"]] } },
+};
+
+// A query table is tenant masterdata now, not part of any model: one row, referenced by name.
+const seedQueryTable = async (name: string, columns: string[]) => {
+  await db.insert(configMasterdata).values({
+    tenantId, name, kind: "query",
+    query: { target: "b1", query: { entitySet: "Items" }, columns },
+  }).onConflictDoNothing();
 };
 
 const seed = async (name: string, def: ModelDef, entries: Entries, batches: number[]) => {
@@ -91,9 +98,11 @@ describe.skipIf(!process.env.DATABASE_URL)("calculateProject (integration)", () 
   afterAll(async () => {
     await db.delete(configProject).where(eq(configProject.tenantId, tenantId));
     await db.delete(configModel).where(eq(configModel.tenantId, tenantId));
+    await db.delete(configMasterdata).where(eq(configMasterdata.tenantId, tenantId));
   });
 
   test("candidates land on config_project and flip its status; applySelection recomputes overrides", async () => {
+    await seedQueryTable("items", ["ItemCode"]);
     const id = await seed("proj", model, {}, [10]);
 
     const res = await calculateProject(tenantId, id, fakeFetch);
@@ -131,17 +140,17 @@ describe.skipIf(!process.env.DATABASE_URL)("calculateProject (integration)", () 
       name: "Off-page material",
       parameters: [{
         key: "material", label: "Material", type: "string", ui: "select",
-        domain: { kind: "options", ref: { source: "query", table: "items", valueCol: "ItemCode", columns: ["Price"] } },
+        domain: { kind: "options", ref: { source: "query", table: "priced", valueCol: "ItemCode", columns: ["Price"] } },
       }],
       structure: { sections: [{ key: "main", title: "Main", groups: [{ key: "g", title: "G", params: ["material"] }] }] },
       computed: [],
       constraints: [],
       bom: [{ id: "body", itemCode: "material", qty: "1", price: "material_Price", scrapPct: 0 }],
       routing: [],
-      queryTables: [{ name: "items", target: "b1", query: { entitySet: "Items" }, columns: ["ItemCode", "Price"] }],
       pricing: { priceExpr: "unitCost", quoteItemCode: "BOX" },
       batchDefaults: [1],
     };
+    await seedQueryTable("priced", ["ItemCode", "Price"]);
     const id = await seed("off-page", offPageModel, { material: "B" }, [1]);
 
     const reads: (string | undefined)[] = [];
@@ -162,6 +171,7 @@ describe.skipIf(!process.env.DATABASE_URL)("calculateProject (integration)", () 
   // The auto-calculate on the process page fires ~1s after every field edit. Each calculation used
   // to re-GET every query table through the agent; this counts the fetches so that regression is loud.
   test("recalculating does not re-fetch query tables: reuse short-circuits, and the cache absorbs the rest", async () => {
+    await seedQueryTable("items", ["ItemCode"]);
     const id = await seed("no-refetch", model, {}, [10]);
 
     let fetches = 0;

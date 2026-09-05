@@ -2,13 +2,14 @@ import { useState } from "react";
 import { Form, FormGroup, FormItem, Input, Label, MessageStrip, Switch, TextArea } from "@ui5/webcomponents-react";
 import type { Issue, ModelDef } from "@hera/config-engine";
 import { ExprInput } from "./ExprInput.tsx";
+import type { TableCols } from "./exprHelpers.ts";
 import { issueFor } from "./useDraftModel.ts";
 
 export function SettingsTab({ draft, update, issues, tables, portalMeta, setPortalMeta }: {
   draft: ModelDef;
   update: (fn: (d: ModelDef) => ModelDef) => void;
   issues: Issue[];
-  tables?: { name: string; columns: string[] }[];
+  tables?: TableCols[];
   portalMeta: { portal: boolean; portalDescription: string };
   setPortalMeta: (p: { portal: boolean; portalDescription: string }) => void;
 }) {
@@ -69,7 +70,7 @@ export function SettingsTab({ draft, update, issues, tables, portalMeta, setPort
       </Form>
 
       <MessageStrip design="Information" hideCloseButton>
-        Query tables (B1/Beas datasets for LOOKUP() and table domains) are managed on the Tables tab, alongside lookup tables.
+        The tables behind LOOKUP() and table domains — maintained values and live B1/Beas queries alike — are managed on the Masterdata page and shared by every model.
       </MessageStrip>
     </div>
   );

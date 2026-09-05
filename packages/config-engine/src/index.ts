@@ -2,8 +2,8 @@ export { ModelDefZ, LookupRefZ, ParamZ, ConstraintZ, BomLineZ, OperationZ, ValZ,
 export type { Constraint, Entries, LookupRef, ModelDef, ODataQuery, Option, Param, QuerySource, ResolvedLookups, ResolvedTable, Val } from "./model";
 export { DslError, evaluate, parse } from "./dsl";
 export type { Ast, Scope } from "./dsl";
-export { checkModel, FUNCS } from "./check";
-export type { Issue } from "./check";
+export { checkModel, FUNCS, referencedTables } from "./check";
+export type { Issue, KnownTable } from "./check";
 export { bindings, domainOf, propagate } from "./propagate";
 export type { Bindings, DomainOption, Propagation } from "./propagate";
 export { enumerate } from "./enumerate";

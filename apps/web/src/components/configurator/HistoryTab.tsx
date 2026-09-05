@@ -1,13 +1,13 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Button, Form, FormGroup, FormItem, Label, MessageStrip, MultiComboBox, MultiComboBoxItem,
+  Button, Form, FormGroup, FormItem, Input, Label, MessageStrip, MultiComboBox, MultiComboBoxItem,
   ObjectStatus, Option, Select, StepInput, Table, TableCell, TableHeaderCell,
-  TableHeaderRow, TableRow, TableRowAction, Text,
+  TableHeaderRow, TableRow, TableRowAction, Text, TextArea,
 } from "@ui5/webcomponents-react";
-import type { Issue, ModelDef } from "@hera/config-engine";
+import type { Issue, ModelDef, QuerySource, Val } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
 import { issueFor } from "./useDraftModel.ts";
-import { QueryEditor, emptyQuery } from "./QueryEditor.tsx";
 
 type Update = (fn: (d: ModelDef) => ModelDef) => void;
 type History = NonNullable<ModelDef["history"]>;
@@ -26,9 +26,17 @@ export function HistoryTab({ draft, update, issues, modelId, dirty }: {
   dirty: boolean;
 }) {
   const qc = useQueryClient();
+  const [preview, setPreview] = useState<{ cols: string[]; rows: Val[][] } | null>(null);
   const h = draft.history ?? EMPTY;
   const setH = (patch: Partial<History>) => update((d) => ({ ...d, history: { ...EMPTY, ...d.history, ...patch } }));
   const cols = h.query?.columns ?? [];
+  const testFetch = useMutation(orpc.masterdata.queryPage.mutationOptions({
+    onSuccess: (r) => {
+      setH({ query: { ...h.query!, columns: r.columns } });
+      setPreview({ cols: r.columns, rows: r.rows.slice(0, 10) });
+    },
+    onError: () => setPreview(null),
+  }));
 
   const info = useQuery(orpc.models.historyInfo.queryOptions({ input: { id: modelId } }));
   const sync = useMutation(orpc.models.syncHistory.mutationOptions({
@@ -68,22 +76,63 @@ export function HistoryTab({ draft, update, issues, modelId, dirty }: {
           {h.query ? (
             <>
               <FormItem>
-                <Button design="Negative" onClick={() => setH({ query: undefined, mappings: [], display: [] })}>
+                <Button design="Negative" onClick={() => { setPreview(null); setH({ query: undefined, mappings: [], display: [] }); }}>
                   Remove query
                 </Button>
               </FormItem>
-              <FormItem>
-                <QueryEditor
-                  target={h.query.target} query={h.query.query} columns={h.query.columns}
-                  onChange={(patch) => setH({ query: { ...h.query!, ...patch } })}>
-                  {strip(errMsg("history.query"))}
-                </QueryEditor>
+              <FormItem labelContent={<Label>Source</Label>}>
+                <Select value={h.query.target}
+                  onChange={(e) => setH({ query: { ...h.query!, target: (e.detail.selectedOption as HTMLElement).dataset.v as QuerySource["target"] } })}>
+                  <Option value="b1" data-v="b1" selected={h.query.target === "b1"}>B1</Option>
+                  <Option value="beas" data-v="beas" selected={h.query.target === "beas"}>Beas</Option>
+                </Select>
               </FormItem>
+              <FormItem labelContent={<Label required>Entity set</Label>}>
+                <Input value={h.query.query.entitySet} placeholder="Items"
+                  onInput={(e) => setH({ query: { ...h.query!, query: { ...h.query!.query, entitySet: e.target.value.trim() } } })} />
+              </FormItem>
+              <FormItem labelContent={<Label>Select</Label>}>
+                <Input value={h.query.columns.join(", ")} placeholder="ItemCode, ItemName"
+                  onChange={(e) => setH({ query: { ...h.query!, columns: [...new Set(e.target.value.split(/[,\s]+/).filter(Boolean))] } })} />
+              </FormItem>
+              <FormItem labelContent={<Label>Filter</Label>}>
+                <TextArea growing growingMaxRows={4} rows={1} value={h.query.query.filter ?? ""}
+                  placeholder="ItemType eq 'itItems' and Frozen eq 'tNO'"
+                  onInput={(e) => setH({ query: { ...h.query!, query: { ...h.query!.query, filter: e.target.value || undefined } } })} />
+              </FormItem>
+              <FormItem labelContent={<Label>Sort</Label>}>
+                <Input value={h.query.query.orderby ?? ""} placeholder="ItemName"
+                  onInput={(e) => setH({ query: { ...h.query!, query: { ...h.query!.query, orderby: e.target.value || undefined } } })} />
+              </FormItem>
+              <FormItem>
+                <Button icon="show" loading={testFetch.isPending} disabled={!h.query.query.entitySet}
+                  onClick={() => testFetch.mutate({ target: h.query!.target, query: h.query!.query, columns: h.query!.columns })}>
+                  Test fetch
+                </Button>
+              </FormItem>
+              {testFetch.error ? <FormItem><MessageStrip design="Negative" hideCloseButton>{testFetch.error.message}</MessageStrip></FormItem> : null}
+              {preview ? (
+                <FormItem>
+                  <Table noDataText="No rows returned."
+                    headerRow={
+                      <TableHeaderRow>
+                        {preview.cols.map((c) => <TableHeaderCell key={c}><span>{c}</span></TableHeaderCell>)}
+                      </TableHeaderRow>
+                    }>
+                    {preview.rows.map((row, ri) => (
+                      <TableRow key={ri} rowKey={`q-${ri}`}>
+                        {row.map((cell, ci) => <TableCell key={ci}><Text>{String(cell ?? "")}</Text></TableCell>)}
+                      </TableRow>
+                    ))}
+                  </Table>
+                </FormItem>
+              ) : null}
+              {errMsg("history.query") ? <FormItem>{strip(errMsg("history.query"))}</FormItem> : null}
             </>
           ) : (
             <>
               <FormItem>
-                <Button icon="add" onClick={() => setH({ query: { target: "b1", query: emptyQuery(), columns: [] } })}>
+                <Button icon="add" onClick={() => setH({ query: { target: "b1", query: { entitySet: "" }, columns: [] } })}>
                   Add history query
                 </Button>
               </FormItem>

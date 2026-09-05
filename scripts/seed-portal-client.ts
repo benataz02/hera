@@ -21,7 +21,7 @@ const cardName = process.argv[5] ?? "Test Client Co";
 const baseDomain = process.env.APP_BASE_DOMAIN ?? "lvh.me";
 if (!slug) throw new Error("usage: bun run seed:portal-client <slug> [email] [cardCode] [cardName]");
 
-// Agent-free demo model (no queryTables) — runs and prices without the on-prem agent.
+// Agent-free demo model (no query masterdata) — runs and prices without the on-prem agent.
 const DEMO_MODEL: ModelDef = {
   name: "Cable assembly (seed)",
   parameters: [
@@ -38,7 +38,6 @@ const DEMO_MODEL: ModelDef = {
   constraints: [],
   bom: [{ id: "conductor", itemCode: '"COND-1"', qty: "2", price: '(material == "steel" ? 1.5 : 2.5)', scrapPct: 0 }],
   routing: [{ id: "cut", resource: "SAW", setupMin: "10", runMinPerUnit: "0.5", ratePerHour: "60" }],
-  queryTables: [],
   pricing: { priceExpr: "unitCost * 1.4", quoteItemCode: "CFG" },
   batchDefaults: [100, 500],
 };

@@ -15,7 +15,7 @@ import {
   type AssistantEvent, type AssistChatInput, type ChangeRow, type Evidence, type ExtractFile,
   type MessageContent, type Provider, type ToolName, type UiChange,
 } from "@hera/assistant";
-import { loadModel, cachedLookups, modelRunner } from "../orpc/routers/configs.ts";
+import { loadModel, enrichedLookups } from "../orpc/routers/configs.ts";
 import { buildAssistPrompt } from "./prompt.ts";
 import { ProviderApiError, resolveProvider } from "./provider.ts";
 import { createExecutors, type ExecutorCtx, type Working } from "./executors.ts";
@@ -28,7 +28,6 @@ import {
   renewLease, runToolOperation, updateWorking,
   LEASE_RENEW_MS, type TurnRow,
 } from "./turns.ts";
-import { enrichLookups } from "../lookups.ts";
 
 
 // The turn engine. Everything it needs is imported directly — `db`, the project/model loaders,
@@ -340,10 +339,7 @@ export async function* runTurn(
   }
 
   const model = await loadModel(tenantId, project.modelId);
-  const lookupRun = await modelRunner(tenantId, model.definition);
-  const lookups = await enrichLookups(
-    model.definition, input.entries as Entries, await cachedLookups(tenantId, model, lookupRun), lookupRun,
-  );
+  const lookups = await enrichedLookups(tenantId, model, input.entries as Entries);
   validateEntries(model.definition, lookups, input.entries as Entries);
   mark("prep"); // project + conversation + turn peek + model + lookups
 

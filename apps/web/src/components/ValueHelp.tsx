@@ -281,17 +281,17 @@ export function ValueHelp({
 /** Value help over a model's queryTable. Empty search starts from the canonical lookup page, then
  *  pages by row offset on scroll; non-empty search starts a separate remote page chain so a
  *  match past page 1 is still findable. */
-/** Which endpoint pages this table. The builder preview edits an *unsaved* draft, so it posts the
- *  raw OData path (admin-only); wizard and portal name a saved model's query table instead, and the
- *  server takes the path from the stored model. */
-export type QuerySource = { kind: "draft" } | { kind: "project" | "portal"; modelId: string };
+/** Which endpoint pages this table. Both name a masterdata row and let the server resolve the
+ *  query from it — the builder preview included, now that a query is tenant masterdata and not
+ *  part of the draft being edited. */
+export type QuerySource = { kind: "project" | "portal"; modelId: string };
 
 export function QueryValueHelp({
-  source, queryTable: qt, canonicalTable, lookupRef, value, onChange, onPick, headerText, disabled, readonly,
+  source, canonicalTable, lookupRef, value, onChange, onPick, headerText, disabled, readonly,
 }: {
   source: QuerySource;
-  queryTable: ModelDef["queryTables"][number] | undefined;
-  /** canonical first page already resolved with the form's other lookups */
+  /** canonical first page already resolved with the form's other lookups; carries the masterdata
+   *  row's own column list and value-help labels */
   canonicalTable?: ResolvedTable;
   lookupRef: LookupRef;
   value: Val | undefined;
@@ -304,33 +304,28 @@ export function QueryValueHelp({
 }) {
   const [search, setSearch] = useState<string | null>(null); // null = untouched; show canonical data without fetching
   const queryClient = useQueryClient();
-  // What the server searches: the ref's key/label columns as the model knows them (a query keeps
-  // its columns from Test fetch). The rendered key/label come from the response — see below.
-  const pinned = refKeyCols(lookupRef, qt?.columns);
+  const table = lookupRef.source === "manual" ? "" : lookupRef.table;
+  // What the server searches: the ref's key/label columns as the masterdata row declares them (a
+  // query keeps its columns from Test fetch). The rendered key/label come from the response.
+  const pinned = refKeyCols(lookupRef, canonicalTable?.columns);
   const searchCols = [pinned.valueCol, pinned.labelCol].filter((c): c is string => !!c);
 
   // initialData only seeds a new cache entry. Replace the empty-search entry when the canonical
   // lookup refreshes so its rows and its next-page offset cannot remain stale.
   useEffect(() => {
-    if (!canonicalTable || !qt?.query.entitySet) return;
+    if (!canonicalTable || !table) return;
     const data = { pages: [canonicalTable], pageParams: [undefined as number | undefined] };
-    const key = source.kind === "draft"
-      ? orpc.models.queryPage.infiniteKey({
-          input: () => ({ target: qt.target, query: qt.query, columns: qt.columns, search: "", searchCols }),
-          initialPageParam: undefined as number | undefined,
-        })
-      : (source.kind === "portal" ? orpc.portal.queryPage : orpc.configs.queryPage).infiniteKey({
-          input: () => ({ modelId: source.modelId, table: qt.name, cursor: undefined, search: "", searchCols }),
-          initialPageParam: undefined as number | undefined,
-        });
+    const key = (source.kind === "portal" ? orpc.portal.queryPage : orpc.configs.queryPage).infiniteKey({
+      input: () => ({ modelId: source.modelId, table, cursor: undefined, search: "", searchCols }),
+      initialPageParam: undefined as number | undefined,
+    });
     let current = true;
     void (async () => {
       await queryClient.cancelQueries({ queryKey: key, exact: true });
       if (current) queryClient.setQueryData(key, data);
     })();
     return () => { current = false; };
-  }, [canonicalTable, pinned.labelCol, pinned.valueCol, qt, queryClient, source.kind,
-    source.kind === "draft" ? undefined : source.modelId]);
+  }, [canonicalTable, pinned.labelCol, pinned.valueCol, queryClient, source.kind, source.modelId, table]);
 
   // The cursor is a row offset, and the search rides with it on every page — the server rebuilds
   // the same query and only moves $skip. (It used to be B1's @odata.nextLink, which forced the
@@ -347,56 +342,44 @@ export function QueryValueHelp({
     initialData: canonical
       ? { pages: [canonical], pageParams: [undefined as number | undefined] }
       : undefined,
-    enabled: !!qt?.query.entitySet && search !== null,
+    enabled: !!table && search !== null,
     retry: false,
     staleTime: canonical ? Infinity : 5 * 60_000,
     placeholderData: keepPreviousData,
   } as const;
   const page = useInfiniteQuery(
-    source.kind === "draft"
-      ? orpc.models.queryPage.infiniteOptions({
-          input: (next: number | undefined) => ({
-            target: qt?.target ?? "b1", query: qt?.query ?? { entitySet: "" }, columns: qt?.columns,
-            cursor: next, search: term, searchCols,
-          }),
-          getNextPageParam: (last) => last.nextSkip,
-          ...common,
-        })
-      : (source.kind === "portal" ? orpc.portal.queryPage : orpc.configs.queryPage).infiniteOptions({
-          input: (next: number | undefined) => ({
-            modelId: source.modelId, table: qt?.name ?? "", cursor: next,
-            search: term, searchCols,
-          }),
-          getNextPageParam: (last) => last.nextSkip,
-          ...common,
-        }),
+    (source.kind === "portal" ? orpc.portal.queryPage : orpc.configs.queryPage).infiniteOptions({
+      input: (next: number | undefined) => ({ modelId: source.modelId, table, cursor: next, search: term, searchCols }),
+      getNextPageParam: (last) => last.nextSkip,
+      ...common,
+    }),
   );
 
-  const table = useMemo<ResolvedTable>(
+  const resolved = useMemo<ResolvedTable>(
     () => ({
-      columns: page.data?.pages[0]?.columns ?? qt?.columns ?? [],
+      columns: page.data?.pages[0]?.columns ?? canonicalTable?.columns ?? [],
       rows: (page.data?.pages ?? []).flatMap((p) => p.rows as Val[][]),
     }),
-    [page.data, qt?.columns],
+    [page.data, canonicalTable?.columns],
   );
   // Columns come back with the page when the query has none pinned, so resolve key/label against
   // what we actually got.
-  const { valueCol, labelCol } = refKeyCols(lookupRef, table.columns);
+  const { valueCol, labelCol } = refKeyCols(lookupRef, resolved.columns);
   const options = useMemo<DomainOption[]>(() => {
-    const vi = table.columns.indexOf(valueCol);
-    const li = labelCol ? table.columns.indexOf(labelCol) : vi;
-    return vi < 0 ? [] : table.rows.map((r) => ({ value: r[vi] ?? null, label: String(r[li < 0 ? vi : li] ?? "") }));
-  }, [table, valueCol, labelCol]);
+    const vi = resolved.columns.indexOf(valueCol);
+    const li = labelCol ? resolved.columns.indexOf(labelCol) : vi;
+    return vi < 0 ? [] : resolved.rows.map((r) => ({ value: r[vi] ?? null, label: String(r[li < 0 ? vi : li] ?? "") }));
+  }, [resolved, valueCol, labelCol]);
 
   return (
     <ValueHelp options={options} value={value} headerText={headerText}
       onChange={(nv, row) => {
-        if (row) onPick?.({ columns: table.columns, rows: [row] });
+        if (row) onPick?.({ columns: resolved.columns, rows: [row] });
         onChange(nv);
       }}
       disabled={disabled} readonly={readonly} valueState={page.error ? "Negative" : undefined}
-      table={table} valueCol={valueCol} columns={displayColumns(lookupRef, table.columns)}
-      columnLabels={qt?.labels} hidden={qt?.hidden}
+      table={resolved} valueCol={valueCol} columns={displayColumns(lookupRef, resolved.columns)}
+      columnLabels={canonicalTable?.labels} hidden={canonicalTable?.hidden}
       onSearch={setSearch} onOpen={() => setSearch("")}
       // Asked and nothing back yet, or a search refetch — but never on a failure, or the field
       // would spin forever and the dialog never open (retry is off; the error shows as valueState).

@@ -21,7 +21,7 @@
     "db:push": "bun --env-file=../../.env --cwd packages/db drizzle-kit push",
     "db:studio": "bun --env-file=../../.env --cwd packages/db drizzle-kit studio",
     "auth:generate": "bun --cwd apps/server better-auth-generate",
-    "dev": "bun run --parallel dev:server dev:web",
+    "dev": "cmd /c scripts/dev.cmd",
     "dev:server": "bun run --hot apps/server/src/index.ts",
     "dev:web": "bun --cwd apps/web dev",
     "build:web": "bun --cwd apps/web build",
@@ -36,6 +36,7 @@
     "kill": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/kill-dev.ps1",
     "seed:agent": "bun --env-file=.env scripts/seed-agent.ts",
     "migrate:queries": "bun --env-file=.env scripts/migrate-query-tables.ts",
+    "migrate:masterdata": "bun --env-file=.env scripts/migrate-masterdata.ts",
     "dev:agent": "bun --cwd apps/agent dev",
     "test:b1": "bun test packages/b1"
   }

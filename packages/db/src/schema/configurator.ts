@@ -1,5 +1,5 @@
 import { boolean, index, jsonb, integer, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { Entries, ModelDef, OutputOverrides, Outputs, Val } from "@hera/config-engine";
+import type { Entries, ModelDef, OutputOverrides, Outputs, QuerySource, Val } from "@hera/config-engine";
 
 // Configurator persistence: a mutable model, and one configuration document that carries its own
 // latest calculation. Spec: docs/superpowers/specs/2026-07-03-configurator-design.md.
@@ -23,20 +23,34 @@ export const configModel = pgTable(
 
 export type ConfigTableColumn = { key: string; label: string; type: "string" | "number" | "boolean" };
 
-// Admin-maintained lookup tables; LookupRef/LOOKUP() reference them by name.
+/** A live B1/Beas read, stored whole. Same shape QuerySourceZ validates, plus the two
+ *  display-only fields the value-help dialog reads. */
+export type MasterdataQuery = QuerySource & {
+  /** dialog headers; missing/blank -> show the key. Engine ignores. */
+  labels?: Record<string, string>;
+  /** keys omitted from the value-help dialog. Still fetched, still derived. */
+  hidden?: string[];
+};
+
+// Admin-maintained masterdata, referenced by name from LookupRef/LOOKUP(). Two kinds in one table:
+// "table" keeps its values in `columns`/`rows`, "query" keeps a live read in `query` and leaves
+// both empty. Models reference either kind identically — they never hold the definition.
 // ponytail: jsonb rows; real table if >10k rows
-export const configTable = pgTable(
-  "config_table",
+export const configMasterdata = pgTable(
+  "config_masterdata",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: text("tenant_id").notNull(),
     name: text("name").notNull(),
+    kind: text("kind").$type<"table" | "query">().notNull().default("table"),
     columns: jsonb("columns").$type<ConfigTableColumn[]>().notNull().default([]),
     rows: jsonb("rows").$type<Val[][]>().notNull().default([]),
+    query: jsonb("query").$type<MasterdataQuery>(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex("config_table_tenant_name_uq").on(t.tenantId, t.name)],
+  (t) => [uniqueIndex("config_masterdata_tenant_name_uq").on(t.tenantId, t.name)],
 );
+export type ConfigMasterdata = typeof configMasterdata.$inferSelect;
 
 export type ProjectStatus = "draft" | "calculated" | "quoted" | "requested" | "rejected";
 export type ProjectSource = "internal" | "portal";

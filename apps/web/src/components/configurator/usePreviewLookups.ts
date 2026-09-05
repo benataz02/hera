@@ -2,11 +2,10 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { ModelDef } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
 
-// Only domain refs and queryTables affect lookup resolution. Sending this skeleton (instead of
-// the full draft) keeps the TanStack query key stable while the admin types expressions, so the
-// agent is only hit when a lookup source actually changes. queryTables come from the last saved
-// model — unsaved path edits on the Tables tab must not refetch.
-export function lookupSkeleton(d: ModelDef, queryTables: ModelDef["queryTables"]): ModelDef {
+// Only domain refs affect lookup resolution. Sending this skeleton (instead of the full draft)
+// keeps the TanStack query key stable while the admin types expressions, so the agent is only hit
+// when a lookup source actually changes.
+export function lookupSkeleton(d: ModelDef): ModelDef {
   return {
     name: "",
     parameters: d.parameters.map((p) => ({ key: p.key, label: "", type: p.type, ui: p.ui, domain: p.domain })),
@@ -15,18 +14,14 @@ export function lookupSkeleton(d: ModelDef, queryTables: ModelDef["queryTables"]
     constraints: [],
     bom: [],
     routing: [],
-    queryTables,
     pricing: { priceExpr: "0", quoteItemCode: "X" },
     batchDefaults: [1],
   };
 }
 
-export function usePreviewLookups(
-  draft: ModelDef,
-  { enabled, queryTables }: { enabled: boolean; queryTables: ModelDef["queryTables"] },
-) {
+export function usePreviewLookups(draft: ModelDef, { enabled }: { enabled: boolean }) {
   return useQuery({
-    ...orpc.models.previewLookups.queryOptions({ input: { definition: lookupSkeleton(draft, queryTables) } }),
+    ...orpc.models.previewLookups.queryOptions({ input: { definition: lookupSkeleton(draft) } }),
     enabled,
     staleTime: 5 * 60_000, // matches the server-side configs.lookups cache window
     retry: false, // agent-offline should show its message, not spin
