@@ -1,8 +1,8 @@
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
 import { and, eq, sql } from "drizzle-orm";
-import { db, configMasterdata } from "@hera/db";
-import { ODataQueryZ, QuerySourceZ, ValZ } from "@hera/config-engine";
+import { db, configMasterdata, configModel } from "@hera/db";
+import { ODataQueryZ, QuerySourceZ, ValZ, referencedTables } from "@hera/config-engine";
 import { adminProcedure } from "../base.ts";
 import { bumpMasterdata, DEFAULT_PAGE, fetchQueryTable, withSearch, type MasterdataRow } from "../../lookups.ts";
 import { compileSpec, listPage, ListPageZ, TOTAL, type SqlFields } from "../../list-sql.ts";
@@ -136,9 +136,25 @@ export const masterdataRouter = {
     }
   }),
 
-  // ponytail: no reference check against models (names live inside jsonb); a dangling
-  // reference fails at resolve time with "Unknown lookup table '<name>'".
+  // Refuses while a model still names the table: the alternative is a dangling reference that only
+  // shows up at resolve time as "Unknown lookup table '<name>'", on a configuration, to whoever
+  // opened it. ponytail: names live inside jsonb, so this is a scan over the tenant's models —
+  // tens of documents. A reference table maintained on model save only if that stops being true.
   remove: adminProcedure.input(z.object({ id: z.uuid() })).handler(async ({ input, context }) => {
+    const [row] = await db
+      .select({ name: configMasterdata.name })
+      .from(configMasterdata)
+      .where(and(eq(configMasterdata.id, input.id), eq(configMasterdata.tenantId, context.tenantId)));
+    if (!row) throw new ORPCError("NOT_FOUND");
+    const models = await db
+      .select({ name: configModel.name, definition: configModel.definition })
+      .from(configModel)
+      .where(eq(configModel.tenantId, context.tenantId));
+    const used = models.filter((m) => referencedTables(m.definition).has(row.name)).map((m) => m.name);
+    if (used.length)
+      throw new ORPCError("CONFLICT", {
+        message: `'${row.name}' is used by ${used.length === 1 ? "model" : "models"} ${used.join(", ")}. Remove the reference there first.`,
+      });
     await db.delete(configMasterdata).where(and(eq(configMasterdata.id, input.id), eq(configMasterdata.tenantId, context.tenantId)));
     bumpMasterdata(context.tenantId);
     return { ok: true };

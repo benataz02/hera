@@ -165,6 +165,11 @@ export function MasterdataEditor({ id }: { id?: string }) {
   }
   const d = draft;
   const error = save.error ?? remove.error;
+  // Both title states: a delete the server refuses has to be readable without scrolling the
+  // header shut first.
+  const errorStrip = error
+    ? <MessageStrip design="Negative" hideCloseButton style={{ paddingBlockStart: "0.5rem" }}>{error.message}</MessageStrip>
+    : null;
 
   const typed = (col: Col, raw: string): Cell =>
     col.type === "number" ? (raw === "" ? null : Number(raw)) : col.type === "boolean" ? raw === "true" : raw;
@@ -191,7 +196,8 @@ export function MasterdataEditor({ id }: { id?: string }) {
               <Title level="H4">{"Master data: " + (d.name || (id ? "Untitled" : "New table"))}</Title>
 
           }
-          snappedContent={error ? <MessageStrip design="Negative" hideCloseButton style={{ paddingBlockStart: "0.5rem" }}>{error.message}</MessageStrip> : null}
+          snappedContent={errorStrip}
+          expandedContent={errorStrip}
           actionsBar={
             <Toolbar design="Transparent" accessibleName="Table actions">
               {id ? (
@@ -199,7 +205,7 @@ export function MasterdataEditor({ id }: { id?: string }) {
                   onClick={async () => {
                     if (await confirm({
                       title: "Delete table",
-                      message: `Delete "${d.name}"? Models that reference it by name will fail their lookups. This cannot be undone.`,
+                      message: `Delete "${d.name}"? A table used by a model can't be deleted. This cannot be undone.`,
                       actionText: "Delete", destructive: true,
                     })) remove.mutate({ id });
                   }} />

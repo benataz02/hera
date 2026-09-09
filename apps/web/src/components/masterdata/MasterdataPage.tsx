@@ -56,20 +56,24 @@ export function MasterdataPage() {
   const onDelete = useCallback(
     async (selected: Record<string, unknown>[]) => {
       const one = selected.length === 1;
-      // Masterdata is shared across models and deletion is immediate: a model that references a
-      // deleted name fails its lookups at resolve time (names live inside jsonb, so nothing here
-      // can check them first).
+      // Masterdata is shared across models. The server refuses a table a model still references,
+      // so the warning here is about the ones it will let through.
       const ok = await confirm({
         title: one ? "Delete table" : "Delete tables",
         message: one
-          ? `Delete "${String(selected[0]!.name)}"? Models that reference it by name will fail their lookups. This can't be undone.`
-          : `Delete ${selected.length} tables? Models that reference them by name will fail their lookups. This can't be undone.`,
+          ? `Delete "${String(selected[0]!.name)}"? A table used by a model can't be deleted. This can't be undone.`
+          : `Delete ${selected.length} tables? Tables used by a model can't be deleted. This can't be undone.`,
         actionText: "Delete",
         destructive: true,
       });
       if (!ok) return false; // keep the selection — the user backed out
-      // ponytail: sequential; a rejected delete aborts the rest and surfaces via remove.error.
-      for (const r of selected) await remove.mutateAsync({ id: String(r.id) });
+      // ponytail: sequential; a refused delete aborts the rest and surfaces via remove.error, and
+      // keeps the selection so the user can retry without re-picking every row.
+      try {
+        for (const r of selected) await remove.mutateAsync({ id: String(r.id) });
+      } catch {
+        return false;
+      }
       toast(one ? "Table deleted" : `${selected.length} tables deleted`);
     },
     [remove],
