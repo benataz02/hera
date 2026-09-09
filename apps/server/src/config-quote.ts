@@ -2,7 +2,18 @@ import { createHash } from "node:crypto";
 import { ORPCError } from "@orpc/server";
 import { and, eq } from "drizzle-orm";
 import { db, configProject, type ConfigCandidate, type ConfigSelection } from "@hera/db";
-import { computeOutputs, DslError, type ModelDef, type ResolvedLookups } from "@hera/config-engine";
+import {
+  bindings,
+  computeOutputs,
+  DslError,
+  evalTableRows,
+  splitShares,
+  type ModelDef,
+  type ResolvedLookups,
+  type TableDef,
+  type TableRows,
+  type Val,
+} from "@hera/config-engine";
 
 export type ConfigProjectRow = typeof configProject.$inferSelect;
 
@@ -24,6 +35,10 @@ export function configDocumentCommandId(input: {
   projectId: string;
   candidates: ConfigCandidate[];
   selection: ConfigSelection[];
+  /** row data: it decides how many lines the quotation has and what is on them, so editing the
+   *  item matrix has to yield a new id — otherwise the SAP pre-check finds the old quotation and
+   *  createQuote reports `reused: true` for a document that no longer matches. */
+  tables: TableRows;
 }): string {
   // Sorted so a pure reorder of the same picks keeps the same id.
   const sel = [...input.selection]
@@ -33,7 +48,7 @@ export function configDocumentCommandId(input: {
       batchQty: s.batchQty,
       overrides: s.overrides,
     }));
-  const raw = `${input.tenantId}|${input.projectId}|${canonicalJson(sel)}`;
+  const raw = `${input.tenantId}|${input.projectId}|${canonicalJson({ sel, tables: input.tables })}`;
   return createHash("sha256").update(raw).digest("hex");
 }
 
@@ -50,8 +65,99 @@ function canonicalJson(v: unknown): string {
   return JSON.stringify(v ?? null);
 }
 
-/** Canonical Quotations draft from the persisted project and the model's live lookups (the server
- *  recomputes every price; the browser's figures are never trusted). */
+type ItemsTable = Extract<TableDef, { role: "items" }>;
+
+/** The one items table a model may declare, if it declared one. checkModel caps it at one. */
+const itemsTableOf = (model: ModelDef): ItemsTable | undefined =>
+  (model.tables ?? []).find((t): t is ItemsTable => t.role === "items");
+
+/**
+ * The quotation's DocumentLines and the engineered totals behind them, from the persisted project
+ * and the model's live lookups. The server recomputes every price; the browser's figures are never
+ * trusted.
+ *
+ * One selected (candidate, batch) pair is normally one line. With an items table it is n lines —
+ * merge production yields several different items from one run, so the cost is joint and can only
+ * be *split*, never computed per item. `value` is the sum of the lines actually built, which is
+ * what makes the stored `quotedValue` and the posted document agree by construction.
+ */
+export function buildQuoteLines(
+  project: ConfigProjectRow, model: ModelDef, lookups: ResolvedLookups,
+): { lines: Record<string, unknown>[]; value: number; cost: number } {
+  const items = itemsTableOf(model);
+  const lines: Record<string, unknown>[] = [];
+  let value = 0;
+  let cost = 0;
+
+  for (const s of project.selection ?? []) {
+    const cand = project.candidates[s.candidateIdx];
+    if (!cand) continue;
+    let out;
+    try {
+      out = computeOutputs(model, lookups, cand.assignment, s.batchQty, s.overrides, project.tables);
+    } catch (e) {
+      if (e instanceof DslError || e instanceof RangeError) {
+        throw new ORPCError("BAD_REQUEST", { message: e.message });
+      }
+      throw e;
+    }
+    cost += out.unitCost * s.batchQty;
+
+    const desc =
+      Object.entries(cand.assignment)
+        .slice(0, 3)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(", ") || "Configuration";
+
+    // a row that ships nothing must not be given a share, or the shares would not sum to the total
+    const rows = !items
+      ? []
+      : evalTableRows(
+          items,
+          project.tables[items.key] ?? [],
+          { ...bindings(model, lookups, cand.assignment, project.tables).values, qty: s.batchQty },
+          lookups.tables,
+        ).filter((r) => typeof r[items.qtyCol] === "number" && (r[items.qtyCol] as number) > 0);
+
+    if (!items || rows.length === 0) {
+      lines.push({
+        ItemCode: model.pricing.quoteItemCode,
+        ItemDescription: desc,
+        Quantity: s.batchQty,
+        UnitPrice: out.unitPrice,
+      });
+      value += out.unitPrice * s.batchQty;
+      continue;
+    }
+
+    const total = out.unitPrice * s.batchQty;
+    const shares = splitShares(rows, items.qtyCol, items.basisCol, total);
+    rows.forEach((row, i) => {
+      const quantity = (row[items.qtyCol] as number) * s.batchQty;
+      const lineTotal = shares[i]!;
+      const line: Record<string, unknown> = {
+        // the configurator's generic item stays the B1 item; the customer-facing code rides along
+        // in a mapped UDF, so no article master has to be created per configuration.
+        ItemCode: model.pricing.quoteItemCode,
+        ItemDescription: desc,
+        Quantity: quantity,
+        // ponytail: B1 re-derives LineTotal as round(Quantity * UnitPrice); lineTotal is already
+        // whole cents so that round-trips exactly. Post LineTotal instead if a tenant's DocTotal
+        // ever drifts from quotedValue.
+        UnitPrice: lineTotal / quantity,
+      };
+      for (const [col, field] of Object.entries(items.map ?? {})) {
+        const v: Val | undefined = row[col];
+        if (v !== undefined && v !== null) line[field] = v;
+      }
+      lines.push(line);
+      value += lineTotal;
+    });
+  }
+  return { lines, value, cost };
+}
+
+/** Canonical Quotations draft: the lines above, plus the customer header. */
 export function buildQuoteSeed(
   project: ConfigProjectRow, model: ModelDef, lookups: ResolvedLookups,
 ): Record<string, unknown> {
@@ -61,59 +167,27 @@ export function buildQuoteSeed(
   if (!project.selection?.length) {
     throw new ORPCError("BAD_REQUEST", { message: "Select at least one candidate before quoting" });
   }
-
-  const lines = project.selection.map((s) => {
-    const cand = project.candidates[s.candidateIdx];
-    if (!cand) {
+  for (const s of project.selection) {
+    if (!project.candidates[s.candidateIdx])
       throw new ORPCError("BAD_REQUEST", { message: `No candidate at index ${s.candidateIdx}` });
-    }
-    let unitPrice: number;
-    try {
-      unitPrice = computeOutputs(model, lookups, cand.assignment, s.batchQty, s.overrides).unitPrice;
-    } catch (e) {
-      if (e instanceof DslError || e instanceof RangeError) {
-        throw new ORPCError("BAD_REQUEST", { message: e.message });
-      }
-      throw e;
-    }
-    const desc =
-      Object.entries(cand.assignment)
-        .slice(0, 3)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join(", ") || "Configuration";
-    return {
-      ItemCode: model.pricing.quoteItemCode,
-      ItemDescription: desc,
-      Quantity: s.batchQty,
-      UnitPrice: unitPrice,
-    };
-  });
+  }
 
   const seed: Record<string, unknown> = {
     CardCode: project.customer.cardCode,
     CardName: project.customer.cardName,
-    DocumentLines: lines,
+    DocumentLines: buildQuoteLines(project, model, lookups).lines,
   };
   const currency = model.pricing.currency;
   if (currency) seed.DocCurrency = currency;
   return seed;
 }
 
-/** Engineered value and cost of the selected candidates, using the same computation
- *  buildQuoteSeed prices from — so the stored margin matches the quotation that was sent. */
+/** Engineered value and cost of the selected candidates. Same builder as the lines, so the stored
+ *  margin matches the quotation that was sent to the cent. */
 export function quotedTotals(
-  model: ModelDef, lookups: ResolvedLookups,
-  candidates: ConfigCandidate[], selection: ConfigSelection[] | null,
+  project: ConfigProjectRow, model: ModelDef, lookups: ResolvedLookups,
 ): { value: number; cost: number } {
-  let value = 0;
-  let cost = 0;
-  for (const s of selection ?? []) {
-    const cand = candidates[s.candidateIdx];
-    if (!cand) continue;
-    const out = computeOutputs(model, lookups, cand.assignment, s.batchQty, s.overrides);
-    value += out.unitPrice * s.batchQty;
-    cost += out.unitCost * s.batchQty;
-  }
+  const { value, cost } = buildQuoteLines(project, model, lookups);
   return { value, cost };
 }
 

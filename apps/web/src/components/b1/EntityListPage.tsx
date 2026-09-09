@@ -4,7 +4,7 @@ import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from "@t
 import { BusyIndicator, IllustratedMessage, MessageStrip, Toolbar, ToolbarButton } from "@ui5/webcomponents-react";
 import "@ui5/webcomponents-fiori/dist/illustrations/NoEntries.js";
 import { client, orpc } from "../../orpc.ts";
-import { useListSpec, type ListColumn } from "../../variants.ts";
+import { listQuery, useListSpec, type ListColumn } from "../../variants.ts";
 import { ListReport } from "../ListReport.tsx";
 import { PrintActions } from "./PrintActions.tsx";
 
@@ -49,16 +49,23 @@ export function EntityListPage({ entity, scope = "internal" }: { entity: string;
     [schema.data],
   );
 
+  // Two things worth knowing about this input:
+  //  - listQuery, not the spec itself: widths and labels live in the same document and the whole
+  //    document is the infinite-query key, so sending them raw made a column resize refetch page 1.
+  //  - the cursor is B1's own @odata.nextLink, sealed server-side. The browser never computes an
+  //    offset and never sees a Service Layer URL; page size is B1_PAGE_SIZE, not ours to pick.
+  const pageInput = (cursor: string | undefined) =>
+    ({ entity, spec: listQuery(listSpec.spec), ...(cursor ? { cursor } : { count: true }) });
   const rowsOptions = portal
     ? orpc.portal.docs.rows.infiniteOptions({
-        input: (skip: number | undefined) => ({ entity, spec: listSpec.spec, top: 100, ...(skip ? { skip } : { count: true }) }),
-        initialPageParam: undefined as number | undefined,
-        getNextPageParam: (last) => last.nextSkip,
+        input: pageInput,
+        initialPageParam: undefined as string | undefined,
+        getNextPageParam: (last) => last.nextCursor,
       })
     : orpc.entities.rows.infiniteOptions({
-        input: (skip: number | undefined) => ({ entity, spec: listSpec.spec, top: 100, ...(skip ? { skip } : { count: true }) }),
-        initialPageParam: undefined as number | undefined,
-        getNextPageParam: (last) => last.nextSkip,
+        input: pageInput,
+        initialPageParam: undefined as string | undefined,
+        getNextPageParam: (last) => last.nextCursor,
       });
 
   const page = useInfiniteQuery({
@@ -86,7 +93,7 @@ export function EntityListPage({ entity, scope = "internal" }: { entity: string;
       total={page.data?.pages[0]?.total ?? rows.length}
       loading={page.isFetching && !page.isFetchingNextPage}
       error={page.error}
-      hasMore={page.hasNextPage && !page.isFetchingNextPage}
+      hasMore={page.hasNextPage}
       onLoadMore={() => { if (!page.isFetchingNextPage) void page.fetchNextPage(); }}
       selectionActions={(rows) =>
         rows.length === 1 ? <PrintActions entity={entity} docEntry={Number(rows[0]!.DocEntry)} scope={scope} /> : null

@@ -9,8 +9,14 @@ const etagOf = (data: unknown): string | undefined => {
   return typeof v === "string" && v ? v : undefined;
 };
 
-const pageHeader = (q?: QueryOptions): Record<string, string> | undefined =>
-  q?.maxPageSize === undefined ? undefined : { Prefer: `odata.maxpagesize=${q.maxPageSize}` };
+/** `$top=N` alone is a trap: the Service Layer pages server-side at **20 rows by default**, so a
+ *  `$top=100` read answers with 20 and `@odata.nextLink`, and no caller can tell that truncation
+ *  from the end of the collection. Asking for `$top` therefore implies asking for a page that big.
+ *  An explicit `maxPageSize` still wins — including 0, which disables server paging entirely. */
+const pageHeader = (q?: QueryOptions): Record<string, string> | undefined => {
+  const size = q?.maxPageSize ?? q?.top;
+  return size === undefined ? undefined : { Prefer: `odata.maxpagesize=${size}` };
+};
 
 /** Expanded port of b1-mcp-server's B1Client (MIT). Every capability HERA needs is a named,
  *  typed method — there is deliberately no generic escape hatch, so no caller can hand the
@@ -39,10 +45,12 @@ export class DirectTransport implements B1Transport {
   /** The one method that accepts a B1-supplied URL, so it is the one that must be checked:
    *  a relative link resolves under the Service Layer base, an absolute one must already be
    *  under it. A cloud caller cannot point the agent somewhere else. */
-  async readNext(nextLink: string): Promise<B1Response> {
+  async readNext(nextLink: string, maxPageSize?: number): Promise<B1Response> {
     const resolved = new URL(nextLink, this.sl.base).toString();
     if (!resolved.startsWith(this.sl.base)) throw new Error("nextLink is outside the Service Layer");
-    return this.get(resolved);
+    // Prefer is per-request, not sticky to the collection: without re-sending it every page after
+    // the first comes back at the Service Layer's default of 20.
+    return this.get(resolved, pageHeader({ maxPageSize }));
   }
 
   async createEntity(entitySet: string, data: unknown, o?: { prefer?: Prefer }): Promise<B1Response> {

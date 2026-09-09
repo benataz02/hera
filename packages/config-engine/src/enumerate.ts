@@ -1,4 +1,4 @@
-import type { Entries, ModelDef, ResolvedLookups } from "./model";
+import type { Entries, ModelDef, ResolvedLookups, TableRows } from "./model";
 import { type DomainOption, propagate } from "./propagate";
 
 export type Enumeration = {
@@ -9,11 +9,17 @@ export type Enumeration = {
 
 const live = (d: DomainOption[]) => d.filter((o) => !o.eliminatedBy);
 
-export function enumerate(model: ModelDef, lookups: ResolvedLookups, entries: Entries, cap = 200): Enumeration {
+export function enumerate(
+  model: ModelDef,
+  lookups: ResolvedLookups,
+  entries: Entries,
+  cap = 200,
+  tableRows: TableRows = {},
+): Enumeration {
   const candidates: Entries[] = [];
   let capped = false;
 
-  const first = propagate(model, lookups, entries);
+  const first = propagate(model, lookups, entries, tableRows);
   let widest: Enumeration["widest"];
   for (const k of first.open) {
     const size = live(first.domains[k]!).length;
@@ -22,7 +28,7 @@ export function enumerate(model: ModelDef, lookups: ResolvedLookups, entries: En
 
   const dfs = (cur: Entries): void => {
     if (capped) return;
-    const p = propagate(model, lookups, cur);
+    const p = propagate(model, lookups, cur, tableRows);
     if (p.conflicts.length) return;
     if (p.open.length === 0) {
       if (candidates.length >= cap) {

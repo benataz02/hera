@@ -1,10 +1,11 @@
 import { ORPCError } from "@orpc/server";
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db, configMasterdata } from "@hera/db";
 import { ODataQueryZ, QuerySourceZ, ValZ } from "@hera/config-engine";
 import { adminProcedure } from "../base.ts";
 import { bumpMasterdata, DEFAULT_PAGE, fetchQueryTable, withSearch, type MasterdataRow } from "../../lookups.ts";
+import { compileSpec, listPage, ListPageZ, TOTAL, type SqlFields } from "../../list-sql.ts";
 import { runnerFor, tenantConnector } from "../../b1.ts";
 
 // Tenant masterdata: one entity, two kinds. "table" keeps its values here; "query" keeps a live
@@ -48,7 +49,52 @@ export const knownTables = (rows: MasterdataRow[]) =>
     columns: t.kind === "query" ? (t.query?.columns ?? []) : t.columns.map((c) => c.key),
   }));
 
+// The list's four derived columns. They are presentation strings the page used to build while it
+// held every row; sorting and filtering them server-side is what forces them into SQL.
+// ponytail: CASE expressions over jsonb for a table that holds tens of rows — if masterdata ever
+// grows real reporting needs, these become generated columns.
+const KIND = sql<string>`case when ${configMasterdata.kind} = 'query' then 'Query' else 'Table' end`;
+const SOURCE = sql<string>`case when ${configMasterdata.kind} = 'query'
+  then (case when ${configMasterdata.query}->>'target' = 'beas' then 'Beas' else 'B1' end)
+       || ' · ' || coalesce(nullif(${configMasterdata.query}->'query'->>'entitySet', ''), 'no entity set')
+  else 'Maintained here' end`;
+const COLUMN_COUNT = sql<number>`case when ${configMasterdata.kind} = 'query'
+  then coalesce(jsonb_array_length(${configMasterdata.query}->'columns'), 0)
+  else jsonb_array_length(${configMasterdata.columns}) end`;
+const ROW_COUNT = sql<string>`case when ${configMasterdata.kind} = 'query'
+  then 'Live' else jsonb_array_length(${configMasterdata.rows})::text end`;
+
+const MASTERDATA_FIELDS: SqlFields = {
+  name: { col: configMasterdata.name, kind: "string" },
+  kind: { col: KIND, kind: "string" },
+  source: { col: SOURCE, kind: "string" },
+  columnCount: { col: COLUMN_COUNT, kind: "number" },
+  rowCount: { col: ROW_COUNT, kind: "string" },
+  updatedAt: { col: configMasterdata.updatedAt, kind: "date" },
+};
+
 export const masterdataRouter = {
+  /** One page of the masterdata list for a saved view. Deliberately not `list` with paging bolted
+   *  on: `list` returns whole rows including the `rows` jsonb, which MasterdataEditor and
+   *  useDraftModel need and a list page must never drag down the wire. */
+  rows: adminProcedure.input(ListPageZ).handler(async ({ input, context }) => {
+    const { where, orderBy } = compileSpec(MASTERDATA_FIELDS, input.spec);
+    const raw = await db
+      .select({
+        id: configMasterdata.id, name: configMasterdata.name, kind: KIND, source: SOURCE,
+        columnCount: COLUMN_COUNT, rowCount: ROW_COUNT, updatedAt: configMasterdata.updatedAt,
+        _total: TOTAL,
+      })
+      .from(configMasterdata)
+      .where(and(eq(configMasterdata.tenantId, context.tenantId), where))
+      // `id` last so the order is total — OFFSET paging over a non-unique sort duplicates and skips
+      // rows between pages.
+      .orderBy(...orderBy, configMasterdata.name, configMasterdata.id)
+      .limit(input.top)
+      .offset(input.skip ?? 0);
+    return listPage(raw, input.top, input.skip);
+  }),
+
   list: adminProcedure.handler(({ context }) =>
     db.select().from(configMasterdata).where(eq(configMasterdata.tenantId, context.tenantId)).orderBy(configMasterdata.name),
   ),

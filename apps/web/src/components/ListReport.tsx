@@ -366,13 +366,28 @@ export function ListReport({
           extension={countBar}
           loading={loading}
           minRows={1}
-          visibleRows={15}
           visibleRowCountMode="AutoWithEmptyRows"
-          infiniteScroll
+          // onLoadMore has exactly one source: a native scroll event on the table body. Under
+          // AutoWithEmptyRows the body is padded to *exactly* the visible row count, so a page that
+          // fits leaves scrollHeight === clientHeight and there is nothing to scroll — the event can
+          // never fire. additionalEmptyRowsCount is UI5's documented answer; it only applies while
+          // the table isn't scrollable, so it costs nothing once real data overflows, and gating it
+          // on hasMore keeps the last page free of phantom rows.
+          infiniteScroll={!!onLoadMore}
+          additionalEmptyRowsCount={hasMore ? 5 : 0}
+          // Default is 20, which against a 100-row page means the first fetch only starts ~80 rows
+          // down. Half a page of lead time instead.
+          infiniteScrollThreshold={40}
           tableInstance={tableInstanceRef}
           retainColumnWidth
           NoDataComponent={NoDataComponent}
-          onLoadMore={() => { if (hasMore) onLoadMore?.(); }}
+          // Passed straight through, not wrapped in `if (hasMore)`: UI5 records the row count in its
+          // fired-once set whether or not we act on the event, so swallowing one here disarms the
+          // trigger for good at that length. Callers guard re-entry with isFetchingNextPage.
+          // ponytail: UI5's `lastScrollTop` is a high-water mark, not a previous position, so after
+          // scrolling up there's a dead zone until you pass the deepest offset reached before. It
+          // self-heals on the next page; fixing it would mean owning the scroll handler.
+          onLoadMore={onLoadMore}
           selectedRowIds={selected.ids}
           onRowSelect={(e) => {
             const ids = e.detail.selectedRowIds ?? {};

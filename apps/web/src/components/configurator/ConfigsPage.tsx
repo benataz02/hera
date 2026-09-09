@@ -1,12 +1,12 @@
 import { useCallback, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   IllustratedMessage, ObjectStatus, Text, Toolbar, ToolbarButton,
 } from "@ui5/webcomponents-react";
 import "@ui5/webcomponents-fiori/dist/illustrations/NoData.js";
 import { orpc } from "../../orpc.ts";
-import { applySpec, useListSpec, type ListColumn } from "../../variants.ts";
+import { listQuery, useListSpec, type ListColumn } from "../../variants.ts";
 import { ListReport } from "../ListReport.tsx";
 import { statusUi } from "./runView.ts";
 import { confirm } from "../confirm.ts";
@@ -20,7 +20,7 @@ const StatusCell = ({ cell }: { cell: { value?: unknown } }) => {
   return ui ? <ObjectStatus state={ui.state}>{ui.text}</ObjectStatus> : <Text>{String(cell.value ?? "")}</Text>;
 };
 
-// `customer` is jsonb; it's flattened to customerName below so it can be filtered/sorted/searched
+// `customer` is jsonb; the server flattens it to customerName so it can be filtered/sorted/searched
 // like any other column instead of needing its own cell renderer.
 const COLUMNS: ListColumn[] = [
   { name: "name", type: "string", label: "Name" },
@@ -48,18 +48,27 @@ const noData = (reason: "Empty" | "Filtered") =>
 export function ConfigsPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const configs = useQuery(orpc.configs.list.queryOptions());
   const models = useQuery(orpc.configs.models.queryOptions());
-  const invalidate = () => qc.invalidateQueries({ queryKey: orpc.configs.list.queryOptions().queryKey });
+  // configs.list still exists for GlobalSearch; this page pages configs.rows, so both keys go.
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: orpc.configs.list.queryOptions().queryKey });
+    void qc.invalidateQueries({ queryKey: orpc.configs.rows.key() });
+  };
 
-  // The list endpoint returns the whole array, so the view runs locally instead of compiling to OData.
-  // The old Requested/In-progress SegmentedButton is now the seeded shared "Requested" view.
+  // The saved view IS the query: it compiles to SQL server-side, exactly as it compiles to OData for
+  // a B1 entity list. The old Requested/In-progress SegmentedButton is the seeded shared "Requested" view.
   const listSpec = useListSpec("configs");
-  const flat = useMemo(
-    () => (configs.data ?? []).map((c) => ({ ...c, customerName: c.customer?.cardName ?? "—" })),
-    [configs.data],
-  );
-  const rows = useMemo(() => applySpec(flat, listSpec.spec, COLUMNS), [flat, listSpec.spec]);
+  const page = useInfiniteQuery({
+    ...orpc.configs.rows.infiniteOptions({
+      input: (skip: number | undefined) => ({ spec: listQuery(listSpec.spec), top: 100, ...(skip ? { skip } : {}) }),
+      initialPageParam: undefined as number | undefined,
+      getNextPageParam: (last) => last.nextSkip,
+    }),
+    enabled: listSpec.ready,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+  const rows = useMemo(() => (page.data?.pages ?? []).flatMap((p) => p.rows), [page.data]);
 
   // No create dialog: a new configuration is an empty draft on the first model, and name / model /
   // business partner are filled in on its own General section.
@@ -101,9 +110,11 @@ export function ConfigsPage() {
       columns={COLUMNS}
       keyField="id"
       rows={rows}
-      total={rows.length}
-      loading={configs.isFetching}
-      error={configs.error ?? remove.error ?? create.error}
+      total={page.data?.pages[0]?.total ?? rows.length}
+      loading={page.isFetching && !page.isFetchingNextPage}
+      error={page.error ?? remove.error ?? create.error}
+      hasMore={page.hasNextPage}
+      onLoadMore={() => { if (!page.isFetchingNextPage) void page.fetchNextPage(); }}
       onRowClick={(row) => navigate({ to: "/configs/$id", params: { id: String(row.id) } })}
       onDelete={onDelete}
       noData={noData}

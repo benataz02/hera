@@ -116,10 +116,17 @@ export function ValueHelpDialog({
         </div>
         {/* overflowMode=Scroll sets #table { height:100% }. That only clips if the host has a
             definite height — maxHeight is not enough, so the virtualizer's rowCount*rowHeight
-            spacer overflowed the Dialog as a second scroller. */}
+            spacer overflowed the Dialog as a second scroller. The definite height is load-bearing
+            twice over: TableGrowing's Scroll mode is `#table.clientHeight >= #table.scrollHeight`,
+            so a #table that never clips silently degrades to a "More" button while the virtualizer's
+            scroll listener sits on an element that never scrolls. */}
         <Table noDataText="No matching rows." loading={loading} overflowMode="Scroll"
           style={{ flex: 1, height: "100%", minHeight: 0 }}
           features={[
+            // rowCount is the LOADED count, never a server total: growing observes #table-end-row,
+            // which sits below the whole rowCount*rowHeight spacer, so overstating it would put
+            // load-more behind a wall of blank rows. Growing has no threshold prop either —
+            // rootMargin 5px is the entire lookahead, so this fetches at the literal bottom.
             <TableVirtualizer key="virt" ref={virtRef} rowCount={rows.length} rowHeight={44}
               onRangeChange={(e) => {
                 const { first, last } = e.detail;
@@ -278,6 +285,24 @@ export function ValueHelp({
   );
 }
 
+/** The three paging props both value helps hand to ValueHelp, from one infinite query.
+ *
+ *  `hasMore` is `hasNextPage` alone, deliberately: it gates whether <TableGrowing> is mounted, and
+ *  ANDing `!isFetchingNextPage` onto it tore the growing feature down on every fetch — its
+ *  onExitDOM disconnects the IntersectionObserver, and the re-mount costs another render cycle
+ *  before it re-observes. Re-entry is guarded in onLoadMore instead, where it belongs.
+ *
+ *  `loading` is "asked and nothing back yet, or a search refetch" — but never on a failure, or the
+ *  field would spin forever and the dialog never open (retry is off; the error shows as valueState). */
+const pagingProps = (page: {
+  data?: unknown; isError: boolean; isFetching: boolean; isFetchingNextPage: boolean;
+  hasNextPage: boolean; fetchNextPage: () => Promise<unknown>;
+}, asked: boolean) => ({
+  loading: asked && !page.isError && (!page.data || (page.isFetching && !page.isFetchingNextPage)),
+  hasMore: page.hasNextPage,
+  onLoadMore: () => { if (!page.isFetchingNextPage) void page.fetchNextPage(); },
+});
+
 /** Value help over a model's queryTable. Empty search starts from the canonical lookup page, then
  *  pages by row offset on scroll; non-empty search starts a separate remote page chain so a
  *  match past page 1 is still findable. */
@@ -381,11 +406,7 @@ export function QueryValueHelp({
       table={resolved} valueCol={valueCol} columns={displayColumns(lookupRef, resolved.columns)}
       columnLabels={canonicalTable?.labels} hidden={canonicalTable?.hidden}
       onSearch={setSearch} onOpen={() => setSearch("")}
-      // Asked and nothing back yet, or a search refetch — but never on a failure, or the field
-      // would spin forever and the dialog never open (retry is off; the error shows as valueState).
-      loading={search !== null && !page.isError && (!page.data || (page.isFetching && !page.isFetchingNextPage))}
-      hasMore={page.hasNextPage && !page.isFetchingNextPage}
-      onLoadMore={() => { if (!page.isFetchingNextPage) void page.fetchNextPage(); }} />
+      {...pagingProps(page, search !== null)} />
   );
 }
 
@@ -410,7 +431,9 @@ export function EntityValueHelp({
 
   const page = useInfiniteQuery(
     orpc.entities.rows.infiniteOptions({
-      input: (skip: number | undefined) => ({
+      // Same cursor as the entity list: B1's sealed @odata.nextLink, and B1_PAGE_SIZE decides how
+      // many rows a page holds — asking for `top: 50` here used to suppress that nextLink entirely.
+      input: (cursor: string | undefined) => ({
         entity: entitySet,
         spec: {
           ...EMPTY_SPEC,
@@ -418,11 +441,10 @@ export function EntityValueHelp({
           filter: filter ?? EMPTY_SPEC.filter,
           search: (search ?? "").trim(),
         },
-        top: 50,
-        ...(skip ? { skip } : {}),
+        ...(cursor ? { cursor } : {}),
       }),
-      initialPageParam: undefined as number | undefined,
-      getNextPageParam: (last) => last.nextSkip,
+      initialPageParam: undefined as string | undefined,
+      getNextPageParam: (last) => last.nextCursor,
       enabled: search !== null,
       retry: false,
       placeholderData: keepPreviousData,
@@ -461,9 +483,7 @@ export function EntityValueHelp({
       onSearch={setSearch} onOpen={() => setSearch("")}
       disabled={disabled} readonly={readonly}
       valueState={page.error ? "Negative" : undefined}
-      loading={search !== null && !page.isError && (!page.data || (page.isFetching && !page.isFetchingNextPage))}
-      hasMore={page.hasNextPage && !page.isFetchingNextPage}
-      onLoadMore={() => { if (!page.isFetchingNextPage) void page.fetchNextPage(); }}
+      {...pagingProps(page, search !== null)}
     />
   );
 }

@@ -13,8 +13,11 @@ import { ORPCError } from "@orpc/server";
 // Nothing here builds a URL any more: a query is `{ entitySet, filter, orderby, top }` and
 // packages/b1's query.ts is the only place that turns one into a path.
 
-/** Rows per value-help page when the model's query does not pin its own `top`. */
-export const DEFAULT_PAGE = 100;
+/** Rows per B1 page: the `$top` HERA asks for, and (via packages/b1's pageHeader) the
+ *  `Prefer: odata.maxpagesize` that goes with it. The Service Layer's own default is **20**, so
+ *  without both a "give me 100" read quietly comes back with 20.
+ *  `B1_PAGE_SIZE` tunes it per install — a slow WAN wants smaller pages, a fast LAN larger ones. */
+export const DEFAULT_PAGE = Math.max(1, Number(process.env.B1_PAGE_SIZE) || 100);
 
 export type QueryPage = {
   rows: Record<string, unknown>[];

@@ -54,7 +54,9 @@ export interface B1Transport {
   metadata(p?: B1MetadataParams): Promise<string>;
   /** One page per call. There is deliberately no readAll — see packages/b1/README-less note in
    *  the plan: callers loop with a visible page cap. */
-  readNext(nextLink: string): Promise<B1Response>;
+  /** `maxPageSize` is re-sent because `Prefer` is per-request: following a nextLink without it
+   *  drops the page back to the Service Layer's 20-row default. */
+  readNext(nextLink: string, maxPageSize?: number): Promise<B1Response>;
   crossJoin(spec: CrossJoinSpec): Promise<B1Response>;
 }
 

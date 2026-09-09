@@ -5,20 +5,20 @@ import {
   ObjectPageSection, ObjectPageSubSection, ObjectPageTitle, ObjectStatus,
   Text, TextArea, Title, ToggleButton, Toolbar,
 } from "@ui5/webcomponents-react";
-import { propagate, type Entries, type Val } from "@hera/config-engine";
+import { propagate, type Entries, type TableRows, type Val } from "@hera/config-engine";
 import { mergeQueryPicks, setQueryPick, type QueryPicks } from "./formHelpers.ts";
 import { orpc } from "../../orpc.ts";
 import { useSectionParam } from "../../sectionParam.ts";
 import { toast } from "../toast.ts";
 import { cleanOverrides, statusUi, toggleSelection, type Sel } from "./runView.ts";
-import { BatchEditor, ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
+import { BatchEditor, ConfiguratorForm, ConsistencyStatus, formSections } from "./ConfiguratorForm.tsx";
 import { ConfigGeneral, missingGeneral } from "./ConfigGeneral.tsx";
 import { StepCandidatesReview } from "./StepCandidatesReview.tsx";
 import { StepCreateQuote } from "./StepCreateQuote.tsx";
 import { InsightsRail } from "./InsightsRail.tsx";
 import { AssistantWindow } from "./AssistantWindow.tsx";
 import type { ChatChange } from "./assistantState.ts";
-import { buildCalculationUpdate, needsCalculation, sameEntries } from "./configProcessState.ts";
+import { buildCalculationUpdate, needsCalculation, sameEntries, sameTables } from "./configProcessState.ts";
 
 // ObjectPage IconTabBar: Configure / Candidates / Create quote. Tabs are always enabled;
 // missing run or selection is an empty state. Local overlays (override ?? server) until persist.
@@ -41,6 +41,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
   const [picks, setPicks] = useState<QueryPicks>({});
   const [entriesOverride, setEntries] = useState<Entries | null>(null);
   const [batchesOverride, setBatches] = useState<number[] | null>(null);
+  const [tablesOverride, setTables] = useState<TableRows | null>(null);
   const [selOverride, setSel] = useState<Sel[] | null>(null);
   const [runMeta, setRunMeta] = useState<{ capped: boolean; widest?: { key: string; size: number } } | null>(null);
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -95,14 +96,16 @@ export function ConfigProcessPage({ id }: { id: string }) {
   const createdByEmail = q.data?.createdByEmail;
   const entries = entriesOverride ?? project?.entries ?? {};
   const batches = batchesOverride ?? project?.batches ?? [];
+  const tables = tablesOverride ?? project?.tables ?? {};
   const candidates = project?.candidates ?? [];
   const selection = selOverride ?? project?.selection ?? [];
   const runReady = candidates.length > 0 && project?.status !== "draft";
   const lk = lookups.data ? mergeQueryPicks(lookups.data, picks) : undefined;
-  const prop = model && lk ? propagate(model.definition, lk, entries) : null;
+  const prop = model && lk ? propagate(model.definition, lk, entries, tables) : null;
   const conflicted = !!prop && prop.conflicts.length > 0;
   const entriesDirty = !!project && !sameEntries(entries, project.entries);
   const batchesDirty = !!project && JSON.stringify(batches) !== JSON.stringify(project.batches);
+  const tablesDirty = !!project && !sameTables(tables, project.tables);
   const missing = missingGeneral({ name: project?.name ?? "", customer: project?.customer ?? null });
   const calcBusy = update.isPending || run.isPending;
   const shouldCalc = !!project && needsCalculation({
@@ -113,6 +116,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
     assistantBusy,
     entriesDirty,
     batchesDirty,
+    tablesDirty,
     runReady,
   });
 
@@ -121,7 +125,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
     if (!project) return;
     try {
       const updateInput = buildCalculationUpdate(
-        id, project.entries, entries, project.batches, batches,
+        id, project.entries, entries, project.batches, batches, project.tables, tables,
       );
       if (updateInput) await update.mutateAsync(updateInput);
       run.mutate({ projectId: id });
@@ -134,7 +138,7 @@ export function ConfigProcessPage({ id }: { id: string }) {
     if (!shouldCalc || calcBusy) return;
     const t = setTimeout(() => void calculateRef.current(), 1000);
     return () => clearTimeout(t);
-  }, [shouldCalc, calcBusy, entries, batches]);
+  }, [shouldCalc, calcBusy, entries, batches, tables]);
 
   const copyValues = (values: Record<string, Val>) => {
     const next = { ...entries };
@@ -301,20 +305,23 @@ export function ConfigProcessPage({ id }: { id: string }) {
             onChange={(patch) => {
               // A model switch wipes entries/batches server-side; drop the local overlays too,
               // or the old model's values would be re-applied on top of the new form.
-              if (patch.modelId) { setEntries(null); setBatches(null); setSel(null); setPicks({}); }
+              if (patch.modelId) { setEntries(null); setBatches(null); setTables(null); setSel(null); setPicks({}); }
               update.mutate({ id, ...patch });
             }} />
         </ObjectPageSubSection>
         <ObjectPageSubSection id="batches" titleText="Batch quantities">
           <BatchEditor batches={batches} onChange={setBatches} disabled={assistantBusy} />
         </ObjectPageSubSection>
-        {model.definition.structure.sections.map((s) => (
+        {/* formSections, not structure.sections: a table the author never placed gets a trailing
+            subsection of its own, and the anchor bar has to show it. */}
+        {formSections(model.definition).map((s) => (
           <ObjectPageSubSection key={s.key} id={s.key} titleText={s.title}>
             {lookups.data && lk && prop ? (
               <ConfiguratorForm section={s.key} model={model.definition} lookups={lookups.data} lk={lk} prop={prop} entries={entries}
                 onChange={changeEntries}
                 onQueryPick={(k, t, sel) => setPicks((p) => setQueryPick(p, k, t, sel))}
                 querySource={{ kind: "project", modelId: project.modelId }}
+                tables={tables} onTablesChange={setTables}
                 aiMarks={aiMarks} disabled={assistantBusy} />
             ) : lookups.error ? null : <BusyIndicator active delay={0} />}
           </ObjectPageSubSection>

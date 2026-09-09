@@ -6,9 +6,10 @@ import {
 } from "@ui5/webcomponents-react";
 import {
   displayColumns, domainOf, refKeyCols,
-  type DomainOption, type Entries, type LookupRef, type ModelDef, type Propagation, type ResolvedLookups, type ResolvedTable, type Val,
+  type DomainOption, type Entries, type LookupRef, type ModelDef, type Propagation, type ResolvedLookups, type ResolvedTable, type TableRows, type Val,
 } from "@hera/config-engine";
 import { QueryValueHelp, type QuerySource } from "../ValueHelp.tsx";
+import { ConfigTable } from "./ConfigTable.tsx";
 import { setEntry } from "./formHelpers.ts";
 import { money, paramPrices } from "./costElements.ts";
 
@@ -37,10 +38,26 @@ export function ConsistencyStatus({ prop }: { prop: Propagation }) {
   );
 }
 
+/** Key of the synthetic section that catches tables the author never placed. */
+export const UNPLACED_TABLES_SECTION = "__tables";
+
+/** The sections the form renders: the model's own, plus a trailing one holding any table the
+ *  author forgot to place. A table nobody can reach is a table whose sums are permanently zero —
+ *  and for an items table it would be the quotation's lines going missing. ConfigProcessPage
+ *  renders one section at a time, so it needs the same list this does. */
+export function formSections(model: ModelDef): { key: string; title: string; tables: string[] }[] {
+  const placed = new Set(model.structure.sections.flatMap((s) => s.tables ?? []));
+  const orphans = (model.tables ?? []).filter((t) => !placed.has(t.key));
+  const own = model.structure.sections.map((s) => ({ key: s.key, title: s.title, tables: s.tables ?? [] }));
+  if (!orphans.length) return own;
+  const title = orphans.length === 1 ? orphans[0]!.title : "Tables";
+  return [...own, { key: UNPLACED_TABLES_SECTION, title, tables: orphans.map((t) => t.key) }];
+}
+
 // labelSpan 12 everywhere = labels on top of their fields (natively left-aligned), field takes the full column.
 const FORM_PROPS = { labelSpan: "S12 M12 L12 XL12", layout: "S1 M2 L2 XL2", headerLevel: "H5" } as const;
 
-export function ConfiguratorForm({ model, lookups, lk, prop, entries, onChange, onQueryPick, section, aiMarks, disabled, querySource }: {
+export function ConfiguratorForm({ model, lookups, lk, prop, entries, onChange, onQueryPick, section, aiMarks, disabled, querySource, tables, onTablesChange }: {
   model: ModelDef;
   /** Canonical first-page snapshot — seeds query value help. */
   lookups: ResolvedLookups;
@@ -58,6 +75,10 @@ export function ConfiguratorForm({ model, lookups, lk, prop, entries, onChange, 
   disabled?: boolean;
   /** where a query field fetches its pages — nothing is fetched until the user opens or types */
   querySource: QuerySource;
+  /** per-project row data for the model's tables, by table key */
+  tables?: TableRows;
+  /** omit to render the tables read-only (builder preview) */
+  onTablesChange?: (next: TableRows) => void;
 }) {
   // Same source the rail's Costs card reads, so a badge and the card can never disagree.
   const priceOf = useMemo(
@@ -180,11 +201,25 @@ export function ConfiguratorForm({ model, lookups, lk, prop, entries, onChange, 
   // both titles; a single Form for everything would flatten sections away. In the ObjectPage each
   // section already gets its own ObjectPageSubSection (which supplies the title and the anchor), so
   // headerText is only needed when we stack the whole model ourselves (builder preview, portal wizard).
-  const shown = model.structure.sections.filter((s) => !section || s.key === section);
+  //
+  // Tables render full width *below* their section's Form rather than inside a FormGroup: a table
+  // in a FormGroup would be squeezed into one grid column, and Form's single grouping level leaves
+  // nowhere else to put it.
+  const byKey = new Map(model.structure.sections.map((s) => [s.key, s]));
+  const defOf = (k: string) => (model.tables ?? []).find((t) => t.key === k);
+  const shown = formSections(model).filter((s) => !section || s.key === section);
+  const tableRows = tables ?? {};
+  const setRows = (key: string, rows: Record<string, Val>[]) =>
+    onTablesChange?.({ ...tableRows, [key]: rows });
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-      {shown.map((s, si) => (
-        <Form key={`${s.key}:${si}`} headerText={section ? undefined : s.title} {...FORM_PROPS}>
+      {shown.map((sec, si) => {
+      const s = byKey.get(sec.key);
+      return (
+        <div key={`${sec.key}:${si}`} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+        {s ? (
+        <Form headerText={section ? undefined : sec.title} {...FORM_PROPS}>
           {s.groups.map((g, gi) => (
             <FormGroup key={`${g.key}:${gi}`} headerText={g.title}>
               {g.params.filter((k) => prop.visible[k]).map((k) => {
@@ -231,7 +266,19 @@ export function ConfiguratorForm({ model, lookups, lk, prop, entries, onChange, 
             </FormGroup>
           ))}
         </Form>
-      ))}
+        ) : section ? null : <Title level="H5">{sec.title}</Title>}
+        {sec.tables.map((tk) => {
+          const def = defOf(tk);
+          if (!def) return null;
+          return (
+            <ConfigTable key={tk} def={def} rows={tableRows[tk] ?? []} scopeVars={prop.values}
+              lookups={lk} querySource={querySource} disabled={disabled || !onTablesChange}
+              onChange={(rows) => setRows(tk, rows)} />
+          );
+        })}
+        </div>
+      );
+      })}
     </div>
   );
 }

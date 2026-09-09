@@ -219,12 +219,15 @@ export function createExecutors(
           .select({
             status: configProject.status, entries: configProject.entries,
             candidates: configProject.candidates, selection: configProject.selection,
+            tables: configProject.tables,
           })
           .from(configProject)
           .where(and(eq(configProject.id, ctx.projectId), eq(configProject.tenantId, ctx.tenantId)))
           .for("update");
         // A recalculate overwrites the candidates in place, so "still calculated, still these
         // entries" is what makes this turn's candidateIds mean what the model thinks they mean.
+        // Table rows need no comparison of their own: Chati never proposes row data, and any edit
+        // to it resets the status to draft, which the first clause already catches.
         if (!project || project.status !== "calculated" ||
             JSON.stringify(project.entries) !== JSON.stringify(ctx.working.entries))
           return err("STALE_RUN", "These candidates are no longer the project's current configuration; recalculate");
@@ -252,7 +255,7 @@ export function createExecutors(
 
         try {
           // ctx.lookups is this turn's resolution of the same live model — no snapshot to read.
-          applySelection(ctx.model.definition, ctx.lookups, project.candidates, next);
+          applySelection(ctx.model.definition, ctx.lookups, project.candidates, next, project.tables);
         } catch (e) {
           return mapInfra(e);
         }

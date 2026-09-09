@@ -5,7 +5,7 @@ import {
   TableHeaderCell, TableHeaderRow, TableRow, Text, Title, Wizard, WizardStep,
 } from "@ui5/webcomponents-react";
 import "@ui5/webcomponents-icons/dist/paper-plane.js";
-import { propagate, type Entries } from "@hera/config-engine";
+import { propagate, type Entries, type TableRows } from "@hera/config-engine";
 import { client, orpc } from "../../orpc.ts";
 import { StepConfigure } from "../configurator/StepConfigure.tsx";
 import { StepBatches } from "../configurator/ConfiguratorForm.tsx";
@@ -14,7 +14,7 @@ import { candidateLabel, fmt, openKeys, toggleSelection, type Sel } from "../con
 import { portalStatusUi, type PortalStatus } from "./portalUi.ts";
 import { PortalCandidateDetail } from "./PortalCandidateDetail.tsx";
 import { PortalRequestSummary } from "./PortalRequestSummary.tsx";
-import { sameEntries } from "../configurator/configProcessState.ts";
+import { sameEntries, sameTables } from "../configurator/configProcessState.ts";
 import { mergeQueryPicks, setQueryPick, type QueryPicks } from "../configurator/formHelpers.ts";
 
 // The client's request flow: Configure → Quantities → Prices → Submit while editable;
@@ -36,6 +36,7 @@ export function PortalRequestPage({ id }: { id: string }) {
   const [stepOverride, setStep] = useState<number | null>(null);
   const [entriesOverride, setEntries] = useState<Entries | null>(null);
   const [batchesOverride, setBatches] = useState<number[] | null>(null);
+  const [tablesOverride, setTables] = useState<TableRows | null>(null);
   const [selOverride, setSel] = useState<Sel[] | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [runMeta, setRunMeta] = useState<{ capped: boolean; widest?: { key: string; size: number } } | null>(null);
@@ -71,23 +72,25 @@ export function PortalRequestPage({ id }: { id: string }) {
 
   const entries = entriesOverride ?? project.entries;
   const batches = batchesOverride ?? project.batches;
+  const tables = tablesOverride ?? project.tables;
   const selection = selOverride ?? (project.selection as Sel[] | null) ?? [];
   const runReady = project.candidates.length > 0 && status === "calculated";
   const step = stepOverride ?? (status === "draft" ? 0 : 2);
 
   const lk = lookups.data ? mergeQueryPicks(lookups.data, picks) : undefined;
-  const prop = lk ? propagate(model.definition, lk, entries) : null;
+  const prop = lk ? propagate(model.definition, lk, entries, tables) : null;
   const conflicted = !!prop && prop.conflicts.length > 0;
   const entriesDirty = !sameEntries(entries, project.entries);
   const batchesDirty = JSON.stringify(batches) !== JSON.stringify(project.batches);
+  const tablesDirty = !sameTables(tables, project.tables);
 
   const goto = (i: number) => {
-    if (step === 0 && i !== 0 && entriesDirty) update.mutate({ id, entries });
+    if (step === 0 && i !== 0 && (entriesDirty || tablesDirty)) update.mutate({ id, entries, tables });
     setStep(i);
   };
   const calculate = async () => {
     try {
-      if (entriesDirty || batchesDirty) await update.mutateAsync({ id, entries, batches });
+      if (entriesDirty || batchesDirty || tablesDirty) await update.mutateAsync({ id, entries, batches, tables });
       run.mutate({ projectId: id });
     } catch { /* update.error renders in StepBatches */ }
   };
@@ -119,13 +122,14 @@ export function PortalRequestPage({ id }: { id: string }) {
             onChange={setEntries}
             onQueryPick={(k, t, sel) => setPicks((p) => setQueryPick(p, k, t, sel))}
             onNext={() => goto(1)} saving={update.isPending} conflicted={conflicted}
+            tables={tables} onTablesChange={setTables}
             extract={(input) => client.portal.extract(input)} />
         </WizardStep>
         <WizardStep titleText="Quantities" icon="multiselect-all" data-idx="1" selected={step === 1} disabled={conflicted}>
           <StepBatches batches={batches} onChange={setBatches} onCalculate={() => void calculate()}
             running={update.isPending || run.isPending}
             error={update.error?.message ?? run.error?.message ?? null}
-            staleRun={project.candidates.length > 0 && (status === "draft" || entriesDirty || batchesDirty)} />
+            staleRun={project.candidates.length > 0 && (status === "draft" || entriesDirty || batchesDirty || tablesDirty)} />
         </WizardStep>
         <WizardStep titleText="Prices" icon="grid" data-idx="2" selected={step === 2} disabled={!runReady}>
           {runReady ? (

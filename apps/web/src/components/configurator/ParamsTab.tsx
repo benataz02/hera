@@ -6,7 +6,7 @@ import {
   type TableHeaderRowDomRef,
 } from "@ui5/webcomponents-react";
 import "@ui5/webcomponents-fiori/dist/illustrations/AddColumn.js";
-import { propagate, type Entries, type ResolvedLookups } from "@hera/config-engine";
+import { propagate, type Entries, type ResolvedLookups, type TableRows } from "@hera/config-engine";
 import type { Issue, ModelDef, Param } from "@hera/config-engine";
 import { confirm } from "../confirm.ts";
 import { ExprInput } from "./ExprInput.tsx";
@@ -391,12 +391,13 @@ function PreviewPane({ slot, modelId, draft, issues, lookups, lookupsError, onRe
   lookups?: ResolvedLookups; lookupsError?: Error | null; onRetryLookups: () => void;
 }) {
   const [entries, setEntries] = useState<Entries>({});
+  const [tables, setTables] = useState<TableRows>({});
   const [picks, setPicks] = useState<QueryPicks>({});
   const lastGood = useRef(draft);
   if (issues.length === 0) lastGood.current = draft;
   const previewModel = issues.length === 0 ? draft : lastGood.current;
   const lk = lookups ? mergeQueryPicks(lookups, picks) : undefined;
-  const prop = lk ? propagate(previewModel, lk, entries) : null;
+  const prop = lk ? propagate(previewModel, lk, entries, tables) : null;
 
   return (
     <div slot={slot} style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -415,7 +416,8 @@ function PreviewPane({ slot, modelId, draft, issues, lookups, lookupsError, onRe
         {lookups && lk && prop ? (
           <ConfiguratorForm model={previewModel} lookups={lookups} lk={lk} prop={prop} entries={entries} onChange={setEntries}
             onQueryPick={(k, t, sel) => setPicks((p) => setQueryPick(p, k, t, sel))}
-            querySource={{ kind: "project", modelId }} />
+            querySource={{ kind: "project", modelId }}
+            tables={tables} onTablesChange={setTables} />
         ) : lookupsError ? null : <BusyIndicator active delay={0} />}
       </div>
       <Bar design="Footer" startContent={prop ? <ConsistencyStatus prop={prop} /> : undefined} />

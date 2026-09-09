@@ -11,6 +11,7 @@ import { confirm } from "../confirm.ts";
 import { SettingsTab } from "./SettingsTab.tsx";
 import { ParamsTab } from "./ParamsTab.tsx";
 import { RulesTab } from "./RulesTab.tsx";
+import { TablesTab } from "./TablesTab.tsx";
 import { BomTab, RoutingTab } from "./LinesTabs.tsx";
 import { HistoryTab } from "./HistoryTab.tsx";
 import { usePreviewLookups } from "./usePreviewLookups.ts";
@@ -24,7 +25,7 @@ const EMPTY_MODEL: ModelDef = {
 
 // Section ids, in render order — also the allow-list for `?section=` (a stale link must not
 // select a tab that no longer exists, which would render an empty page).
-const TABS: TabKey[] = ["params", "rules", "bom", "routing", "history", "settings"];
+const TABS: TabKey[] = ["params", "rules", "tables", "bom", "routing", "history", "settings"];
 
 export function ModelBuilderPage({ id }: { id: string }) {
   const m = useDraftModel(id);
@@ -100,6 +101,9 @@ export function ModelBuilderPage({ id }: { id: string }) {
         </ObjectPageSection>
         <ObjectPageSection id="rules" titleText={secTitle("Rules", "rules")}>
           <RulesTab draft={draft} update={m.update} issues={allIssues} lookups={lookups.data} tables={m.tableCols} />
+        </ObjectPageSection>
+        <ObjectPageSection id="tables" titleText={secTitle("Tables", "tables")}>
+          <TablesTab draft={draft} update={m.update} issues={allIssues} tables={m.tableCols} />
         </ObjectPageSection>
         <ObjectPageSection id="bom" titleText={secTitle("BOM", "bom")}>
           <BomTab draft={draft} update={m.update} issues={allIssues} tables={m.tableCols} />

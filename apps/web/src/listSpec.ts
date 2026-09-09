@@ -29,9 +29,7 @@ export type ListColumn = {
   Cell?: AnalyticalTableColumnDefinition["Cell"];
 };
 
-const isNumType = (t: string) => /int|double|decimal|single|byte|number/i.test(t);
 const isDateType = (t: string) => /date|time/i.test(t);
-const isBoolType = (t: string) => /bool/i.test(t);
 export const isTextType = (t: string) => /string|char|memo|guid|text/i.test(t);
 
 export const EMPTY_SPEC: ListVariantDef = { select: [], filter: [], orderby: [], filterBar: [] };
@@ -68,69 +66,24 @@ export const uniqueNames = (names: string[]): string[] => {
   return out;
 };
 
+/** The part of a saved view that IS the query, and nothing else. `widths`, `labels` and
+ *  `filterBar` are presentation: no executor reads them, but they live in the same jsonb document,
+ *  and that document is the oRPC infinite-query key — so without this projection a column resize or
+ *  a header rename mints a new key and throws away every loaded page. `select` is sorted because
+ *  reordering columns doesn't change what $select asks for either.
+ *  Every list fetch input goes through here. */
+export const listQuery = (spec: ListVariantDef): ListVariantDef => ({
+  select: [...spec.select].sort(),
+  filter: spec.filter,
+  orderby: spec.orderby,
+  filterBar: [],
+  ...(spec.search ? { search: spec.search } : {}),
+});
+
 /** Fetch $select = schema keys ∪ visible columns (keys stay fetch-only unless also visible).
  *  Client sends visible columns as `select`; server applies this union for OData projection. */
 export const listSelect = (keys: string[], visibleCols: string[]): string[] =>
   uniqueNames([...keys, ...visibleCols]);
-
-const compare = (a: unknown, b: unknown, type: string): number => {
-  if (a == null && b == null) return 0;
-  if (a == null) return -1;
-  if (b == null) return 1;
-  if (isNumType(type) || isBoolType(type)) return Number(a) - Number(b);
-  if (isDateType(type)) return new Date(a as string).getTime() - new Date(b as string).getTime();
-  return String(a).localeCompare(String(b));
-};
-
-const matches = (v: unknown, c: FilterCond, type: string): boolean => {
-  if (c.op === "contains" || c.op === "startswith") {
-    const hay = String(v ?? "").toLowerCase();
-    const needle = String(c.value).toLowerCase();
-    return c.op === "contains" ? hay.includes(needle) : hay.startsWith(needle);
-  }
-  // eq/ne are exact, matching OData. Numbers/dates/bools go through compare so "10" == 10.
-  if (c.op === "eq" || c.op === "ne") {
-    const same = isTextType(type) ? String(v ?? "") === String(c.value) : v != null && compare(v, c.value, type) === 0;
-    return c.op === "eq" ? same : !same;
-  }
-  if (v == null) return false; // null compares to nothing, the way SQL/OData treat it
-  const d = compare(v, c.value, type);
-  return c.op === "gt" ? d > 0 : c.op === "ge" ? d >= 0 : c.op === "lt" ? d < 0 : d <= 0;
-};
-
-// Local counterpart of the agent's OData compilation: filter + search + orderby from the same
-// ListVariantDef. Used by the pages whose list endpoint returns the whole array (models, configs),
-// so saved views behave identically there without the table ever doing its own processing.
-// ponytail: linear scan per condition — these lists are tens of rows, not thousands.
-export function applySpec<T extends Record<string, unknown>>(
-  rows: T[],
-  spec: ListVariantDef,
-  columns: ListColumn[],
-): T[] {
-  const typeOf = (field: string) => columns.find((c) => c.name === field)?.type ?? "string";
-  let out = rows;
-
-  for (const cond of spec.filter) {
-    const type = typeOf(cond.field);
-    out = out.filter((r) => matches(r[cond.field], cond, type));
-  }
-
-  // Search hits text columns only — same rule the server applies for B1 (contains() is string-only).
-  const q = spec.search?.trim().toLowerCase();
-  if (q) {
-    const fields = columns.filter((c) => isTextType(c.type)).map((c) => c.name);
-    out = out.filter((r) => fields.some((f) => String(r[f] ?? "").toLowerCase().includes(q)));
-  }
-
-  const ord = spec.orderby[0];
-  if (ord) {
-    const type = typeOf(ord.field);
-    const sign = ord.dir === "desc" ? -1 : 1;
-    // Copy before sorting: `out` may still be the caller's (query cache's) array.
-    out = [...out].sort((a, b) => sign * compare(a[ord.field], b[ord.field], type));
-  }
-  return out;
-}
 
 // Table cells are strings. Dates render as the local date alone — B1's date columns come back as
 // "2026-08-28T00:00:00Z" and the time half is never meaningful.

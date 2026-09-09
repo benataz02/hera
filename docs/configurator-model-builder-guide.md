@@ -184,7 +184,95 @@ In the live preview, a value made impossible by a constraint or combination tabl
 
 ---
 
-## 6. BOM & Routing tabs — what it costs
+## 6. Tables tab — repeated rows, and several items from one configuration
+
+Some things a salesperson fills in are not one answer but *n rows*: the twelve machined holes in a
+sheet, or the four different panels that come out of one nesting run. A **table** is that: a grid
+whose columns you define, filled in per configuration.
+
+Whatever the table is for, it hands the rest of the model **numbers**:
+
+- `<table>_<column>` — the **sum** of that column over all rows (numeric columns only),
+- `<table>_count` — how many rows there are.
+
+These behave exactly like a parameter everywhere: BOM quantities, routing times, conditions,
+price. That is the whole interface — a table never adds BOM or routing *lines*, only figures that
+feed the ones you already wrote.
+
+> Not to be confused with the **masterdata tables** of section 8. Those are shared lists of values
+> you look values *up* in. These are per-configuration rows the salesperson *fills in*.
+
+### Columns
+
+Each column has a key (the name formulas use), a label, a type, an optional unit, and a **cell
+kind**:
+
+| Cell | The salesperson… | Notes |
+|---|---|---|
+| **Typed in** | types a value | number / text / checkbox, per the column's type |
+| **Options** | picks from a list | a comma-separated list you type here, or a masterdata table/query |
+| **Computed** | sees a result | an expression, evaluated per row |
+
+A **computed** column's expression sees the whole model *plus its own row's earlier columns*, and
+a row's own cells win over a parameter of the same name. Columns are evaluated **top to bottom**,
+so a formula may use the columns above it but not the ones below — referencing a later column is
+reported as *unknown identifier* and blocks the save.
+
+**Worked example — machining time.** A calculation table `holes`, placed on the sheet's section:
+
+| Key | Type | Cell | |
+|---|---|---|---|
+| `shape` | string | Options → `circular, rectangular` | |
+| `size` | number (mm) | Typed in | |
+| `perimeter` | number (mm) | Computed | `shape == "circular" ? 3.14159 * size : 4 * size` |
+
+Now a routing operation's **Run/unit (min)** can read `holes_perimeter / feed_rate`, and
+`holes_count` is there if setup is per hole. The salesperson adds rows; the price moves.
+
+Rows can be pasted straight from Excel — a block of tab-separated cells appends as rows, mapped
+positionally onto the columns you can type in (computed columns are skipped).
+
+### Item matrix — n items from one configuration
+
+Set a table's **Role** to **Item matrix** and its rows additionally become **quotation lines**.
+This is merge production: one configuration, one BOM, one routing, but several *different* items
+out of the run. The cost is genuinely joint, so it is not computed per item — the configuration's
+total is **split** across the rows.
+
+You nominate two numeric columns:
+
+- **Pieces** — how many of this item per finished unit. Line `Quantity` is pieces × batch quantity.
+- **Cost basis** — what the split is proportional to (area, weight, whatever your shop costs by).
+
+Each row's share is `basis × pieces ÷ Σ(basis × pieces)` of the configuration total, rounded to
+whole cents so **the lines add up to the quoted total exactly**. A row with zero pieces ships
+nothing and gets no share. Step 4 of a configuration shows the resulting lines with a line total,
+so the reconciliation is visible before anything is posted.
+
+**Item code without an article master.** Every line still carries the model's own
+`quoteItemCode` as the B1 `ItemCode` — you do not create an item per configuration. The
+customer-facing code goes in a **user field on the quotation line** instead, which your Crystal
+layout prints. Set that per column under **B1 line field**: the dropdown lists your own B1's
+DocumentLine UDFs, read live from SAP. `ItemCode`, `Quantity`, `UnitPrice` and `LineNum` are not
+offered — the split owns them.
+
+> If SAP is unreachable the dropdown becomes a plain text box rather than disappearing, so a down
+> tunnel never stops you authoring a model.
+
+A model may have **one** item matrix. Without one, nothing changes: one configuration is one
+quotation line, exactly as before.
+
+### Where a table appears
+
+**Section** puts the table under one of your form's sections, full width beneath its fields.
+Leave it on *its own section* and the form appends it as a trailing section of its own — a table
+nobody can reach would be a table whose sums are permanently zero, so it is never simply hidden.
+
+**Min rows / Max rows** bound how many rows the salesperson may end up with (0 = no bound).
+
+---
+
+## 7. BOM & Routing tabs — what it costs
 
 These are **"150%" definitions**: list every line that *could* apply, and let each line's
 **condition** decide whether it applies to a given configuration.
@@ -204,7 +292,7 @@ e.g. `LOOKUP("nope", …)` flags *unknown table 'nope'* on the literal.
 
 ---
 
-## 7. Where values come from — the Masterdata page
+## 8. Where values come from — the Masterdata page
 
 Tables are **not** part of a model. Both kinds — values you maintain by hand and live B1/Beas
 queries — are workspace masterdata, managed under **Configurator → Masterdata** and referenced by
@@ -216,7 +304,7 @@ A name the workspace does not have flags as *unknown table* on the literal, and 
 
 ---
 
-## 8. Settings tab — the model's frame
+## 9. Settings tab — the model's frame
 
 - **Name** — the model's display name.
 - **Default batch sizes** — comma-separated positive integers (e.g. `1, 10, 100`) offered when a
@@ -227,7 +315,7 @@ A name the workspace does not have flags as *unknown table* on the literal, and 
 
 ---
 
-## 9. Saving
+## 10. Saving
 
 When the model is valid (**message button green, no tab badges**), **Save model** is enabled.
 Saving runs the same validation on the server, so a green save can't be rejected for model
@@ -247,6 +335,9 @@ fix it, and Save lights up.
 | Offer choices from SAP | **Masterdata** → Create → kind **Query** → Parameter → domain **Query** |
 | Offer choices from a spreadsheet | **Masterdata** → Create → kind **Table** → Parameter → domain **Table** |
 | Enforce a rule between answers | **Rules** → Add constraint (or combination table) |
+| Add up n repeated features (holes, welds, bends) | **Tables** → Add calculation table |
+| Quote several items out of one configuration | **Tables** → Add item matrix |
+| Print a custom item code on the quotation | **Tables** → item matrix → column → **B1 line field** |
 | Add a material / price line | **BOM** → Add line |
 | Add a labor step | **Routing** → Add operation |
 | Set the sell price / batch sizes | **Settings** |

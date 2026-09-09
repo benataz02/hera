@@ -1,13 +1,13 @@
 import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Bar, Button, Dialog, IllustratedMessage, Input, Label, MessageStrip, Toolbar, ToolbarButton,
 } from "@ui5/webcomponents-react";
 import "@ui5/webcomponents-fiori/dist/illustrations/AddColumn.js";
 import type { ModelDef } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
-import { applySpec, useListSpec, type ListColumn } from "../../variants.ts";
+import { listQuery, useListSpec, type ListColumn } from "../../variants.ts";
 import { ListReport } from "../ListReport.tsx";
 import { confirm } from "../confirm.ts";
 import { toast } from "../toast.ts";
@@ -40,12 +40,25 @@ const noData = () => (
 export function ModelsPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const models = useQuery(orpc.models.list.queryOptions());
-  const invalidate = () => qc.invalidateQueries({ queryKey: orpc.models.list.queryOptions().queryKey });
+  // models.list still exists for GlobalSearch; this page pages models.rows, so both keys go.
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: orpc.models.list.queryOptions().queryKey });
+    void qc.invalidateQueries({ queryKey: orpc.models.rows.key() });
+  };
 
-  // The list endpoint returns the whole array, so the view runs locally instead of compiling to OData.
+  // The saved view IS the query: it compiles to SQL server-side, as it compiles to OData for B1.
   const listSpec = useListSpec("models");
-  const rows = useMemo(() => applySpec(models.data ?? [], listSpec.spec, COLUMNS), [models.data, listSpec.spec]);
+  const page = useInfiniteQuery({
+    ...orpc.models.rows.infiniteOptions({
+      input: (skip: number | undefined) => ({ spec: listQuery(listSpec.spec), top: 100, ...(skip ? { skip } : {}) }),
+      initialPageParam: undefined as number | undefined,
+      getNextPageParam: (last) => last.nextSkip,
+    }),
+    enabled: listSpec.ready,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+  const rows = useMemo(() => (page.data?.pages ?? []).flatMap((p) => p.rows), [page.data]);
 
   const [newOpen, setNewOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -87,9 +100,11 @@ export function ModelsPage() {
         columns={COLUMNS}
         keyField="id"
         rows={rows}
-        total={rows.length}
-        loading={models.isFetching}
-        error={models.error ?? remove.error}
+        total={page.data?.pages[0]?.total ?? rows.length}
+        loading={page.isFetching && !page.isFetchingNextPage}
+        error={page.error ?? remove.error}
+        hasMore={page.hasNextPage}
+        onLoadMore={() => { if (!page.isFetchingNextPage) void page.fetchNextPage(); }}
         onRowClick={(row) => navigate({ to: "/models/$id", params: { id: String(row.id) } })}
         onDelete={onDelete}
         noData={noData}

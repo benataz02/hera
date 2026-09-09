@@ -1,11 +1,22 @@
 import { type Ast, DslError, parse } from "./dsl";
-import { derivedKey, type ModelDef, derivedColumns, refKeyCols } from "./model";
+import { aggregateKey, derivedKey, type ModelDef, type TableDef, derivedColumns, refKeyCols } from "./model";
 
 export type Issue = { path: string; message: string; from?: number; to?: number };
 
 export type KnownTable = { name: string; columns: string[] };
 
 export const FUNCS = new Set(["IF", "MIN", "MAX", "ROUND", "CEIL", "FLOOR", "ABS", "CONCAT", "HAS", "LOOKUP"]);
+
+/** DocumentLine fields an items table may not map a column to: the price split owns them. */
+export const RESERVED_LINE_FIELDS = new Set(["ItemCode", "Quantity", "UnitPrice", "LineNum"]);
+
+/** Scalars a table contributes to every expression scope. */
+export function aggregateKeysOf(t: TableDef): string[] {
+  return [
+    aggregateKey(t.key, "count"),
+    ...t.columns.filter((c) => c.type === "number").map((c) => aggregateKey(t.key, c.key)),
+  ];
+}
 
 type Ref = { name: string; from: number; to: number; kind: "ident" | "call" };
 
@@ -71,8 +82,33 @@ export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Iss
     }
   });
 
+  // tables: keys, columns and the aggregates they add to scope. Same treatment as derived keys —
+  // an aggregate that shadows a parameter would silently win in every formula.
+  const tableDefs = model.tables ?? [];
+  const aggregates: string[] = [];
+  const seenTable = new Set<string>();
+  tableDefs.forEach((t, i) => {
+    if (seenTable.has(t.key)) issues.push({ path: `tables[${i}]`, message: `duplicate table '${t.key}'` });
+    seenTable.add(t.key);
+    if (baseKeys.has(t.key)) issues.push({ path: `tables[${i}]`, message: `table key '${t.key}' collides with an existing key` });
+    const cols = new Set<string>();
+    t.columns.forEach((c, j) => {
+      if (cols.has(c.key)) issues.push({ path: `tables[${i}].columns[${j}]`, message: `duplicate column '${c.key}'` });
+      cols.add(c.key);
+      if (c.key === "count")
+        issues.push({ path: `tables[${i}].columns[${j}]`, message: `'count' is reserved: it collides with '${aggregateKey(t.key, "count")}'` });
+    });
+    for (const name of aggregateKeysOf(t)) {
+      if (baseKeys.has(name)) issues.push({ path: `tables[${i}]`, message: `aggregate '${name}' collides with an existing key` });
+      baseKeys.add(name);
+      aggregates.push(name);
+    }
+  });
+  if (tableDefs.filter((t) => t.role === "items").length > 1)
+    issues.push({ path: "tables", message: "at most one items table per model" });
+
   const derivedSet = new Set(derived);
-  const base = new Set([...paramKeys, ...computedKeys, ...derived]);
+  const base = new Set([...paramKeys, ...computedKeys, ...derived, ...aggregates]);
   const withQty = new Set([...base, "qty"]);
   const pricingScope = new Set([...withQty, "unitCost"]);
 
@@ -167,6 +203,13 @@ export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Iss
     if (!base.has(pk) || compSet.has(pk) || derivedSet.has(pk))
       issues.push({ path: "structure", message: `structure references unknown parameter '${pk}'` });
   }
+  const placedTables = model.structure.sections.flatMap((s) => s.tables ?? []);
+  const seenPlaced = new Set<string>();
+  for (const tk of placedTables) {
+    if (!seenTable.has(tk)) issues.push({ path: "structure", message: `structure references unknown table '${tk}'` });
+    if (seenPlaced.has(tk)) issues.push({ path: "structure", message: `table '${tk}' is placed more than once` });
+    seenPlaced.add(tk);
+  }
 
   // LOOKUP table names when statically known (first arg is a string literal)
   const tables = new Set(knownTables.map((t) => t.name));
@@ -197,6 +240,42 @@ export function checkModel(model: ModelDef, knownTables: KnownTable[] = []): Iss
   };
   model.bom.forEach((l, i) => checkLookups(l.price, `bom[${i}].price`));
   model.routing.forEach((o, i) => checkLookups(o.ratePerHour, `routing[${i}].ratePerHour`));
+
+  tableDefs.forEach((t, i) => {
+    // a cell formula sees the model scope plus its own row's earlier columns. Columns join the
+    // allowed set only after their own check, so a forward reference reads as unknown — which is
+    // exactly the rule, since evalTableRows evaluates in declaration order.
+    const inRow = new Set(base);
+    t.columns.forEach((c, j) => {
+      const path = `tables[${i}].columns[${j}].cell`;
+      if (c.cell.kind === "formula") {
+        checkExpr(c.cell.expr, path, inRow);
+        checkLookups(c.cell.expr, path);
+      } else if (c.cell.kind === "options" && c.cell.ref.source !== "manual") {
+        const ref = c.cell.ref;
+        const srcCols = tableCols.get(ref.table);
+        if (!srcCols) issues.push({ path, message: `unknown table '${ref.table}'` });
+        else {
+          const { valueCol, labelCol } = refKeyCols(ref, srcCols);
+          if (!valueCol) issues.push({ path, message: `table '${ref.table}' declares no columns` });
+          for (const col of [...(valueCol ? [valueCol] : []), ...(labelCol ? [labelCol] : [])])
+            if (!srcCols.includes(col)) issues.push({ path, message: `table '${ref.table}' has no column '${col}'` });
+        }
+      }
+      inRow.add(c.key);
+    });
+    if (t.role !== "items") return;
+    const numeric = new Set(t.columns.filter((c) => c.type === "number").map((c) => c.key));
+    const declared = new Set(t.columns.map((c) => c.key));
+    for (const [field, key] of [["qtyCol", t.qtyCol], ["basisCol", t.basisCol]] as const)
+      if (!numeric.has(key))
+        issues.push({ path: `tables[${i}].${field}`, message: `'${key}' is not a number column of this table` });
+    for (const [col, target] of Object.entries(t.map ?? {})) {
+      if (!declared.has(col)) issues.push({ path: `tables[${i}].map`, message: `unknown column '${col}'` });
+      if (RESERVED_LINE_FIELDS.has(target))
+        issues.push({ path: `tables[${i}].map`, message: `'${target}' is set by the price split and cannot be mapped` });
+    }
+  });
 
   // history: mapped params exist, closeness only on numbers, columns ⊆ query.columns
   if (model.history) {
@@ -235,6 +314,9 @@ export function referencedTables(model: ModelDef): Set<string> {
     const ref = p.domain?.kind === "options" ? p.domain.ref : undefined;
     if (ref && ref.source !== "manual") out.add(ref.table);
   }
+  for (const t of model.tables ?? [])
+    for (const c of t.columns)
+      if (c.cell.kind === "options" && c.cell.ref.source !== "manual") out.add(c.cell.ref.table);
   const walk = (n: Ast): void => {
     if (n.t === "call") {
       if (n.name === "LOOKUP" && n.args[0]?.t === "lit" && typeof n.args[0].v === "string") out.add(n.args[0].v);
@@ -262,5 +344,9 @@ function* exprsOf(model: ModelDef): Generator<string> {
   for (const l of model.bom) for (const e of [l.itemCode, l.desc, l.condition, l.qty, l.price]) if (e) yield e;
   for (const o of model.routing)
     for (const e of [o.condition, o.setupMin, o.runMinPerUnit, o.ratePerHour]) if (e) yield e;
+  // must include cell formulas, or referencedTables misses the masterdata a LOOKUP() there needs
+  // and it fails at runtime with "unknown table" while checkModel reports nothing.
+  for (const t of model.tables ?? [])
+    for (const c of t.columns) if (c.cell.kind === "formula") yield c.cell.expr;
   yield model.pricing.priceExpr;
 }

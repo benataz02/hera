@@ -1,6 +1,7 @@
 import { evaluate, parse } from "./dsl";
-import type { Entries, ModelDef, Option, ResolvedLookups, Val } from "./model";
+import type { Entries, ModelDef, Option, ResolvedLookups, TableRows, Val } from "./model";
 import { derivedKey, derivedColumns, refKeyCols } from "./model";
+import { tableAggregates } from "./tables";
 
 export type Bindings = {
   values: Record<string, Val>;
@@ -20,7 +21,7 @@ export function domainOf(model: ModelDef, lookups: ResolvedLookups, key: string)
   return [];
 }
 
-export function bindings(model: ModelDef, lookups: ResolvedLookups, entries: Entries): Bindings {
+export function bindings(model: ModelDef, lookups: ResolvedLookups, entries: Entries, tableRows: TableRows = {}): Bindings {
   const values: Record<string, Val> = { ...entries };
   const defaulted = new Set<string>();
   const visible: Record<string, boolean> = {};
@@ -71,6 +72,16 @@ export function bindings(model: ModelDef, lookups: ResolvedLookups, entries: Ent
         }
       }
     }
+    // table aggregates: <table>_<col> and <table>_count. Inside the loop, like derived columns,
+    // because a row formula can read a computed value and a computed value can read an aggregate.
+    if (model.tables?.length) {
+      for (const [k, v] of Object.entries(tableAggregates(model, tableRows, values, lookups))) {
+        if (values[k] !== v) {
+          values[k] = v;
+          changed = true;
+        }
+      }
+    }
     if (!changed) break;
   }
   for (const p of model.parameters) {
@@ -97,8 +108,13 @@ export type Propagation = {
 
 const live = (d: DomainOption[]) => d.filter((o) => !o.eliminatedBy);
 
-export function propagate(model: ModelDef, lookups: ResolvedLookups, entries: Entries): Propagation {
-  const b = bindings(model, lookups, entries);
+export function propagate(
+  model: ModelDef,
+  lookups: ResolvedLookups,
+  entries: Entries,
+  tableRows: TableRows = {},
+): Propagation {
+  const b = bindings(model, lookups, entries, tableRows);
   const conflicts: Propagation["conflicts"] = [];
   const domains: Record<string, DomainOption[]> = {};
   for (const p of model.parameters) {
@@ -110,7 +126,7 @@ export function propagate(model: ModelDef, lookups: ResolvedLookups, entries: En
   const isBound = (k: string) => k in b.values;
   /** evaluate expr with a candidate binding merged in; recomputes defaults/computed */
   const evalWith = (src: string, extra: Entries): Val => {
-    const v = bindings(model, lookups, { ...entries, ...extra }).values;
+    const v = bindings(model, lookups, { ...entries, ...extra }, tableRows).values;
     return evaluate(src, { vars: v, tables: lookups.tables });
   };
 

@@ -1,10 +1,11 @@
 import { ORPCError } from "@orpc/server";
 import {
-  andFilter, coerceKey, countOf, rowsOf,
+  andFilter, coerceKey, countOf, nextLinkOf, rowsOf,
   type B1EntitySchema, type B1Transport, type Key,
 } from "@hera/b1";
 import type { ListVariantDef } from "@hera/db";
 import { compileList } from "./entity-list.ts";
+import { decryptSecret, encryptSecret } from "./crypto.ts";
 import { viaB1 } from "./b1.ts";
 
 // The B1 read bodies, once. Two routers call these: entities.* (internal, admin) and
@@ -22,7 +23,39 @@ export const bad = (e: unknown): never => {
     : new ORPCError("BAD_REQUEST", { message: e instanceof Error ? e.message : String(e) });
 };
 
-export type RowsArgs = { spec: ListVariantDef; top: number; skip?: number; count?: boolean };
+/** What a cursor may be replayed as. A sealed nextLink is bound to its tenant, entity set and
+ *  fence, so a portal client cannot hand back an internal user's cursor and read rows their
+ *  CardCode filter would have excluded, nor reach an entity `entity-profiles.ts` never curated. */
+export type CursorFence = { tenantId: string; key: string };
+
+/** B1's `@odata.nextLink`, encrypted. The client gets an opaque blob and hands it straight back:
+ *  it can neither read the URL nor forge one, so `readNext`'s origin check is no longer the only
+ *  thing standing between a browser and an arbitrary Service Layer query. Sealing reuses
+ *  crypto.ts's AES-256-GCM — the auth tag is what makes a tampered cursor fail closed. */
+const sealCursor = (entity: string, f: CursorFence, nextLink: string): string =>
+  encryptSecret(JSON.stringify([f.tenantId, entity, f.key, nextLink]));
+
+const openCursor = (entity: string, f: CursorFence, cursor: string): string => {
+  let parts: unknown;
+  try {
+    parts = JSON.parse(decryptSecret(cursor));
+  } catch {
+    throw new ORPCError("BAD_REQUEST", { message: "Invalid page cursor" });
+  }
+  const [tenantId, ent, key, link] = parts as [string, string, string, string];
+  if (tenantId !== f.tenantId || ent !== entity || key !== f.key || typeof link !== "string")
+    throw new ORPCError("BAD_REQUEST", { message: "Page cursor does not belong to this list" });
+  return link;
+};
+
+export type RowsArgs = {
+  spec: ListVariantDef;
+  /** rows per page — `Prefer: odata.maxpagesize`, from B1_PAGE_SIZE */
+  pageSize: number;
+  /** sealed `@odata.nextLink` from the previous page; absent = first page */
+  cursor?: string;
+  count?: boolean;
+};
 
 /**
  * One page of rows for a saved list view. The spec is compiled to OData here — the browser never
@@ -37,24 +70,36 @@ export async function readRows(
   schema: B1EntitySchema,
   entity: string,
   a: RowsArgs,
+  fence: CursorFence,
   extraFilter?: string,
 ) {
-  let query;
-  try {
-    query = compileList(schema, a.spec, { top: a.top, skip: a.skip, count: a.count });
-  } catch (e) {
-    return bad(e);
+  let res;
+  if (a.cursor) {
+    // Continuing a list: the next page is wherever B1 said it is. Nothing is recomputed here, so
+    // the filter/orderby/fence of page 1 cannot drift from page 2 — the link carries them.
+    const link = openCursor(entity, fence, a.cursor);
+    res = await viaB1(() => b1.readNext(link, a.pageSize));
+  } else {
+    let query;
+    try {
+      query = compileList(schema, a.spec, { pageSize: a.pageSize, count: a.count });
+    } catch (e) {
+      return bad(e);
+    }
+    if (extraFilter) query.filter = andFilter(query.filter, extraFilter);
+    res = await viaB1(() => b1.readEntitySet(entity, query));
   }
-  if (extraFilter) query.filter = andFilter(query.filter, extraFilter);
 
-  const res = await viaB1(() => b1.readEntitySet(entity, query));
   const rows = rowsOf(res.data);
+  const next = nextLinkOf(res.data);
   return {
     rows,
     keys: schema.keys,
+    // Only page 1 asks for $count; @odata.count does not ride along on a nextLink page.
     total: countOf(res.data),
-    // A full page probably means another one; one empty read at the end beats $count per page.
-    nextSkip: rows.length === a.top ? (a.skip ?? 0) + rows.length : undefined,
+    // B1's own answer to "is there more", sealed. Never a row count we guessed at, and never a
+    // URL the browser can read or edit.
+    nextCursor: next ? sealCursor(entity, fence, next) : undefined,
   };
 }
 

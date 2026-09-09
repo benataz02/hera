@@ -10,6 +10,7 @@ import { missingRequired, pickEditable, profileOf } from "../../entity-profiles.
 import { buildCopy, COPY_SELECT, findFlow, flowsFrom } from "../../doc-copy.ts";
 import { printDocument } from "../../print.ts";
 import { bad, readOne, readRows } from "../../entity-read.ts";
+import { DEFAULT_PAGE } from "../../lookups.ts";
 
 // The B1 entity surface: list what B1 exposes, read a schema, page rows, open one row — for any
 // entity set. Writing is different: update/create/copy work only on the curated entities in
@@ -72,15 +73,18 @@ export const entitiesRouter = {
     .input(z.object({
       entity: EntityZ,
       spec: ListVariantDefZ,
-      top: z.number().int().min(1).max(500).default(50),
-      skip: z.number().int().min(0).optional(),
+      /** sealed @odata.nextLink from the previous page; absent = first page. There is no
+       *  page-size input: B1_PAGE_SIZE is the one knob, so a client cannot ask for a page the
+       *  Service Layer would silently truncate. */
+      cursor: z.string().optional(),
       /** ask B1 for the total in the same read; only worth it on the first page */
       count: z.boolean().optional(),
     }))
     .handler(async ({ input, context }) => {
       const b1 = await b1Of(context.tenantId);
       const schema = await viaB1(() => entitySchema(context.tenantId, b1, input.entity)).catch(bad);
-      return readRows(b1, schema, input.entity, input);
+      return readRows(b1, schema, input.entity, { ...input, pageSize: DEFAULT_PAGE },
+        { tenantId: context.tenantId, key: "internal" });
     }),
 
   /** One row, with its ETag — which is what makes a curated edit safe in Phase 3. */

@@ -1,8 +1,9 @@
-export { ModelDefZ, LookupRefZ, ParamZ, ConstraintZ, BomLineZ, OperationZ, ValZ, EntriesZ, ODataQueryZ, QuerySourceZ, derivedColumns, displayColumns, refKeyCols, derivedKey } from "./model";
-export type { Constraint, Entries, LookupRef, ModelDef, ODataQuery, Option, Param, QuerySource, ResolvedLookups, ResolvedTable, Val } from "./model";
+export { ModelDefZ, LookupRefZ, ParamZ, ConstraintZ, BomLineZ, OperationZ, ValZ, EntriesZ, ODataQueryZ, QuerySourceZ, KeyZ, TableColumnZ, TableDefZ, TableRowsZ, aggregateKey, derivedColumns, displayColumns, refKeyCols, derivedKey } from "./model";
+export type { Constraint, Entries, LookupRef, ModelDef, ODataQuery, Option, Param, QuerySource, ResolvedLookups, ResolvedTable, TableColumn, TableDef, TableRows, Val } from "./model";
+export { columnOptions, evalTableRows, splitShares, tableAggregates } from "./tables";
 export { DslError, evaluate, parse } from "./dsl";
 export type { Ast, Scope } from "./dsl";
-export { checkModel, FUNCS, referencedTables } from "./check";
+export { checkModel, FUNCS, RESERVED_LINE_FIELDS, aggregateKeysOf, referencedTables } from "./check";
 export type { Issue, KnownTable } from "./check";
 export { bindings, domainOf, propagate } from "./propagate";
 export type { Bindings, DomainOption, Propagation } from "./propagate";

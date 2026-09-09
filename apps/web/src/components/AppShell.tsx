@@ -2,7 +2,7 @@ import { useNavigate, useRouter, useRouterState, Outlet } from "@tanstack/react-
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Avatar, Button,
-  NavigationLayout, ShellBar, SideNavigation, SideNavigationGroup, SideNavigationItem,
+  NavigationLayout, ShellBar, ShellBarBranding, SideNavigation, SideNavigationGroup, SideNavigationItem,
   ToggleButton,
   UserMenu,
   UserMenuAccount,
@@ -13,6 +13,7 @@ import { authClient } from "../auth-client.ts";
 import { meQuery, orpc } from "../orpc.ts";
 import { GlobalSearch, type SearchEntry } from "./GlobalSearch.tsx";
 import { useRef, useState, useEffect, useMemo } from "react";
+import type { MouseEvent } from "react";
 import { getTheme, setTheme } from '@ui5/webcomponents-base/dist/config/Theme.js';
 
 
@@ -28,6 +29,14 @@ export function AppShell() {
   // Read the real collapsed state off the ref so the first click is correct on any screen size,
   // keeping "Auto" responsiveness until the user takes manual control.
   const toggleNav = () => setNavMode(navLayoutRef.current?.isSideCollapsed() ? "Expanded" : "Collapsed");
+  // Touching the page content collapses the nav. One delegated listener on the layout rather than a
+  // wrapper around <Outlet /> — the content slot sizes its own child, so an extra div breaks it.
+  // The chrome is excluded by host tag: shadow-DOM retargeting means a click anywhere inside the
+  // side nav / shellbar / user menu surfaces as that host element.
+  const collapseOnContentClick = (e: MouseEvent<HTMLElement>) => {
+    if ((e.target as HTMLElement).closest("ui5-side-navigation, ui5-shellbar, ui5-user-menu")) return;
+    if (!navLayoutRef.current?.isSideCollapsed()) setNavMode("Collapsed");
+  };
   const [density, setDensity] = useState<Density>(() => (localStorage.getItem("density") as Density) ?? getDensity());
   const [theme, setThemeState] = useState<string>(() => localStorage.getItem("theme") ?? getTheme());
 
@@ -123,6 +132,7 @@ export function AppShell() {
     <NavigationLayout
       ref={navLayoutRef}
       mode={navMode}
+      onClick={collapseOnContentClick}
       header={
         <>
           <ShellBar
@@ -140,9 +150,12 @@ export function AppShell() {
                 />
               </>
             }
-            primaryTitle="HERA"
-            /* logo={<img alt="HERA" src="/hera.png" />} */
-            onLogoClick={() => navigate({ to: "/" })}
+            branding={
+              <ShellBarBranding logo={<img alt="Confire" src="/confire-logo.png" />}
+                onClick={() => navigate({ to: "/" })}>
+                Confire
+              </ShellBarBranding>
+            }
             content={isClient ? undefined : <GlobalSearch entries={searchEntries} isAdmin={isAdmin} />}
             profile={<Avatar id="user-menu-opener" initials='BA' />}
             onProfileClick={() => setUserMenuOpen((open) => !open)}

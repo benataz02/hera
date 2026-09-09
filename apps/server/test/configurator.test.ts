@@ -3,7 +3,9 @@ import { eq } from "drizzle-orm";
 import { db, configMasterdata, configModel, configProject, type ConfigCandidate } from "@hera/db";
 import type { Entries, ModelDef, ResolvedLookups } from "@hera/config-engine";
 import { applySelection, calculateProject } from "../src/orpc/routers/configs.ts";
-import { configDocumentCommandId } from "../src/config-quote.ts";
+import { buildQuoteLines, configDocumentCommandId } from "../src/config-quote.ts";
+import { router } from "../src/orpc/router.ts";
+import { call, makeTenant, makeUser, tenantHeaders } from "./harness.ts";
 import type { QueryRunner } from "../src/lookups.ts";
 
 const tenantId = `test-cfg-${crypto.randomUUID()}`;
@@ -28,6 +30,9 @@ const model: ModelDef = {
   pricing: { priceExpr: "unitCost * 2", quoteItemCode: "BOX" },
   batchDefaults: [10],
 };
+
+/** This model names no query masterdata, so resolving its lookups must not touch the agent. */
+const noFetch: QueryRunner = () => Promise.reject(new Error("no live queries expected"));
 
 const fakeFetch: QueryRunner = async (target, query, columns) => {
   expect(target).toBe("b1");
@@ -67,13 +72,21 @@ describe("configDocumentCommandId", () => {
     { assignment: { size: "S" }, perBatch: [{ batchQty: 10, outputs: {} as never }] },
     { assignment: { size: "L" }, perBatch: [{ batchQty: 10, outputs: {} as never }] },
   ] satisfies ConfigCandidate[];
-  const id = (sel: { candidateIdx: number; batchQty: number }[], c = candidates) =>
-    configDocumentCommandId({ tenantId: "t", projectId: "p", candidates: c, selection: sel });
+  const id = (sel: { candidateIdx: number; batchQty: number }[], c = candidates, tables = {}) =>
+    configDocumentCommandId({ tenantId: "t", projectId: "p", candidates: c, selection: sel, tables });
 
   test("a reordered retry of the same picks keeps its key", () => {
     const a = id([{ candidateIdx: 0, batchQty: 10 }, { candidateIdx: 1, batchQty: 10 }]);
     expect(a).toHaveLength(64);
     expect(id([{ candidateIdx: 1, batchQty: 10 }, { candidateIdx: 0, batchQty: 10 }])).toBe(a);
+  });
+
+  test("editing the item matrix changes the key, so a re-post creates a second document", () => {
+    const sel = [{ candidateIdx: 0, batchQty: 10 }];
+    const a = id(sel, candidates, { parts: [{ code: "A", pieces: 1 }] });
+    expect(id(sel, candidates, { parts: [{ code: "A", pieces: 2 }] })).not.toBe(a);
+    // and jsonb key reordering must not: Postgres does not preserve object key order
+    expect(id(sel, candidates, { parts: [{ pieces: 1, code: "A" }] })).toBe(a);
   });
 
   test("dropping a pick or changing a batch quantity changes the key", () => {
@@ -218,5 +231,128 @@ describe.skipIf(!process.env.DATABASE_URL)("calculateProject (integration)", () 
     await db.update(configModel).set({ updatedAt: new Date(Date.now() + 1000) })
       .where(eq(configModel.id, modelId));
     expect((await calculateProject(tenantId, id, fakeFetch)).reused).toBe(false);
+  });
+});
+
+// The merge-production path end to end: rows persist, feed the model's formulas, and become n
+// reconciling quotation lines. This is where the money invariant lives.
+describe("config tables (integration)", () => {
+  const tableModel: ModelDef = {
+    name: "Merged sheet",
+    parameters: [
+      {
+        key: "thickness", label: "Thickness", type: "number", ui: "select",
+        domain: { kind: "options", ref: { source: "manual", options: [{ value: 2 }, { value: 3 }] } },
+      },
+    ],
+    structure: { sections: [{ key: "main", title: "Main", groups: [{ key: "g", title: "G", params: ["thickness"] }], tables: ["holes"] }] },
+    computed: [],
+    tables: [
+      {
+        role: "calc", key: "holes", title: "Holes",
+        columns: [
+          { key: "size", label: "Size", type: "number", cell: { kind: "input" } },
+          { key: "minutes", label: "Minutes", type: "number", cell: { kind: "formula", expr: "size * thickness / 10" } },
+        ],
+      },
+      {
+        role: "items", key: "parts", title: "Parts", qtyCol: "pieces", basisCol: "area",
+        map: { code: "U_HERA_ItemCode" },
+        columns: [
+          { key: "code", label: "Code", type: "string", cell: { kind: "input" } },
+          { key: "pieces", label: "Pieces", type: "number", cell: { kind: "input" } },
+          { key: "area", label: "Area", type: "number", cell: { kind: "input" } },
+        ],
+      },
+    ],
+    constraints: [],
+    bom: [{ id: "sheet", itemCode: '"SHEET"', qty: "1", price: "10", scrapPct: 0 }],
+    // the table's sum is the whole point: drilling time comes from the rows, not from a parameter
+    routing: [{ id: "drill", resource: "CNC", setupMin: "5", runMinPerUnit: "holes_minutes", ratePerHour: "60" }],
+    pricing: { priceExpr: "unitCost * 2", quoteItemCode: "SHEET-CFG" },
+    batchDefaults: [3],
+  };
+
+  const rows = {
+    holes: [{ size: 10 }, { size: 20 }],
+    parts: [
+      { code: "PART-A", pieces: 1, area: 2 },
+      { code: "PART-B", pieces: 1, area: 1 },
+    ],
+  };
+
+  test("rows reach the routing, and the split lines sum to the quoted total", async () => {
+    const projectId = await seed("merged", tableModel, { thickness: 3 }, [3]);
+    await db.update(configProject).set({ tables: rows }).where(eq(configProject.id, projectId));
+
+    const r = await calculateProject(tenantId, projectId, noFetch);
+    expect(r.candidates).toHaveLength(1);
+    const out = r.candidates[0]!.perBatch[0]!.outputs;
+    // holes_minutes = (10*3 + 20*3)/10 = 9 -> total 5 + 9*3 = 32 min at 60/h = 32 EUR labour
+    expect(out.ops[0]!.totalMin).toBe(32);
+
+    const [project] = await db.select().from(configProject).where(eq(configProject.id, projectId));
+    const withPick = {
+      ...project!,
+      customer: { cardCode: "C1", cardName: "Acme" },
+      selection: [{ candidateIdx: 0, batchQty: 3 }],
+    };
+    const { lines, value } = buildQuoteLines(withPick, tableModel, { domains: {}, tables: {} });
+
+    expect(lines).toHaveLength(2);
+    expect(lines.map((l) => l.U_HERA_ItemCode)).toEqual(["PART-A", "PART-B"]);
+    // Quantity is row pieces x batch qty, and the generic configurator item stays the B1 ItemCode
+    expect(lines.map((l) => l.Quantity)).toEqual([3, 3]);
+    expect(new Set(lines.map((l) => l.ItemCode))).toEqual(new Set(["SHEET-CFG"]));
+
+    // The invariant: what SAP will total has to equal what the dashboard stores. Work in cents —
+    // that is the unit the split reconciles in, and the unit B1 rounds each line to.
+    const cents = (l: Record<string, unknown>) => Math.round(Number(l.Quantity) * Number(l.UnitPrice) * 100);
+    const total = Math.round(out.unitPrice * 3 * 100);
+    expect(Math.round(value * 100)).toBe(total);
+    expect(lines.reduce((a, l) => a + cents(l), 0)).toBe(total);
+    // 2:1 by cost basis — exact up to the one cent largest-remainder has to move to make it add up
+    expect(Math.abs(cents(lines[0]!) - (total * 2) / 3)).toBeLessThanOrEqual(1);
+    expect(Math.abs(cents(lines[1]!) - total / 3)).toBeLessThanOrEqual(1);
+  });
+
+  test("no rows in the item matrix is the pre-feature single line", async () => {
+    const projectId = await seed("unmerged", tableModel, { thickness: 3 }, [3]);
+    await db.update(configProject).set({ tables: { holes: rows.holes } }).where(eq(configProject.id, projectId));
+    await calculateProject(tenantId, projectId, noFetch);
+    const [project] = await db.select().from(configProject).where(eq(configProject.id, projectId));
+    const { lines } = buildQuoteLines(
+      { ...project!, customer: { cardCode: "C1", cardName: "Acme" }, selection: [{ candidateIdx: 0, batchQty: 3 }] },
+      tableModel, { domains: {}, tables: {} },
+    );
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.ItemCode).toBe("SHEET-CFG");
+    expect(lines[0]!.Quantity).toBe(3);
+  });
+
+  // The third writer the schema's ponytail note warns about: every writer of the calculation's
+  // inputs must reset the status, or `status === "calculated"` stops meaning what it claims.
+  test("editing rows through configs.update makes the stored calculation stale", async () => {
+    const { tenantId: tid, slug } = await makeTenant();
+    const admin = await makeUser("admin", tid);
+    const ctx = { context: { headers: tenantHeaders(slug, admin.cookie) } };
+
+    const [m] = await db.insert(configModel).values({ tenantId: tid, name: tableModel.name, definition: tableModel })
+      .returning({ id: configModel.id });
+    const [p] = await db.insert(configProject)
+      .values({ tenantId: tid, modelId: m!.id, name: "stale", batches: [3], entries: { thickness: 3 }, tables: rows, createdBy: admin.userId })
+      .returning({ id: configProject.id });
+    const projectId = p!.id;
+
+    await calculateProject(tid, projectId, noFetch);
+    const statusOf = async () =>
+      (await db.select().from(configProject).where(eq(configProject.id, projectId)))[0]!.status;
+    expect(await statusOf()).toBe("calculated");
+
+    await call(router.configs.update, { id: projectId, tables: { ...rows, holes: [{ size: 99 }] } }, ctx);
+    expect(await statusOf()).toBe("draft");
+
+    await db.delete(configProject).where(eq(configProject.tenantId, tid));
+    await db.delete(configModel).where(eq(configModel.tenantId, tid));
   });
 });

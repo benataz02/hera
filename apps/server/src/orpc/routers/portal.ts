@@ -6,19 +6,21 @@ import {
   db, configModel, configProject, ListVariantDefZ, member, organization, portalClient, uiVariant, user,
   type ConfigCandidate, type ProjectEvent,
 } from "@hera/db";
-import { EntriesZ, type Entries, type ModelDef } from "@hera/config-engine";
+import { EntriesZ, TableRowsZ, type Entries, type ModelDef } from "@hera/config-engine";
 import { escapeLiteral, type B1EntitySchema } from "@hera/b1";
 import { adminProcedure, base, baseDomain, clientProcedure, sessionProcedure } from "../base.ts";
 import { hashToken } from "../../crypto.ts";
 import { tenantSlugFromHost } from "../../tenant.ts";
 import { tenantConnector, viaB1 } from "../../b1.ts";
 import { entitySchema } from "../../entity-meta.ts";
+import { compileSpec, listPage, ListPageZ, TOTAL, type SqlFields } from "../../list-sql.ts";
+import { DEFAULT_PAGE } from "../../lookups.ts";
 import { bad, readOne, readRows } from "../../entity-read.ts";
 import { printDocument } from "../../print.ts";
 import { documentChain } from "../../doc-chain.ts";
 import {
-  applySelection, cachedLookups, calculateProject, enrichedLookups, liveEngine, loadModel,
-  modelRunner, pushEvent, QueryPageZ, queryTablePage,
+  applySelection, cachedLookups, calculateProject, CONFIG_FIELDS, enrichedLookups, liveEngine,
+  loadModel, modelRunner, pushEvent, QueryPageZ, queryTablePage,
 } from "./configs.ts";
 
 import { ExtractFileZ, extractSuggestions } from "./extraction.ts";
@@ -151,6 +153,9 @@ const toPortalModelDef = (d: ModelDef): ModelDef => ({
   structure: d.structure,
   computed: d.computed,
   constraints: d.constraints,
+  // The portal fills these rows too — an item matrix IS the request. Same exposure as `computed`:
+  // per-row formulas, never the cost expressions below.
+  tables: d.tables,
   batchDefaults: d.batchDefaults,
   extraction: d.extraction,
   bom: [],
@@ -290,6 +295,36 @@ export const portalRouter = {
   },
 
   projects: {
+    /** One page of the client's own requests for a saved view. Deliberately a subset of
+     *  CONFIG_FIELDS: no `customerName`, because the client IS the customer and every row is
+     *  already fenced to their CardCode. */
+    rows: clientProcedure.input(ListPageZ).handler(async ({ input, context }) => {
+      const fields: SqlFields = {
+        name: CONFIG_FIELDS.name!, modelName: CONFIG_FIELDS.modelName!,
+        status: CONFIG_FIELDS.status!, updatedAt: CONFIG_FIELDS.updatedAt!,
+      };
+      const { where, orderBy } = compileSpec(fields, input.spec);
+      const raw = await db
+        .select({
+          id: configProject.id, name: configProject.name, status: configProject.status,
+          modelName: configModel.name, updatedAt: configProject.updatedAt, _total: TOTAL,
+        })
+        .from(configProject)
+        .innerJoin(configModel, eq(configModel.id, configProject.modelId))
+        .where(and(
+          eq(configProject.tenantId, context.tenantId),
+          eq(configProject.source, "portal"),
+          sql`${configProject.customer}->>'cardCode' = ${context.cardCode}`,
+          where,
+        ))
+        // `id` last so the order is total — OFFSET paging over a non-unique sort duplicates and
+        // skips rows between pages.
+        .orderBy(...orderBy, desc(configProject.updatedAt), configProject.id)
+        .limit(input.top)
+        .offset(input.skip ?? 0);
+      return listPage(raw, input.top, input.skip);
+    }),
+
     list: clientProcedure.handler(({ context }) =>
       db
         .select({
@@ -312,7 +347,7 @@ export const portalRouter = {
       return {
         project: {
           id: p.id, name: p.name, status: p.status, entries: p.entries, batches: p.batches,
-          rejectionNote: p.rejectionNote, events: p.events, modelId: p.modelId,
+          tables: p.tables, rejectionNote: p.rejectionNote, events: p.events, modelId: p.modelId,
           // Sanitized: the portal sees unit price and line total, never cost, BOM or routing.
           candidates: p.candidates.map(toPortalCandidate),
           selection: p.selection?.map((s) => ({ candidateIdx: s.candidateIdx, batchQty: s.batchQty })) ?? null,
@@ -353,11 +388,13 @@ export const portalRouter = {
         name: z.string().min(1).optional(),
         entries: EntriesZ.optional(),
         batches: z.array(z.number().int().min(1)).optional(),
+        tables: TableRowsZ.optional(),
       }))
       .handler(async ({ input, context }) => {
         const { id, ...rest } = input;
         const fields: Partial<typeof configProject.$inferInsert> = { ...rest, updatedAt: new Date() };
-        if (input.entries !== undefined || input.batches !== undefined) fields.status = "draft";
+        if (input.entries !== undefined || input.batches !== undefined || input.tables !== undefined)
+          fields.status = "draft";
         const updated = await db
           .update(configProject)
           .set(fields)
@@ -396,13 +433,15 @@ export const portalRouter = {
       .input(z.object({
         entity: PortalEntityZ,
         spec: ListVariantDefZ,
-        top: z.number().int().min(1).max(200).default(50),
-        skip: z.number().int().min(0).optional(),
+        cursor: z.string().optional(),
         count: z.boolean().optional(),
       }))
       .handler(async ({ input, context }) => {
         const { b1, schema } = await portalEntity(context.tenantId, input.entity);
-        return readRows(b1, schema, input.entity, input, cardFence(context.cardCode));
+        // The fence key is the CardCode: a cursor minted for one client can never be replayed
+        // by another, nor by an internal user whose page had no CardCode clause at all.
+        return readRows(b1, schema, input.entity, { ...input, pageSize: DEFAULT_PAGE },
+          { tenantId: context.tenantId, key: `portal:${context.cardCode}` }, cardFence(context.cardCode));
       }),
 
     /** One document. Read wide and projected here rather than $select-ed: a complex collection in
@@ -549,7 +588,7 @@ export const portalRouter = {
     if (p.status !== "quoted") throw new ORPCError("NOT_FOUND");
     if (!p.selection?.length || p.b1DocEntry == null) throw new ORPCError("NOT_FOUND");
     const { model, lookups } = await liveEngine(context.tenantId, p);
-    const lines = applySelection(model.definition, lookups, p.candidates, p.selection).map((r) => ({
+    const lines = applySelection(model.definition, lookups, p.candidates, p.selection, p.tables).map((r) => ({
       assignment: p.candidates[r.candidateIdx]!.assignment,
       batchQty: r.batchQty, unitPrice: r.outputs.unitPrice, total: r.outputs.batchTotal,
     }));

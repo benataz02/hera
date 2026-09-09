@@ -7,8 +7,8 @@ import {
 } from "@hera/db";
 import { assistantConversation } from "@hera/assistant/schema";
 import {
-  computeOutputs, DslError, enumerate, EntriesZ, OutputOverridesZ, propagate, referencedTables,
-  type Entries, type ModelDef, type Outputs, type ResolvedLookups, type Val,
+  computeOutputs, DslError, enumerate, EntriesZ, OutputOverridesZ, propagate, referencedTables, TableRowsZ,
+  type Entries, type ModelDef, type Outputs, type ResolvedLookups, type TableRows, type Val,
 } from "@hera/config-engine";
 import { userProcedure } from "../base.ts";
 import { B1Error, rowsOf } from "@hera/b1";
@@ -18,6 +18,7 @@ import {
   enrichLookups, fetchQueryTable, masterdataVersion, needsSap, queryPageSource, resolveLookups,
   type MasterdataRow, type QueryRunner,
 } from "../../lookups.ts";
+import { compileSpec, listPage, ListPageZ, TOTAL, type SqlFields } from "../../list-sql.ts";
 import { loadHistoryRows } from "../../history-sync.ts";
 import { scoreRows } from "../../similarity.ts";
 import { docHistoryQuery, flattenDocs, sortDocRows, type DocRow } from "../../doc-history.ts";
@@ -155,7 +156,7 @@ export async function calculateProject(
   const [project] = await db
     .select({
       modelId: configProject.modelId, status: configProject.status, entries: configProject.entries,
-      batches: configProject.batches, candidates: configProject.candidates,
+      batches: configProject.batches, tables: configProject.tables, candidates: configProject.candidates,
       calculatedAt: configProject.calculatedAt, updatedAt: configProject.updatedAt,
     })
     .from(configProject)
@@ -164,6 +165,8 @@ export async function calculateProject(
   if (!project) throw new ORPCError("NOT_FOUND");
   const entries = override?.entries ?? project.entries;
   const batches = override?.batches ?? project.batches;
+  // not overridable: Chati proposes parameter values, never row data
+  const tableRows = project.tables;
   if (!batches.length) throw new ORPCError("BAD_REQUEST", { message: "Add at least one batch quantity" });
 
   const model = await loadModel(tenantId, project.modelId);
@@ -190,18 +193,18 @@ export async function calculateProject(
   const lookups = await enrichedLookups(tenantId, model, entries, run);
 
   try {
-    const pre = propagate(model.definition, lookups, entries);
+    const pre = propagate(model.definition, lookups, entries, tableRows);
     if (pre.conflicts.length)
       throw new ORPCError("BAD_REQUEST", {
         message: `Configuration has conflicts: ${pre.conflicts.map((c) => c.message).join("; ")}`,
       });
-    const en = enumerate(model.definition, lookups, entries);
+    const en = enumerate(model.definition, lookups, entries, 200, tableRows);
     if (!en.candidates.length)
       throw new ORPCError("BAD_REQUEST", { message: "No valid configuration completes the current entries" });
     const candidates: ConfigCandidate[] = en.candidates.map((assignment) => ({
       assignment,
       perBatch: batches.map((batchQty) => ({
-        batchQty, outputs: computeOutputs(model.definition, lookups, assignment, batchQty),
+        batchQty, outputs: computeOutputs(model.definition, lookups, assignment, batchQty, undefined, tableRows),
       })),
     }));
 
@@ -306,11 +309,12 @@ export async function quoteDraft(tenantId: string, projectId: string) {
   const { model, lookups } = await liveEngine(tenantId, project);
   const commandId = configDocumentCommandId({
     tenantId, projectId, candidates: project.candidates, selection: project.selection ?? [],
+    tables: project.tables,
   });
   return {
     commandId,
     data: buildQuoteSeed(project, model.definition, lookups),
-    totals: quotedTotals(model.definition, lookups, project.candidates, project.selection),
+    totals: quotedTotals(project, model.definition, lookups),
     quoted: project.b1DocEntry === null ? null : { docEntry: project.b1DocEntry, quotedAt: project.quotedAt },
   };
 }
@@ -325,6 +329,7 @@ export async function createQuote(
 
   const commandId = configDocumentCommandId({
     tenantId, projectId: input.projectId, candidates: project.candidates, selection: project.selection ?? [],
+    tables: project.tables,
   });
   if (commandId !== input.commandId)
     throw new ORPCError("CONFLICT", { message: "STATE_CHANGED" });
@@ -361,7 +366,7 @@ export async function createQuote(
     if (!Number.isFinite(docEntry))
       throw new ORPCError("BAD_GATEWAY", { message: "SAP created the quotation but returned no DocEntry" });
 
-    const totals = quotedTotals(model.definition, lookups, project.candidates, project.selection);
+    const totals = quotedTotals(project, model.definition, lookups);
     const now = new Date();
     await db.update(configProject)
       .set({
@@ -376,13 +381,13 @@ export async function createQuote(
 
 export function applySelection(
   model: ModelDef, lookups: ResolvedLookups,
-  candidates: ConfigCandidate[], selection: ConfigSelection[],
+  candidates: ConfigCandidate[], selection: ConfigSelection[], tableRows?: TableRows,
 ): { candidateIdx: number; batchQty: number; outputs: Outputs }[] {
   return selection.map((s) => {
     const cand = candidates[s.candidateIdx];
     if (!cand) throw new ORPCError("BAD_REQUEST", { message: `No candidate at index ${s.candidateIdx}` });
     try {
-      const outputs = computeOutputs(model, lookups, cand.assignment, s.batchQty, s.overrides);
+      const outputs = computeOutputs(model, lookups, cand.assignment, s.batchQty, s.overrides, tableRows);
       return { candidateIdx: s.candidateIdx, batchQty: s.batchQty, outputs };
     } catch (e) {
       if (e instanceof DslError || e instanceof RangeError) throw new ORPCError("BAD_REQUEST", { message: e.message });
@@ -400,6 +405,21 @@ const SelectionZ = z.object({
   batchQty: z.number().int().min(1),
   overrides: OutputOverridesZ.optional(),
 });
+
+/** `customer` is jsonb; the list reads the name out of it so a saved view can sort and filter on
+ *  Customer like any other column. It used to be flattened in the browser, which only worked while
+ *  the page held every row. */
+const CUSTOMER_NAME = sql<string>`${configProject.customer}->>'cardName'`;
+
+/** Filterable/sortable columns of the configurations list. Exported because portal.projects.rows is
+ *  the same table with a narrower set — it must not offer Customer to the client who IS the customer. */
+export const CONFIG_FIELDS: SqlFields = {
+  name: { col: configProject.name, kind: "string" },
+  modelName: { col: configModel.name, kind: "string" },
+  customerName: { col: CUSTOMER_NAME, kind: "string" },
+  status: { col: configProject.status, kind: "enum" },
+  updatedAt: { col: configProject.updatedAt, kind: "date" },
+};
 
 export const configsRouter = {
   // Members can list models (id + name only) to start a configuration; editing stays admin-only.
@@ -422,6 +442,30 @@ export const configsRouter = {
       .where(eq(configProject.tenantId, context.tenantId))
       .orderBy(desc(configProject.updatedAt)),
   ),
+
+  /** One page of the configurations list for a saved view. Same wire shape as entities.rows, so
+   *  ListReport pages a Postgres list exactly the way it pages a B1 entity set. `customerName` is
+   *  flattened out of the `customer` jsonb here rather than in the browser: it has to be sortable
+   *  and filterable server-side now that the page only ever holds one page. */
+  rows: userProcedure.input(ListPageZ).handler(async ({ input, context }) => {
+    const { where, orderBy } = compileSpec(CONFIG_FIELDS, input.spec);
+    const raw = await db
+      .select({
+        id: configProject.id, name: configProject.name, status: configProject.status,
+        customerName: CUSTOMER_NAME, modelName: configModel.name, updatedAt: configProject.updatedAt,
+        _total: TOTAL,
+      })
+      .from(configProject)
+      .innerJoin(configModel, eq(configModel.id, configProject.modelId))
+      .where(and(eq(configProject.tenantId, context.tenantId), where))
+      // Newest first is the list's identity, not a default sort the user can lose; a saved view's
+      // orderby goes in front of it. `id` last: OFFSET paging over a non-unique sort silently
+      // duplicates and skips rows between pages, so the order has to be total.
+      .orderBy(...orderBy, desc(configProject.updatedAt), configProject.id)
+      .limit(input.top)
+      .offset(input.skip ?? 0);
+    return listPage(raw, input.top, input.skip);
+  }),
 
   get: userProcedure.input(z.object({ id: z.uuid() })).handler(async ({ input, context }) => {
     const [project] = await db
@@ -460,6 +504,7 @@ export const configsRouter = {
         customer: z.object({ cardCode: z.string(), cardName: z.string() }).nullable().optional(),
         entries: EntriesZ.optional(),
         batches: z.array(z.number().int().min(1)).optional(),
+        tables: TableRowsZ.optional(),
       }),
     )
     .handler(async ({ input, context }) => {
@@ -467,7 +512,8 @@ export const configsRouter = {
       const { id, ...rest } = input;
       const fields: Partial<typeof configProject.$inferInsert> = { ...rest, updatedAt: new Date() };
       // Changing what gets computed invalidates a previous run's "calculated" claim.
-      if (input.entries !== undefined || input.batches !== undefined) fields.status = "draft";
+      if (input.entries !== undefined || input.batches !== undefined || input.tables !== undefined)
+        fields.status = "draft";
       // Switching the model invalidates every entry (a param key only means something inside its
       // own model), so entries/batches start over. Only on an actual change — re-sending the same
       // modelId must not wipe a configuration. loadModel also proves the model is this tenant's.
@@ -482,6 +528,7 @@ export const configsRouter = {
           const model = await loadModel(context.tenantId, input.modelId);
           fields.entries = {};
           fields.batches = model.definition.batchDefaults;
+          fields.tables = {}; // a table key only means something inside its own model, like a param key
           fields.status = "draft";
         }
       }
@@ -566,14 +613,14 @@ export const configsRouter = {
 
       return db.transaction(async (tx) => {
         const [project] = await tx
-          .select({ status: configProject.status, candidates: configProject.candidates })
+          .select({ status: configProject.status, candidates: configProject.candidates, tables: configProject.tables })
           .from(configProject)
           .where(and(eq(configProject.id, input.projectId), eq(configProject.tenantId, context.tenantId)))
           .for("update");
         if (!project) throw new ORPCError("NOT_FOUND");
         await assertConfigMutable(context.tenantId, input.projectId, tx);
         validateSelectionPairs(project.candidates, input.selection);
-        const selections = applySelection(model.definition, lookups, project.candidates, input.selection);
+        const selections = applySelection(model.definition, lookups, project.candidates, input.selection, project.tables);
         await tx
           .update(configProject)
           .set({ selection: input.selection })

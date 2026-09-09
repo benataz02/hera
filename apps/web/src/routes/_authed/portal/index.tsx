@@ -1,10 +1,10 @@
 import { useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { IllustratedMessage, ObjectStatus, Text, Toolbar, ToolbarButton } from "@ui5/webcomponents-react";
 import "@ui5/webcomponents-fiori/dist/illustrations/NoEntries.js";
 import { orpc } from "../../../orpc.ts";
-import { applySpec, useListSpec, type ListColumn } from "../../../variants.ts";
+import { listQuery, useListSpec, type ListColumn } from "../../../variants.ts";
 import { ListReport } from "../../../components/ListReport.tsx";
 import { portalStatusUi, type PortalStatus } from "../../../components/portal/portalUi.ts";
 
@@ -41,13 +41,21 @@ const noData = (reason: "Empty" | "Filtered") =>
 
 function MyRequests() {
   const navigate = useNavigate();
-  const q = useQuery(orpc.portal.projects.list.queryOptions());
-
   // `portal:` keys are read-only views (variants.ts) — a portal client cannot save one, so the
   // page gets the ListReport chrome without a variant switcher. This key is deliberately not
   // seeded: an empty spec means every column, which is exactly the four below.
   const listSpec = useListSpec("portal:projects");
-  const rows = useMemo(() => applySpec(q.data ?? [], listSpec.spec, COLUMNS), [q.data, listSpec.spec]);
+  const page = useInfiniteQuery({
+    ...orpc.portal.projects.rows.infiniteOptions({
+      input: (skip: number | undefined) => ({ spec: listQuery(listSpec.spec), top: 100, ...(skip ? { skip } : {}) }),
+      initialPageParam: undefined as number | undefined,
+      getNextPageParam: (last) => last.nextSkip,
+    }),
+    enabled: listSpec.ready,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+  const rows = useMemo(() => (page.data?.pages ?? []).flatMap((p) => p.rows), [page.data]);
 
   return (
     <ListReport
@@ -56,9 +64,11 @@ function MyRequests() {
       columns={COLUMNS}
       keyField="id"
       rows={rows}
-      total={rows.length}
-      loading={q.isFetching}
-      error={q.error}
+      total={page.data?.pages[0]?.total ?? rows.length}
+      loading={page.isFetching && !page.isFetchingNextPage}
+      error={page.error}
+      hasMore={page.hasNextPage}
+      onLoadMore={() => { if (!page.isFetchingNextPage) void page.fetchNextPage(); }}
       onRowClick={(row) => navigate({ to: "/portal/$id", params: { id: String(row.id) } })}
       noData={noData}
       actions={

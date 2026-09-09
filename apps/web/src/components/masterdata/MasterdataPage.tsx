@@ -1,10 +1,10 @@
 import { useCallback, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { IllustratedMessage, Toolbar, ToolbarButton } from "@ui5/webcomponents-react";
 import "@ui5/webcomponents-fiori/dist/illustrations/AddColumn.js";
 import { orpc } from "../../orpc.ts";
-import { applySpec, useListSpec, type ListColumn } from "../../variants.ts";
+import { listQuery, useListSpec, type ListColumn } from "../../variants.ts";
 import { ListReport } from "../ListReport.tsx";
 import { confirm } from "../confirm.ts";
 import { toast } from "../toast.ts";
@@ -29,30 +29,27 @@ const noData = () => (
 export function MasterdataPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const list = useQuery(orpc.masterdata.list.queryOptions());
-  const invalidate = () => qc.invalidateQueries({ queryKey: orpc.masterdata.list.queryOptions().queryKey });
+  // masterdata.list still exists — MasterdataEditor and useDraftModel need whole rows. This page
+  // pages masterdata.rows, which returns only the six display columns, so both keys go.
+  const invalidate = () => {
+    void qc.invalidateQueries({ queryKey: orpc.masterdata.list.queryOptions().queryKey });
+    void qc.invalidateQueries({ queryKey: orpc.masterdata.rows.key() });
+  };
 
-  // The list endpoint returns the whole array, so the view runs locally instead of compiling to OData.
+  // kind/source/columnCount/rowCount used to be derived here; they are SQL expressions now, because
+  // a saved view has to sort and filter on them across pages this page no longer holds.
   const listSpec = useListSpec("masterdata");
-  const rows = useMemo(
-    () =>
-      applySpec(
-        (list.data ?? []).map((t) => ({
-          id: t.id,
-          name: t.name,
-          kind: t.kind === "query" ? "Query" : "Table",
-          source: t.kind === "query"
-            ? `${t.query?.target === "beas" ? "Beas" : "B1"} · ${t.query?.query.entitySet || "no entity set"}`
-            : "Maintained here",
-          columnCount: t.kind === "query" ? (t.query?.columns.length ?? 0) : t.columns.length,
-          rowCount: t.kind === "query" ? "Live" : String(t.rows.length),
-          updatedAt: t.updatedAt,
-        })),
-        listSpec.spec,
-        COLUMNS,
-      ),
-    [list.data, listSpec.spec],
-  );
+  const page = useInfiniteQuery({
+    ...orpc.masterdata.rows.infiniteOptions({
+      input: (skip: number | undefined) => ({ spec: listQuery(listSpec.spec), top: 100, ...(skip ? { skip } : {}) }),
+      initialPageParam: undefined as number | undefined,
+      getNextPageParam: (last) => last.nextSkip,
+    }),
+    enabled: listSpec.ready,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+  const rows = useMemo(() => (page.data?.pages ?? []).flatMap((p) => p.rows), [page.data]);
 
   const remove = useMutation(orpc.masterdata.remove.mutationOptions({ onSuccess: invalidate }));
 
@@ -85,9 +82,11 @@ export function MasterdataPage() {
       columns={COLUMNS}
       keyField="id"
       rows={rows}
-      total={rows.length}
-      loading={list.isFetching}
-      error={list.error ?? remove.error}
+      total={page.data?.pages[0]?.total ?? rows.length}
+      loading={page.isFetching && !page.isFetchingNextPage}
+      error={page.error ?? remove.error}
+      hasMore={page.hasNextPage}
+      onLoadMore={() => { if (!page.isFetchingNextPage) void page.fetchNextPage(); }}
       onRowClick={(row) => navigate({ to: "/masterdata/$id", params: { id: String(row.id) } })}
       onDelete={onDelete}
       noData={noData}

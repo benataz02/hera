@@ -1,12 +1,12 @@
 import type { ComponentProps } from "react";
 import { Bar, BusyIndicator, Button, MessageStrip } from "@ui5/webcomponents-react";
-import type { Entries, ModelDef, Propagation, ResolvedLookups, ResolvedTable } from "@hera/config-engine";
+import type { Entries, ModelDef, Propagation, ResolvedLookups, ResolvedTable, TableRows } from "@hera/config-engine";
 import { ConfiguratorForm, ConsistencyStatus } from "./ConfiguratorForm.tsx";
 import { ExtractPanel } from "./ExtractPanel.tsx";
 
 // Wizard step 1: the same form the builder preview uses, over ready lookups + propagate.
 // Lookup errors (agent offline, source unreachable) surface verbatim with a retry.
-export function StepConfigure({ modelId, model, lookups, lk, prop, lookupError, onRetryLookups, entries, onChange, onQueryPick, onNext, saving, conflicted, extract }: {
+export function StepConfigure({ modelId, model, lookups, lk, prop, lookupError, onRetryLookups, entries, onChange, onQueryPick, onNext, saving, conflicted, extract, tables, onTablesChange }: {
   modelId: string;
   model: ModelDef;
   lookups?: ResolvedLookups;
@@ -21,6 +21,8 @@ export function StepConfigure({ modelId, model, lookups, lk, prop, lookupError, 
   saving: boolean;
   conflicted: boolean;
   extract?: ComponentProps<typeof ExtractPanel>["extract"];
+  tables?: TableRows;
+  onTablesChange?: (next: TableRows) => void;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
@@ -33,7 +35,8 @@ export function StepConfigure({ modelId, model, lookups, lk, prop, lookupError, 
       <ExtractPanel modelId={modelId} model={model} entries={entries} onChange={onChange} extract={extract} />
       {lookups && lk && prop ? (
         <ConfiguratorForm model={model} lookups={lookups} lk={lk} prop={prop} entries={entries} onChange={onChange}
-          onQueryPick={onQueryPick} querySource={{ kind: "portal", modelId }} />
+          onQueryPick={onQueryPick} querySource={{ kind: "portal", modelId }}
+          tables={tables} onTablesChange={onTablesChange} />
       ) : lookupError ? null : <BusyIndicator active delay={0} />}
       <Bar design="FloatingFooter"
         startContent={prop ? <ConsistencyStatus prop={prop} /> : undefined}

@@ -31,7 +31,7 @@ export const LookupRefZ = z.discriminatedUnion("source", [
 ]);
 export type LookupRef = z.infer<typeof LookupRefZ>;
 
-const KeyZ = z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, "must be a valid identifier");
+export const KeyZ = z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]*$/, "must be a valid identifier");
 
 /** A live read, as data rather than as a URL string. `$select` is derived from the source's
  *  `columns` and deliberately not stored — one field fewer, and the two can never disagree.
@@ -118,6 +118,59 @@ export const HistoryMappingZ = z.object({
 });
 export type HistoryMapping = z.infer<typeof HistoryMappingZ>;
 
+/** One column of a config table. `cell` is what the salesperson sees: a plain field, a picker
+ *  over the same LookupRef params use, or a value the model computes per row. */
+export const TableColumnZ = z.object({
+  key: KeyZ,
+  label: z.string(),
+  type: z.enum(["string", "number", "boolean"]),
+  unit: z.string().optional(),
+  cell: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("input") }),
+    z.object({ kind: z.literal("options"), ref: LookupRefZ }),
+    z.object({ kind: z.literal("formula"), expr: z.string() }),
+  ]),
+});
+export type TableColumn = z.infer<typeof TableColumnZ>;
+
+const TableBaseZ = {
+  key: KeyZ,
+  title: z.string(),
+  columns: z.array(TableColumnZ).min(1),
+  minRows: z.number().int().nonnegative().optional(),
+  maxRows: z.number().int().positive().optional(),
+};
+
+/** `calc` feeds sums into the model's formulas. `items` does that too, and additionally becomes
+ *  n quotation lines: merge production is 1 config, 1 BOM, 1 routing, n items. */
+export const TableDefZ = z.discriminatedUnion("role", [
+  z.object({ ...TableBaseZ, role: z.literal("calc") }),
+  z.object({
+    ...TableBaseZ,
+    role: z.literal("items"),
+    /** number column: units of this item per finished configuration unit */
+    qtyCol: KeyZ,
+    /** number column the joint cost is split by (area, weight, whatever the shop uses) */
+    basisCol: KeyZ,
+    /** column key -> B1 DocumentLine field. ItemCode/Quantity/UnitPrice are the split's, not yours. */
+    map: z.record(z.string(), z.string()).optional(),
+  }),
+]);
+export type TableDef = z.infer<typeof TableDefZ>;
+
+/** Per-project row data, by table key. Only input/option cells are stored: formula cells are
+ *  re-evaluated on every read, like every other number in this engine. */
+export type TableRows = Record<string, Record<string, Val>[]>;
+// same union as EntriesZ, for the same reason: Val's list arm is real (a multicombo cell), and a
+// zod schema narrower than the TS type would fail to typecheck at every call site that stores one.
+export const TableRowsZ = z.record(
+  z.string(),
+  z.array(z.record(z.string(), z.union([ValZ, z.array(z.string())]))),
+);
+
+/** Scalar a table contributes to every expression scope, e.g. holes_perimeter, holes_count. */
+export const aggregateKey = (tableKey: string, col: string) => `${tableKey}_${col}`;
+
 export const ModelDefZ = z.object({
   name: z.string(),
   parameters: z.array(ParamZ),
@@ -127,10 +180,15 @@ export const ModelDefZ = z.object({
         key: KeyZ,
         title: z.string(),
         groups: z.array(z.object({ key: KeyZ, title: z.string(), params: z.array(KeyZ) })),
+        /** tables rendered full width under this section's fields */
+        tables: z.array(KeyZ).optional(),
       }),
     ),
   }),
   computed: z.array(z.object({ key: KeyZ, expr: z.string() })),
+  // optional, not .default([]): same reason as pricing.currency below — a zod default is required
+  // in the inferred type and would force `tables: []` into every existing ModelDef literal.
+  tables: z.array(TableDefZ).optional(),
   constraints: z.array(ConstraintZ),
   bom: z.array(BomLineZ),
   routing: z.array(OperationZ),

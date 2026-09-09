@@ -6,6 +6,10 @@ import {
 } from "@ui5/webcomponents-react";
 import { orpc } from "../../orpc.ts";
 
+const STANDARD: Record<string, string> = {
+  ItemCode: "Item", ItemDescription: "Description", Quantity: "Qty", UnitPrice: "Unit price",
+};
+
 const money = (n: unknown, currency?: string) =>
   typeof n === "number"
     ? n.toLocaleString(undefined, { style: "currency", currency: currency || "EUR" })
@@ -34,6 +38,10 @@ export function StepCreateQuote({ projectId }: { projectId: string }) {
   const d = draft.data!;
   const lines = (d.data.DocumentLines ?? []) as Record<string, unknown>[];
   const currency = d.data.DocCurrency as string | undefined;
+  // An items table maps its own columns onto DocumentLine fields, so the columns are the model's
+  // to choose. Standard four pinned in reading order; anything mapped follows under its B1 name.
+  const extra = [...new Set(lines.flatMap((l) => Object.keys(l)))].filter((k) => !(k in STANDARD));
+  const cols = [...Object.keys(STANDARD), ...extra];
 
   if (d.quoted) {
     return (
@@ -50,18 +58,23 @@ export function StepCreateQuote({ projectId }: { projectId: string }) {
       <Table
         headerRow={
           <TableHeaderRow>
-            <TableHeaderCell><span>Item</span></TableHeaderCell>
-            <TableHeaderCell><span>Description</span></TableHeaderCell>
-            <TableHeaderCell><span>Qty</span></TableHeaderCell>
-            <TableHeaderCell><span>Unit price</span></TableHeaderCell>
+            {cols.map((k) => (
+              <TableHeaderCell key={k}><span>{STANDARD[k] ?? k}</span></TableHeaderCell>
+            ))}
+            <TableHeaderCell><span>Line total</span></TableHeaderCell>
           </TableHeaderRow>
         }>
         {lines.map((l, i) => (
           <TableRow key={i} rowKey={`q-${i}`}>
-            <TableCell><Text>{String(l.ItemCode ?? "")}</Text></TableCell>
-            <TableCell><Text>{String(l.ItemDescription ?? "")}</Text></TableCell>
-            <TableCell><Text>{String(l.Quantity ?? "")}</Text></TableCell>
-            <TableCell><Text>{money(l.UnitPrice, currency)}</Text></TableCell>
+            {cols.map((k) => (
+              <TableCell key={k}>
+                <Text>{k === "UnitPrice" ? money(l[k], currency) : String(l[k] ?? "")}</Text>
+              </TableCell>
+            ))}
+            {/* shown because with a split the reconciliation is the point: these have to add up */}
+            <TableCell>
+              <Text>{money(Number(l.Quantity) * Number(l.UnitPrice), currency)}</Text>
+            </TableCell>
           </TableRow>
         ))}
       </Table>

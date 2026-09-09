@@ -51,7 +51,7 @@ type Handler = (t: B1Transport, body: any) => Promise<unknown>;
 const routes: Record<string, Handler> = {
   "/entity-set": (t, b) => t.readEntitySet(b.entitySet, b.query),
   "/entity": (t, b) => t.readEntity(b.entitySet, b.key, b.query),
-  "/next": (t, b) => t.readNext(b.nextLink),
+  "/next": (t, b) => t.readNext(b.nextLink, b.maxPageSize),
   "/cross-join": (t, b) => t.crossJoin(b),
   "/create": (t, b) => t.createEntity(b.entitySet, b.data, { prefer: b.prefer }),
   "/update": (t, b) => t.updateEntity(b.entitySet, b.key, b.data, { etag: b.etag }),

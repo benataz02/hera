@@ -1,7 +1,7 @@
 import { ORPCError } from "@orpc/server";
 import { eq } from "drizzle-orm";
 import { db, sapConnection } from "@hera/db";
-import { B1Error, RemoteTransport, readPages, rowsOrThrow, type AgentTarget, type B1Transport, type Connector } from "@hera/b1";
+import { B1Error, RemoteTransport, nextLinkOf, readPages, rowsOrThrow, type AgentTarget, type B1Transport, type Connector } from "@hera/b1";
 import { decryptSecret } from "./crypto.ts";
 import { DEFAULT_PAGE, type QueryRunner } from "./lookups.ts";
 
@@ -98,12 +98,16 @@ export function runnerFor(conn: Connector): QueryRunner {
       }
 
       // The caller may ask for less than a page (the masterdata editor's preview reads five rows);
-      // DEFAULT_PAGE stays the ceiling, so `top` can only ever shrink the read.
-      const top = Math.min(opts?.top ?? DEFAULT_PAGE, DEFAULT_PAGE);
-      const res = await t.readEntitySet(query.entitySet, { ...base, top, skip: opts?.skip });
+      // DEFAULT_PAGE stays the ceiling, so `size` can only ever shrink the read.
+      const size = Math.min(opts?.top ?? DEFAULT_PAGE, DEFAULT_PAGE);
+      // Page size is `Prefer: odata.maxpagesize`, not `$top`: `$top` bounds the whole result set,
+      // so B1 stops emitting `@odata.nextLink` once it is exhausted and the value help would page
+      // exactly once. `$skip` stays the cursor here — see the note in CLAUDE.md; the entity list
+      // uses the nextLink itself, but a value help's cursor must stay a plain offset.
+      const res = await t.readEntitySet(query.entitySet, { ...base, maxPageSize: size, skip: opts?.skip });
       const rows = rowsOrThrow(res.data, `Lookup ${target} ${query.entitySet}`);
-      // A full page means there is probably another. One extra empty read at the end beats
-      // paying for $count on every value-help keystroke.
-      return { rows, ...(rows.length === top ? { nextSkip: (opts?.skip ?? 0) + rows.length } : {}) };
+      // @odata.nextLink is B1's own "there is more", so paging no longer depends on the page it
+      // returned matching the $top we asked for. The cursor stays a plain $skip offset.
+      return { rows, ...(nextLinkOf(res.data) ? { nextSkip: (opts?.skip ?? 0) + rows.length } : {}) };
     });
 }

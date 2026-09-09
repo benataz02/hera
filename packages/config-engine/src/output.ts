@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { DslError, evaluate, type Scope } from "./dsl";
-import type { Entries, ModelDef, ResolvedLookups } from "./model";
+import type { Entries, ModelDef, ResolvedLookups, TableRows } from "./model";
 import { bindings } from "./propagate";
 
 export type BomResult = {
@@ -85,9 +85,10 @@ export function computeOutputs(
   assignment: Entries,
   batchQty: number,
   overrides?: OutputOverrides,
+  tableRows?: TableRows,
 ): Outputs {
   if (batchQty < 1) throw new RangeError(`batchQty must be >= 1, got ${batchQty}`);
-  const { values } = bindings(model, lookups, assignment);
+  const { values } = bindings(model, lookups, assignment, tableRows);
   const scope: Scope = { vars: { ...values, qty: batchQty }, tables: lookups.tables };
   const numeric = (src: string, what: string): number => {
     const v = evaluate(src, scope);

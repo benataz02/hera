@@ -1,5 +1,5 @@
 import { boolean, index, jsonb, integer, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { Entries, ModelDef, OutputOverrides, Outputs, QuerySource, Val } from "@hera/config-engine";
+import type { Entries, ModelDef, OutputOverrides, Outputs, QuerySource, TableRows, Val } from "@hera/config-engine";
 
 // Configurator persistence: a mutable model, and one configuration document that carries its own
 // latest calculation. Spec: docs/superpowers/specs/2026-07-03-configurator-design.md.
@@ -72,11 +72,12 @@ export type ConfigSelection = { candidateIdx: number; batchQty: number; override
 // `candidates` in place.
 //
 // `candidates` are the entries in this same row, enumerated: there is no second copy of `entries`
-// because every writer of `entries`/`batches` also sets `status = 'draft'` (configs.update,
+// because every writer of `entries`/`batches`/`tables` also sets `status = 'draft'` (configs.update,
 // portal.projects.update), so `status === 'calculated'` already means "these entries produced
 // these candidates".
 // ponytail: that invariant is enforced by convention, not a constraint — a trigger only if a
-//           third writer ever appears.
+//           third writer ever appears. `tables` joined `entries`/`batches` as an input to the
+//           calculation, so it is subject to the same rule.
 export const configProject = pgTable(
   "config_project",
   {
@@ -91,6 +92,10 @@ export const configProject = pgTable(
     events: jsonb("events").$type<ProjectEvent[]>().notNull().default([]),
     entries: jsonb("entries").$type<Entries>().notNull().default({}),
     batches: jsonb("batches").$type<number[]>().notNull().default([]),
+    // Row data for the model's tables (item matrix, calculation tables), by table key. A sibling
+    // column rather than more keys in `entries`: Entries values are compared with === across
+    // propagate/enumerate/enrichLookups, and widening Val to hold row arrays would touch all of it.
+    tables: jsonb("tables").$type<TableRows>().notNull().default({}),
     candidates: jsonb("candidates").$type<ConfigCandidate[]>().notNull().default([]),
     selection: jsonb("selection").$type<ConfigSelection[]>(),
     // When `candidates` was computed. Compared against config_model.updatedAt to decide whether a

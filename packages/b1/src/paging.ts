@@ -13,7 +13,7 @@ export async function readPages(
   const rows = rowsOf(res.data);
   let next = nextLinkOf(res.data);
   for (let page = 1; next && page < opts.maxPages; page++) {
-    res = await t.readNext(next);
+    res = await t.readNext(next, q?.maxPageSize ?? q?.top);
     rows.push(...rowsOf(res.data));
     next = nextLinkOf(res.data);
   }

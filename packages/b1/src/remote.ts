@@ -83,8 +83,8 @@ export class RemoteTransport implements B1Transport {
   readEntity(entitySet: string, key: Key, query?: QueryOptions) {
     return this.call("/entity", { entitySet, key, query });
   }
-  readNext(nextLink: string) {
-    return this.call("/next", { nextLink });
+  readNext(nextLink: string, maxPageSize?: number) {
+    return this.call("/next", { nextLink, maxPageSize });
   }
   crossJoin(spec: CrossJoinSpec) {
     return this.call("/cross-join", spec);

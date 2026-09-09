@@ -44,6 +44,7 @@ const condition = (cond: FilterCond, f: B1Field): string => {
 /**
  * `spec` -> `QueryOptions`. Rules:
  *  - $select is the key fields plus the visible columns, so a row can always be opened.
+ *  - paging is server-driven (Prefer: odata.maxpagesize) and continued via @odata.nextLink.
  *  - a filter naming a field the entity does not have is an error: silently dropping it would
  *    show MORE rows than were asked for.
  *  - a *select* naming a missing field is not: a saved view outliving a UDF should still open.
@@ -52,7 +53,7 @@ const condition = (cond: FilterCond, f: B1Field): string => {
 export function compileList(
   schema: B1EntitySchema,
   spec: ListVariantDef,
-  opts: { top: number; skip?: number; count?: boolean } = { top: 50 },
+  opts: { pageSize: number; count?: boolean },
 ): QueryOptions {
   const fields = scalarFields(schema);
   const byName = new Map(fields.map((f) => [f.name, f]));
@@ -80,8 +81,11 @@ export function compileList(
     select,
     ...(filter ? { filter } : {}),
     ...(ord ? { orderby: `${ord.field}${ord.dir === "desc" ? " desc" : ""}` } : {}),
-    top: opts.top,
-    ...(opts.skip ? { skip: opts.skip } : {}),
+    // The page size is `Prefer: odata.maxpagesize`, never `$top`. `$top` bounds the whole result
+    // set, so once it is exhausted B1 stops emitting `@odata.nextLink` — a list paged with `$top`
+    // reads its first page and then cannot tell "there is more" from "that was everything".
+    // Server-driven paging + the nextLink it returns is the only combination that can.
+    maxPageSize: opts.pageSize,
     ...(opts.count ? { count: true } : {}),
   };
 }
