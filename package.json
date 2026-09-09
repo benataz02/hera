@@ -38,6 +38,7 @@
     "migrate:queries": "bun --env-file=.env scripts/migrate-query-tables.ts",
     "migrate:masterdata": "bun --env-file=.env scripts/migrate-masterdata.ts",
     "dev:agent": "bun --cwd apps/agent dev",
-    "test:b1": "bun test packages/b1"
+    "test:b1": "bun test packages/b1",
+    "test:agent": "bun test apps/agent"
   }
 }

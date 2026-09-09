@@ -55,7 +55,8 @@ hera-agent (Bun, on the customer's network) ── SAP B1 Service Layer /b1s/v2
 The agent is a Windows service the customer installs. SAP credentials live in its `agent.json`
 and never reach the cloud. `sapConnection.agentUrl` is `http://localhost:4000` in dev and a
 Cloudflare Tunnel hostname in production — **that difference is a database row, not a branch in
-the code**, which is why nothing here is conditional on "dev vs prod".
+the code**, which is why nothing here is conditional on "dev vs prod". The production shape (tunnel
++ Access service token + the agent's own assertion check) is `docs/cloudflare-tunnel-agent.md`.
 
 ## Tenancy is the request host
 
@@ -202,7 +203,7 @@ is silently dropped (a saved view outliving a UDF should still open).
 
 `docs/superpowers/specs/` and `docs/superpowers/plans/` hold the design record per feature, dated.
 `docs/*.md` are the operator/user guides (model builder, history pane, drawing extraction, durable
-writes) — update them when you change the surface they describe.
+writes, Cloudflare Tunnel) — update them when you change the surface they describe.
 
 ---
 

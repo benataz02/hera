@@ -2,7 +2,7 @@
 # Run elevated, from the folder holding hera-agent.exe and agent.json.
 #
 #   bun run build                       # produces hera-agent.exe
-#   .\deploy\install-service.ps1        # dev / LAN: no tunnel
+#   .\deploy\install-service.ps1        # dev / LAN: no tunnel (set "bindHost": "0.0.0.0" in agent.json)
 #   .\deploy\install-service.ps1 -TunnelToken <token>
 #
 # ponytail: sc.exe, not NSSM or a service wrapper. A compiled Bun binary is a normal exe and
@@ -36,6 +36,8 @@ if ($TunnelToken) {
   # Production only: cloudflared dials out, so no inbound firewall hole. The agent URL in
   # sap_connection then becomes the tunnel hostname - config, not code.
   cloudflared.exe service install $TunnelToken
+  Write-Host "Tunnel installed. agent.json needs an `"access`" block (teamDomain + aud) so the agent"
+  Write-Host "verifies the Cloudflare Access assertion - see docs/cloudflare-tunnel-agent.md."
 }
 
 Write-Host "Installed. Health check: curl http://localhost:4000/health"

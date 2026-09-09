@@ -1,0 +1,40 @@
+{
+  "port": 4000,
+  "bindHost": "127.0.0.1",
+  "secret": "dev-secret-change-me-min-32-chars-long",
+
+  "//access": "Production only. Delete this block for a dev or LAN install — see docs/cloudflare-tunnel-agent.md.",
+  "access": {
+    "teamDomain": "acme.cloudflareaccess.com",
+    "aud": "<Application Audience tag from the Access application>"
+  },
+
+  "b1": {
+    "url": "https://sapb1:50000/b1s/v2",
+    "companyDb": "SBODEMOGB",
+    "user": "manager",
+    "pass": "...",
+    "allowSelfSigned": true,
+    "timeoutMs": 60000
+  },
+
+  "//beas": "Optional: same Service Layer host, different basePath and auth.",
+  "beas": {
+    "url": "https://sapb1:50000",
+    "basePath": "/beas/api",
+    "auth": "basic",
+    "user": "beasuser",
+    "pass": "...",
+    "allowSelfSigned": true
+  },
+
+  "//apiGateway": "Optional: the B1 API Gateway Reporting Service, used by /print.",
+  "apiGateway": {
+    "url": "https://sapb1:60020",
+    "companyDb": "SBODEMOGB",
+    "user": "manager",
+    "pass": "...",
+    "layouts": { "Quotations": "QUT20009" },
+    "allowSelfSigned": true
+  }
+}

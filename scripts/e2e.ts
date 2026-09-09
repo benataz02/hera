@@ -39,7 +39,14 @@ console.log(`e2e against ${slug} via ${conn.agentUrl}\n`);
 
 await step("agent /health", async () => {
   // The one unauthenticated route; proves the process is up before blaming the Service Layer.
-  const res = await fetch(new URL("/health", conn.agentUrl));
+  // The service token still has to be sent: through a tunnel the *edge* answers first, and
+  // without it Access returns its login redirect rather than the agent's JSON.
+  const res = await fetch(new URL("/health", conn.agentUrl), {
+    headers:
+      conn.accessClientId && conn.accessClientSecret
+        ? { "CF-Access-Client-Id": conn.accessClientId, "CF-Access-Client-Secret": conn.accessClientSecret }
+        : {},
+  });
   if (!res.ok) throw new Error(`status ${res.status}`);
   return JSON.stringify(await res.json());
 });

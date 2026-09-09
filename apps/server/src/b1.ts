@@ -55,6 +55,12 @@ export function toOrpcError(e: unknown): unknown {
       return new ORPCError("BAD_GATEWAY", {
         message: "The on-prem agent rejected the shared secret. Re-run seed:agent with the secret from agent.json.",
       });
+    // The edge, not SAP: an Access denial never reached the Service Layer, so it must not be
+    // phrased as a SAP rejection — same reasoning as the agent-secret 401 above.
+    case e.code === "access":
+      return new ORPCError("BAD_GATEWAY", {
+        message: `${message} — check the tenant's service token (seed:agent --access-id/--access-secret) and the Access policy.`,
+      });
     case e.status === 401 || e.status === 403:
       return new ORPCError("BAD_GATEWAY", { message: `SAP rejected the request: ${message}` });
     case e.status === 404:

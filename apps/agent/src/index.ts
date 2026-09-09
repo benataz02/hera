@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { DirectTransport, ServiceLayer, B1Error, type B1Transport } from "@hera/b1";
 import { ApiGateway, type ApiGatewayConfig } from "./api-gateway.ts";
+import { AccessVerifier, type AccessConfig } from "./access.ts";
 
 // One agent service, one B1 company database. A second company DB means a second agent on a
 // second port with its own agent.json — which is what keeps ServiceLayer exactly as the sample
@@ -17,7 +18,19 @@ type ServiceConfig = {
   companyDb?: string; user: string; pass: string;
   allowSelfSigned?: boolean; timeoutMs?: number;
 };
-type AgentConfig = { port?: number; secret: string; b1: ServiceConfig; beas?: ServiceConfig; apiGateway?: ApiGatewayConfig };
+type AgentConfig = {
+  port?: number;
+  /** Interface to listen on. Defaults to loopback: in the production shape cloudflared runs on
+   *  this same host and dials out, so the agent never needs to be reachable from the LAN. A LAN
+   *  install without a tunnel sets "0.0.0.0" deliberately. */
+  bindHost?: string;
+  secret: string;
+  /** Present in production, absent in dev — see access.ts. */
+  access?: AccessConfig;
+  b1: ServiceConfig;
+  beas?: ServiceConfig;
+  apiGateway?: ApiGatewayConfig;
+};
 
 const configPath = process.env.HERA_AGENT_CONFIG ?? "agent.json";
 const config = JSON.parse(readFileSync(configPath, "utf8")) as AgentConfig;
@@ -36,6 +49,11 @@ const transports: Record<string, B1Transport> = Object.fromEntries(
 // Optional: an install without a Reporting Service simply has no apiGateway block, and /print
 // answers 503 rather than the agent refusing to start.
 const gateway = config.apiGateway ? new ApiGateway(config.apiGateway, logger) : null;
+
+// Optional in the same way: dev has no edge in front of the agent, so there is no assertion to
+// check. Production has both this and the bearer secret — see access.ts for why neither replaces
+// the other.
+const access = config.access ? new AccessVerifier(config.access, logger) : null;
 
 const sha = (s: string) => createHash("sha256").update(s).digest();
 const secretHash = sha(config.secret);
@@ -63,11 +81,24 @@ const fail = (status: number, code: string | number | null, message: string) =>
   Response.json({ error: { status, code, message } }, { status: status === 401 ? 401 : 502 });
 
 const server = Bun.serve({
+  hostname: config.bindHost ?? "127.0.0.1",
   port: config.port ?? 4000,
   idleTimeout: 255,
   async fetch(req) {
     const { pathname } = new URL(req.url);
+    // /health stays the one unauthenticated route: it is what the installer curls on the box and
+    // what e2e checks before blaming the Service Layer, and it reveals nothing but "up". The
+    // Access policy still gates it from the internet.
     if (pathname === "/health") return Response.json({ ok: true, services: Object.keys(services) });
+    if (access) {
+      try {
+        await access.assert(req);
+      } catch (e) {
+        const err = e instanceof B1Error ? e : new B1Error(403, "access", String(e));
+        logger.warn(`${pathname}: ${err.message}`);
+        return Response.json({ error: { status: err.status, code: err.code, message: err.message } }, { status: 403 });
+      }
+    }
     if (!authorized(req)) return fail(401, null, "Bad agent secret");
     if (req.method !== "POST") return fail(405, null, "Method not allowed");
 
@@ -99,7 +130,10 @@ const server = Bun.serve({
   },
 });
 
-console.log(`hera-agent on :${server.port} — services: ${Object.keys(services).join(", ")}${gateway ? " + print" : ""}`);
+console.log(
+  `hera-agent on ${server.hostname}:${server.port} — services: ${Object.keys(services).join(", ")}` +
+    `${gateway ? " + print" : ""}${access ? ` — Cloudflare Access: ${access.issuer}` : ""}`,
+);
 
 // Release the B1 licence slot when the service stops.
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
