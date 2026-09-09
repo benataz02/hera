@@ -14,9 +14,9 @@ type Tables = TableCols[];
 // labelSpan 12 = labels on top, the shape ConfiguratorForm uses, so a field looks identical here
 // and on the real form. A group flows its items across the columns it spans, so PAIRS puts two
 // fields per row and FULL one — that is the only way to give a field the whole width.
-const PAIRS = { labelSpan: "S12 M12 L12 XL12", layout: "S1 M2 L2 XL2", headerLevel: "H5" } as const;
-const FULL = { labelSpan: "S12 M12 L12 XL12", layout: "S1 M1 L1 XL1", headerLevel: "H5" } as const;
-const W = { width: "100%" } as const;
+export const PAIRS = { labelSpan: "S12 M12 L12 XL12", layout: "S1 M2 L2 XL2", headerLevel: "H5" } as const;
+export const FULL = { labelSpan: "S12 M12 L12 XL12", layout: "S1 M1 L1 XL1", headerLevel: "H5" } as const;
+export const W = { width: "100%" } as const;
 const ICON = { marginInlineStart: "0.375rem", cursor: "help", color: "var(--sapContent_NonInteractiveIconColor)" } as const;
 
 // The ObjectPage brings its own padding and needs a height to scroll in — the dialog's own padding
@@ -28,7 +28,7 @@ if (typeof document !== "undefined") {
 }
 
 /** Label + the ⓘ carrying the field's explanation — the only help a field gets. */
-const lbl = (text: string, help: string, required?: boolean) => (
+export const lbl = (text: string, help: string, required?: boolean) => (
   <Label required={required}>
     {text}
     <Icon name="message-information" title={help} accessibleName={help} style={ICON} />

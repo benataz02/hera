@@ -11,8 +11,11 @@ import { listQuery, useListSpec, type ListColumn } from "../../variants.ts";
 import { ListReport } from "../ListReport.tsx";
 import { confirm } from "../confirm.ts";
 import { toast } from "../toast.ts";
+import { itemsTable } from "./TablesTab.tsx";
 
 // Minimal valid model a new draft starts from; passes checkModel (unitCost is in pricing scope).
+// The item grid is not optional — every model quotes through it, so it is seeded here rather than
+// left for the author to remember on the Tables tab.
 export function starterModel(name: string): ModelDef {
   return {
     name,
@@ -20,6 +23,7 @@ export function starterModel(name: string): ModelDef {
     structure: { sections: [{ key: "main", title: "General", groups: [{ key: "general", title: "General", params: [] }] }] },
     computed: [],
     constraints: [],
+    tables: [itemsTable()],
     bom: [],
     routing: [],
     pricing: { priceExpr: "unitCost * 1.2", quoteItemCode: "CFG" },

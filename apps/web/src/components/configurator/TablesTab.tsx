@@ -1,11 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import {
-  Bar, Button, Input, Label, MessageStrip, Option, Panel, Select, StepInput,
-  Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, TableRowAction, Text, Title, Toolbar,
+  Bar, Button, Form, FormGroup, FormItem, Input, MessageStrip, ObjectStatus, Option, Panel, Select,
+  StepInput, Table, TableCell, TableHeaderCell, TableHeaderRow, TableRow, TableRowAction, Text,
+  Title, Toolbar, ToolbarButton, ToolbarItem, ToolbarSpacer,
 } from "@ui5/webcomponents-react";
 import type { Issue, LookupRef, ModelDef, TableColumn, TableDef } from "@hera/config-engine";
 import { orpc } from "../../orpc.ts";
+import { confirm } from "../confirm.ts";
 import { ExprInput } from "./ExprInput.tsx";
+import { PAIRS, W, lbl } from "./ParamDialog.tsx";
 import type { TableCols } from "./exprHelpers.ts";
 import { issueFor } from "./useDraftModel.ts";
 
@@ -33,22 +36,39 @@ const parseManual = (type: TableColumn["type"], text: string): LookupRef => ({
     .map((v) => ({ value: type === "number" ? Number(v) : type === "boolean" ? v === "true" : v })),
 });
 
-const firstNumeric = (cols: TableColumn[]) => cols.find((c) => c.type === "number")?.key ?? "";
+/** The one mandatory item grid every model carries. `itemcode` rides to SAP as a UDF rather than
+ *  DocumentLine.ItemCode: the generic configurator item stays the B1 item (config-quote.ts, and
+ *  RESERVED_LINE_FIELDS enforces it), and the Crystal Report layouts read U_HERA_ItemCode.
+ *  `basis` is its own column rather than `quantity` reused — splitShares weights a row by
+ *  basis x qty, so pointing both at one column would weight by qty squared. Left blank on every
+ *  row it weighs nothing, which is already an equal split. */
+export const itemsTable = (): TableDef => ({
+  key: "items",
+  title: "Items",
+  role: "items",
+  qtyCol: "quantity",
+  basisCol: "basis",
+  map: { itemcode: "U_HERA_ItemCode", itemname: "ItemDescription" },
+  columns: [
+    { key: "itemcode", label: "Item code", type: "string", cell: { kind: "input" } },
+    { key: "itemname", label: "Item name", type: "string", cell: { kind: "input" } },
+    { key: "quantity", label: "Quantity", type: "number", cell: { kind: "input" } },
+    { key: "basis", label: "Cost basis", type: "number", cell: { kind: "input" } },
+  ],
+});
 
-/** calc to items and back, keeping whatever the other role does not carry. */
-function withRole(t: TableDef, role: TableDef["role"]): TableDef {
-  if (t.role === role) return t;
-  const { key, title, columns, minRows, maxRows } = t;
-  const base = { key, title, columns, minRows, maxRows };
-  return role === "items"
-    ? { ...base, role: "items", qtyCol: firstNumeric(columns), basisCol: firstNumeric(columns) }
-    : { ...base, role: "calc" };
-}
+/** Columns the table's own definition leans on, so the delete action is withheld from them:
+ *  dropping one would either break the price split or silently stop writing a mapped SAP field.
+ *  Derived rather than a hardcoded list, so it follows the author if they remap. */
+const lockedColumns = (t: TableDef): Set<string> =>
+  t.role === "items" ? new Set([t.qtyCol, t.basisCol, ...Object.keys(t.map ?? {})]) : new Set<string>();
 
 // Tables: n rows by author-defined columns. Two roles over one shape - a calc table only feeds sums
-// into the model's formulas, an items table does that AND becomes n quotation lines (merge
+// into the model's formulas, the items table does that AND becomes n quotation lines (merge
 // production: 1 config, 1 BOM, 1 routing, n items). Every table contributes <table>_<column> and
 // <table>_count to every expression scope, which is the whole interface to the rest of the model.
+// The role is not a choice on this page: a model has exactly one items table, seeded by
+// starterModel and undeletable, and every table added here is a calc table.
 export function TablesTab({ draft, update, issues, tables }: {
   draft: ModelDef;
   update: Update;
@@ -81,52 +101,88 @@ export function TablesTab({ draft, update, issues, tables }: {
       },
     }));
 
-  const addTable = (role: TableDef["role"]) =>
-    update((d) => {
-      const key = newKey(role === "items" ? "items" : "table", (d.tables ?? []).map((t) => t.key));
-      const columns: TableColumn[] =
-        role === "items"
-          ? [
-              { key: "code", label: "Item code", type: "string", cell: { kind: "input" } },
-              { key: "qty", label: "Pieces", type: "number", cell: { kind: "input" } },
-              { key: "basis", label: "Cost basis", type: "number", cell: { kind: "input" } },
-            ]
-          : [{ key: "value", label: "Value", type: "number", cell: { kind: "input" } }];
-      const def: TableDef =
-        role === "items"
-          ? { key, title: "Items", role: "items", columns, qtyCol: "qty", basisCol: "basis" }
-          : { key, title: "Table", role: "calc", columns };
-      return { ...d, tables: [...(d.tables ?? []), def] };
-    });
+  const addCalcTable = () =>
+    update((d) => ({
+      ...d,
+      tables: [
+        ...(d.tables ?? []),
+        {
+          key: newKey("table", (d.tables ?? []).map((t) => t.key)),
+          title: "Table",
+          role: "calc",
+          columns: [{ key: "value", label: "Value", type: "number", cell: { kind: "input" } }],
+        },
+      ],
+    }));
 
-  const hasItems = defs.some((t) => t.role === "items");
+  const deleteTable = async (i: number, t: TableDef) => {
+    const ok = await confirm({
+      title: "Delete",
+      message: `Delete table "${t.title || t.key}"? Formulas reading ${t.key}_count or its column sums will stop resolving.`,
+      actionText: "Delete",
+      destructive: true,
+    });
+    if (ok) update((d) => ({ ...d, tables: (d.tables ?? []).filter((_, j) => j !== i) }));
+  };
+
+  // The items grid leads: it is the one that becomes quotation lines. Carry the original index —
+  // every edit and every issue path is keyed on position in draft.tables, not on display order.
+  const ordered = defs
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => Number(b.t.role === "items") - Number(a.t.role === "items"));
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", padding: "1rem" }}>
       <Bar design="Subheader" startContent={<Title level="H5">Tables</Title>}
-        endContent={
-          <Toolbar design="Transparent">
-            <Button icon="add" onClick={() => addTable("calc")}>Add calculation table</Button>
-            <Button icon="add" design="Emphasized" disabled={hasItems} onClick={() => addTable("items")}
-              tooltip={hasItems ? "A model can have one item matrix" : undefined}>Add item matrix</Button>
-          </Toolbar>
-        } />
+        endContent={<Button icon="add" onClick={addCalcTable}>Add calculation table</Button>} />
       <Text>
-        A table's numeric columns are summed into <code>&lt;table&gt;_&lt;column&gt;</code>, and its row count
-        into <code>&lt;table&gt;_count</code> — use those anywhere a parameter works. An item matrix additionally
-        becomes one quotation line per row, with the configuration's price split across them by cost
-        basis times pieces.
+        Rows the salesperson fills in per configuration — not the shared masterdata a <code>LOOKUP()</code>
+        {" "}or a Table domain reads from. Numeric columns sum into <code>&lt;table&gt;_&lt;column&gt;</code> and
+        the row count into <code>&lt;table&gt;_count</code>, usable anywhere a parameter is.
       </Text>
-      <Text>
-        These are rows the salesperson fills in per configuration — not the shared masterdata tables
-        a <code>LOOKUP()</code> or a Table domain reads from.
-      </Text>
-      {defs.length === 0 ? <Text>No tables. A model without one behaves exactly as before.</Text> : null}
 
-      {defs.map((t, i) => {
+      {/* Only reachable on a model saved before the item grid became mandatory. Deliberately not
+          repaired on render: materialising a table the author never asked for would mark their
+          draft dirty behind their back. */}
+      {defs.every((t) => t.role !== "items") ? (
+        <MessageStrip design="Critical" hideCloseButton>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
+            <span>This model has no item grid, so a quote falls back to one generic line per candidate.</span>
+            <Button icon="add" design="Transparent"
+              onClick={() => update((d) => ({ ...d, tables: [...(d.tables ?? []), itemsTable()] }))}>
+              Add item grid
+            </Button>
+          </div>
+        </MessageStrip>
+      ) : null}
+
+      {ordered.map(({ t, i }) => {
         const mine = issues.filter((x) => x.path.startsWith(`tables[${i}]`));
+        const isItems = t.role === "items";
+        const numeric = t.columns.filter((c) => c.type === "number");
+        const locked = lockedColumns(t);
+        const noNumber = <div>{numeric.length ? "Pick a number column." : "This table has no number column yet — add one."}</div>;
         return (
-          <Panel key={i} collapsed={false} headerText={`${t.title} (${t.key})`}>
+          <Panel key={i} collapsed={false}
+            header={
+              <Toolbar design="Transparent" alignContent="Start" accessibleName={`${t.title || t.key} actions`}>
+                <ToolbarItem><Title level="H5">{t.title || t.key}</Title></ToolbarItem>
+                <ToolbarItem>
+                  <Text style={{ color: "var(--sapContent_LabelColor)" }}>
+                    {`${t.key} · ${t.columns.length} column${t.columns.length === 1 ? "" : "s"}`}
+                  </Text>
+                </ToolbarItem>
+                <ToolbarSpacer />
+                {isItems ? (
+                  <ToolbarItem>
+                    <ObjectStatus state="Information">Required — becomes the quotation lines</ObjectStatus>
+                  </ToolbarItem>
+                ) : (
+                  <ToolbarButton icon="delete" design="Transparent" text="Delete table"
+                    onClick={() => void deleteTable(i, t)} />
+                )}
+              </Toolbar>
+            }>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", padding: "0.5rem 0" }}>
               {mine.length ? (
                 <MessageStrip design="Negative" hideCloseButton>
@@ -134,67 +190,66 @@ export function TablesTab({ draft, update, issues, tables }: {
                 </MessageStrip>
               ) : null}
 
-              <Toolbar design="Transparent">
-                <Label>Key</Label>
-                <Input value={t.key} style={{ width: "9rem" }}
-                  onInput={(e) => edit(i, (x) => ({ ...x, key: e.target.value }) as TableDef)} />
-                <Label>Title</Label>
-                <Input value={t.title} style={{ width: "12rem" }}
-                  onInput={(e) => edit(i, (x) => ({ ...x, title: e.target.value }) as TableDef)} />
-                <Label>Role</Label>
-                <Select style={{ width: "10rem" }} value={t.role}
-                  onChange={(e) => edit(i, (x) => withRole(x, optValue(e) as TableDef["role"]))}>
-                  <Option value="calc" data-v="calc" selected={t.role === "calc"}>Calculation</Option>
-                  <Option value="items" data-v="items" selected={t.role === "items"}
-                    {...(hasItems && t.role !== "items" ? ({ disabled: true } as Record<string, unknown>) : {})}>
-                    Item matrix
-                  </Option>
-                </Select>
-                <Label>Section</Label>
-                {/* Unplaced is legal, not broken: the form appends it as a trailing section rather
-                    than hiding a table whose sums the model already depends on. */}
-                <Select style={{ width: "12rem" }} value={placedIn(t.key) ?? NOT_PLACED}
-                  onChange={(e) => place(t.key, optValue(e))}>
-                  <Option value={NOT_PLACED} data-v={NOT_PLACED} selected={!placedIn(t.key)}>
-                    — its own section —
-                  </Option>
-                  {draft.structure.sections.map((s) => (
-                    <Option key={s.key} value={s.key} data-v={s.key} selected={placedIn(t.key) === s.key}>
-                      {s.title}
-                    </Option>
-                  ))}
-                </Select>
-                <Label>Min rows</Label>
-                <StepInput style={{ width: "6rem" }} min={0} value={t.minRows ?? 0}
-                  onChange={(e) => edit(i, (x) => ({ ...x, minRows: e.target.value || undefined }) as TableDef)} />
-                <Label>Max rows</Label>
-                <StepInput style={{ width: "6rem" }} min={0} value={t.maxRows ?? 0}
-                  onChange={(e) => edit(i, (x) => ({ ...x, maxRows: e.target.value || undefined }) as TableDef)} />
-                <Button icon="delete" design="Transparent"
-                  onClick={() => update((d) => ({ ...d, tables: (d.tables ?? []).filter((_, j) => j !== i) }))}>
-                  Delete table
-                </Button>
-              </Toolbar>
+              <Form {...PAIRS}>
+                <FormGroup accessibleName="Table">
+                  <FormItem labelContent={lbl("Key", "The name formulas use. This table contributes <key>_count and one sum per numeric column to every expression scope.", true)}>
+                    <Input value={t.key} style={W}
+                      onInput={(e) => edit(i, (x) => ({ ...x, key: e.target.value }) as TableDef)} />
+                  </FormItem>
+                  <FormItem labelContent={lbl("Title", "The heading the salesperson sees above the grid on the configuration form.")}>
+                    <Input value={t.title} style={W}
+                      onInput={(e) => edit(i, (x) => ({ ...x, title: e.target.value }) as TableDef)} />
+                  </FormItem>
+                  {/* Unplaced is legal, not broken: the form appends it as a trailing section rather
+                      than hiding a table whose sums the model already depends on. */}
+                  <FormItem labelContent={lbl("Section", "Which section of the form the grid appears in. Left unplaced it still renders, in a trailing section of its own.")}>
+                    <Select style={W} value={placedIn(t.key) ?? NOT_PLACED}
+                      onChange={(e) => place(t.key, optValue(e))}>
+                      <Option value={NOT_PLACED} data-v={NOT_PLACED} selected={!placedIn(t.key)}>
+                        — its own section —
+                      </Option>
+                      {draft.structure.sections.map((s) => (
+                        <Option key={s.key} value={s.key} data-v={s.key} selected={placedIn(t.key) === s.key}>
+                          {s.title}
+                        </Option>
+                      ))}
+                    </Select>
+                  </FormItem>
+                  <FormItem labelContent={lbl("Minimum rows", "Rows the grid starts with and refuses to drop below. Zero lets the salesperson leave it empty.")}>
+                    <StepInput style={W} min={0} value={t.minRows ?? 0}
+                      onChange={(e) => edit(i, (x) => ({ ...x, minRows: e.target.value || undefined }) as TableDef)} />
+                  </FormItem>
+                  <FormItem labelContent={lbl("Maximum rows", "Caps how many rows can be added. Zero means no cap.")}>
+                    <StepInput style={W} min={0} value={t.maxRows ?? 0}
+                      onChange={(e) => edit(i, (x) => ({ ...x, maxRows: e.target.value || undefined }) as TableDef)} />
+                  </FormItem>
+                </FormGroup>
 
-              {t.role === "items" ? (
-                <Toolbar design="Transparent">
-                  <Label>Pieces column</Label>
-                  <Select style={{ width: "11rem" }} value={t.qtyCol}
-                    onChange={(e) => edit(i, (x) => ({ ...x, qtyCol: optValue(e) }) as TableDef)}>
-                    {t.columns.filter((c) => c.type === "number").map((c) => (
-                      <Option key={c.key} value={c.key} data-v={c.key} selected={t.qtyCol === c.key}>{c.label}</Option>
-                    ))}
-                  </Select>
-                  <Label>Cost basis column</Label>
-                  <Select style={{ width: "11rem" }} value={t.basisCol}
-                    onChange={(e) => edit(i, (x) => ({ ...x, basisCol: optValue(e) }) as TableDef)}>
-                    {t.columns.filter((c) => c.type === "number").map((c) => (
-                      <Option key={c.key} value={c.key} data-v={c.key} selected={t.basisCol === c.key}>{c.label}</Option>
-                    ))}
-                  </Select>
-                  <Text>The configuration total is split across rows by basis times pieces, to the cent.</Text>
-                </Toolbar>
-              ) : null}
+                {t.role === "items" ? (
+                  <FormGroup accessibleName="Quotation lines">
+                    <FormItem labelContent={lbl("Quantity column", "Pieces per row. Multiplied by the batch quantity to give the SAP line's Quantity — B1's own ItemCode and Quantity are owned by the price split and cannot be mapped.", true)}>
+                      <Select style={W} value={t.qtyCol}
+                        valueState={numeric.some((c) => c.key === t.qtyCol) ? "None" : "Negative"}
+                        valueStateMessage={noNumber}
+                        onChange={(e) => edit(i, (x) => ({ ...x, qtyCol: optValue(e) }) as TableDef)}>
+                        {numeric.map((c) => (
+                          <Option key={c.key} value={c.key} data-v={c.key} selected={t.qtyCol === c.key}>{c.label}</Option>
+                        ))}
+                      </Select>
+                    </FormItem>
+                    <FormItem labelContent={lbl("Cost basis column", "How the configuration's price is divided between rows: each row's share is weighted by basis times quantity, to the cent. Left empty on every row, the split is equal.", true)}>
+                      <Select style={W} value={t.basisCol}
+                        valueState={numeric.some((c) => c.key === t.basisCol) ? "None" : "Negative"}
+                        valueStateMessage={noNumber}
+                        onChange={(e) => edit(i, (x) => ({ ...x, basisCol: optValue(e) }) as TableDef)}>
+                        {numeric.map((c) => (
+                          <Option key={c.key} value={c.key} data-v={c.key} selected={t.basisCol === c.key}>{c.label}</Option>
+                        ))}
+                      </Select>
+                    </FormItem>
+                  </FormGroup>
+                ) : null}
+              </Form>
 
               <Table noDataText="No columns." rowActionCount={1} overflowMode="Scroll"
                 onRowActionClick={(e) => {
@@ -209,14 +264,14 @@ export function TablesTab({ draft, update, issues, tables }: {
                     <TableHeaderCell width="6rem"><span>Unit</span></TableHeaderCell>
                     <TableHeaderCell width="9rem"><span>Cell</span></TableHeaderCell>
                     <TableHeaderCell minWidth="14rem"><span>Options / formula</span></TableHeaderCell>
-                    {t.role === "items" ? (
+                    {isItems ? (
                       <TableHeaderCell minWidth="11rem"><span>B1 line field</span></TableHeaderCell>
                     ) : null}
                   </TableHeaderRow>
                 }>
                 {t.columns.map((c, j) => (
                   <TableRow key={j} rowKey={`col-${j}`} data-idx={String(j)}
-                    actions={<TableRowAction icon="delete" text="Delete" />}>
+                    actions={locked.has(c.key) ? undefined : <TableRowAction icon="delete" text="Delete" />}>
                     <TableCell>
                       <Input value={c.key} onInput={(e) => setCol(i, j, { key: e.target.value })} />
                     </TableCell>
@@ -224,7 +279,7 @@ export function TablesTab({ draft, update, issues, tables }: {
                       <Input value={c.label} onInput={(e) => setCol(i, j, { label: e.target.value })} />
                     </TableCell>
                     <TableCell>
-                      <Select style={{ width: "100%" }} value={c.type}
+                      <Select style={W} value={c.type}
                         onChange={(e) => setCol(i, j, { type: optValue(e) as TableColumn["type"] })}>
                         {(["string", "number", "boolean"] as const).map((ty) => (
                           <Option key={ty} value={ty} data-v={ty} selected={c.type === ty}>{ty}</Option>
@@ -235,7 +290,7 @@ export function TablesTab({ draft, update, issues, tables }: {
                       <Input value={c.unit ?? ""} onInput={(e) => setCol(i, j, { unit: e.target.value || undefined })} />
                     </TableCell>
                     <TableCell>
-                      <Select style={{ width: "100%" }} value={c.cell.kind}
+                      <Select style={W} value={c.cell.kind}
                         onChange={(e) => {
                           const kind = optValue(e) as TableColumn["cell"]["kind"];
                           setCol(i, j, {
@@ -266,7 +321,7 @@ export function TablesTab({ draft, update, issues, tables }: {
                         <Text>Typed in by the salesperson</Text>
                       )}
                     </TableCell>
-                    {t.role === "items" ? (
+                    {isItems ? (
                       <TableCell>
                         <LineFieldSelect value={t.map?.[c.key] ?? ""}
                           fields={lineFields.data ?? null} loading={lineFields.isPending}
@@ -346,13 +401,20 @@ function LineFieldSelect({ value, fields, loading, onChange }: {
 }) {
   if (!fields)
     return (
-      <Input style={{ width: "100%" }} value={value} disabled={loading}
+      <Input style={W} value={value} disabled={loading}
         placeholder={loading ? "reading SAP..." : "U_... (SAP unreachable)"}
         onInput={(e) => onChange(e.target.value)} />
     );
+  // A seeded mapping (U_HERA_ItemCode) only resolves if the tenant actually created the UDF. Keep
+  // the value and say so, rather than letting the Select fall blank and drop the mapping silently:
+  // the alternative surfaces as a 400 from B1 at the moment the quote is posted.
+  const missing = !!value && !fields.some((f) => f.name === value);
   return (
-    <Select style={{ width: "100%" }} value={value} onChange={(e) => onChange(optValue(e))}>
+    <Select style={W} value={value} valueState={missing ? "Critical" : "None"}
+      valueStateMessage={<div>{`${value} does not exist on this tenant's DocumentLines — create the UDF in B1, or map the column to another field.`}</div>}
+      onChange={(e) => onChange(optValue(e))}>
       <Option value="" data-v="" selected={!value}>— not written —</Option>
+      {missing ? <Option value={value} data-v={value} selected additionalText="missing">{value}</Option> : null}
       {fields.map((f) => (
         <Option key={f.name} value={f.name} data-v={f.name} selected={value === f.name}
           additionalText={f.isUDF ? "UDF" : undefined}>
